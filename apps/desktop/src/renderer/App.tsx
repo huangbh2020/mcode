@@ -6,6 +6,11 @@ import { Divider } from "./components/layout/Divider.js";
 import { Titlebar } from "./components/layout/Titlebar.js";
 import { LeftBar } from "./components/layout/LeftBar.js";
 import { StreamSidebar } from "./components/layout/StreamSidebar.js";
+import {
+  LeftEdgePeekTrigger,
+  LeftPeekScrim,
+  usePeekAutoClose,
+} from "./components/layout/LeftPanelPeek.js";
 import { ChatPane } from "./components/chat/ChatPane.js";
 import { TerminalSessionPane } from "./components/chat/TerminalSessionPane.js";
 import { SessionTabs } from "./components/layout/SessionTabs.js";
@@ -151,6 +156,55 @@ export function App() {
   const leftOpen = useSessionStore((s) => s.leftOpen);
   const leftBarMode = useSessionStore((s) => s.leftBarMode);
   const setLeftOpen = useSessionStore((s) => s.setLeftOpen);
+  // Hover-peek drawer state (left panel floating over the workspace while
+  // closed) + the browser-overlay gate for its trigger strip.
+  const leftPeekOpen = useSessionStore((s) => s.leftPeekOpen);
+  const setLeftPeekOpen = useSessionStore((s) => s.setLeftPeekOpen);
+  const browserPanelOpen = useSessionStore((s) => s.browserPanelOpen);
+
+  // ── Left-panel hover-peek drawer ──────────────────────────────────────
+  // Workspace visible + panel closed → the always-mounted aside flips from
+  // in-flow to a fixed off-canvas drawer: hovering the window's left edge
+  // floats it in OVER the content (no layout shift); pinning stays on the
+  // toggle buttons. Settings/sched pages keep the aside fully hidden.
+  const leftDrawer = !leftOpen && !settingsOpen && !schedPageOpen;
+  // Drawer-mode entry must not animate: the aside re-parents from in-flow
+  // (or display:none) to fixed in a single commit, and a live transform
+  // transition would replay a stale slide across the window. The first
+  // drawer frame parks the panel off-canvas with transitions disabled; they
+  // arm one frame later so peek open/close glide.
+  const [leftDrawerArmed, setLeftDrawerArmed] = useState(false);
+  useEffect(() => {
+    if (!leftDrawer) {
+      setLeftDrawerArmed(false);
+      setLeftPeekOpen(false);
+      return;
+    }
+    // Two frames, not one: a single rAF still fires BEFORE the first paint,
+    // so arming would coalesce with the park into one style change and the
+    // transform would glide none → -100% across the window (visible when a
+    // fullscreen page closes back onto a closed-sidebar workspace). Frame 1
+    // paints the parked state; frame 2 arms the transitions.
+    let id2 = 0;
+    const id1 = requestAnimationFrame(() => {
+      id2 = requestAnimationFrame(() => setLeftDrawerArmed(true));
+    });
+    return () => {
+      cancelAnimationFrame(id1);
+      cancelAnimationFrame(id2);
+    };
+  }, [leftDrawer, setLeftPeekOpen]);
+  // Dismiss the drawer on mouse-leave after a short grace period (re-entering
+  // cancels), so grazing onto the scrim doesn't flicker it shut. Clicking the
+  // scrim dismisses immediately; opening cancels any pending close.
+  const { schedule: scheduleLeftPeekClose, cancel: cancelLeftPeekClose } = usePeekAutoClose(
+    leftPeekOpen,
+    () => setLeftPeekOpen(false),
+  );
+  const openLeftPeek = () => {
+    cancelLeftPeekClose();
+    setLeftPeekOpen(true);
+  };
   const rightOpen = useSessionStore((s) => s.rightOpen);
   const setRightOpen = useSessionStore((s) => s.setRightOpen);
   const rightPanelTab = useSessionStore((s) => s.rightPanelTab);
@@ -242,22 +296,46 @@ export function App() {
       <WidePlanDialog />
       {/*
         Left sidebar — spans the FULL window height. Its share of the width
-        is a persisted percentage (default 12 ≈ a compact ~259px sidebar on a
-        2160px window); the Divider below is draggable (invisible hairline —
-        the sidebar and the toolbar/track share the same muted surface, a
-        hairline would cut the continuous frame; the resize cursor is the
-        affordance) and double-click resets to the default. Wide-panel mode
-        forces leftOpen=false in the store — the aside responds by CSS-hiding
-        (below), NOT unmounting, so toggling wide never cold-rebuilds the
-        project tree / stream list (which would refetch sessions via IPC).
-        While the settings view is open the aside is hidden via CSS too
-        (stays mounted to preserve scroll) so settings renders FULL-WIDTH
-        below the toolbar instead of only over the right column.
+        is a persisted percentage (default 20 ≈ a compact sidebar); the
+        Divider below is draggable (invisible hairline — the sidebar and the
+        toolbar/track share the same muted surface, a hairline would cut the
+        continuous frame; the resize cursor is the affordance) and
+        double-click resets to the default.
+        Wide-panel mode forces leftOpen=false in the store — the aside then
+        presents as the hover-peek DRAWER (fixed, parked off-canvas, still
+        mounted), NOT unmounted, so neither toggling wide nor peeking ever
+        cold-rebuilds the project tree / stream list (which would refetch
+        sessions via IPC). While the settings view is open the aside is hidden
+        via CSS too (stays mounted to preserve scroll) so settings renders
+        FULL-WIDTH below the toolbar instead of only over the right column.
         bg-surface-muted matches the toolbar to the right and the panel track,
         so all three read as one continuous frame — no right-edge rounding;
         rounded-tl alone carries the window-corner arc on macOS.
+
+        Drawer presentation (leftDrawer): the same element re-parents to a
+        fixed overlay parked at -translate-x-full. Opening the peek glides it
+        in with a soft sheet ease while a right-cast shadow blooms and the
+        scrim below dims the workspace — it floats over the content with
+        rounded right corners + a hairline, visually distinct from the pinned
+        in-flow presentation. Transitions arm a frame after mode entry (see
+        leftDrawerArmed) so parking never animates.
+
+        Trigger strip (mounted only while the drawer is parked and the browser
+        overlay doesn't own the workspace — its z-40 canvas would sit above
+        the strip anyway): invisible 8px column; hovering starts the intent
+        timer, clicking skips it. The scrim fades in with the drawer and takes
+        over dismissal (click = close; the drawer also closes on mouse-leave
+        with a grace period).
       */}
+      {leftDrawer && !leftPeekOpen && !browserPanelOpen && (
+        <LeftEdgePeekTrigger onActivate={openLeftPeek} />
+      )}
+      {leftDrawer && (
+        <LeftPeekScrim active={leftPeekOpen} onClose={() => setLeftPeekOpen(false)} />
+      )}
       <aside
+        onMouseEnter={leftPeekOpen ? cancelLeftPeekClose : undefined}
+        onMouseLeave={leftPeekOpen ? scheduleLeftPeekClose : undefined}
         className={cn(
           // min-w-0 kills the flex `min-width: auto` content floor —
           // without it the widest nowrap row in LeftBar (e.g. a long
@@ -265,9 +343,26 @@ export function App() {
           // min-content) propped the aside open no matter how small
           // leftWidthPct got.
           "flex h-full min-w-0 shrink flex-col rounded-tl-2xl bg-surface-muted",
-          (!leftOpen || settingsOpen || schedPageOpen) && "hidden",
+          leftDrawer &&
+            cn(
+              // Drawer mode: fixed overlay parked off-canvas; the peek slides
+              // it in over the workspace (z-[45], under the z-50 dialogs).
+              // overflow-hidden clips content to the rounded right corners.
+              "fixed left-0 top-0 z-[45] shrink-0 overflow-hidden",
+              "rounded-r-2xl border-r border-edge-panel/60",
+              leftDrawerArmed &&
+                "transition-[transform,opacity,box-shadow] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
+              leftPeekOpen
+                ? "pointer-events-auto translate-x-0 opacity-100 shadow-[12px_0_48px_-12px_rgba(0,0,0,0.45)]"
+                : "pointer-events-none -translate-x-full opacity-0",
+            ),
+          (settingsOpen || schedPageOpen) && "hidden",
         )}
-        style={{ flexGrow: 0, flexBasis: `${leftWidthPct}%` }}
+        style={
+          leftDrawer
+            ? { width: `${leftWidthPct}%` }
+            : { flexGrow: 0, flexBasis: `${leftWidthPct}%` }
+        }
       >
         <div className="min-h-0 flex-1 overflow-y-auto">
           {/* Left-bar view preference: classic project tree or the
@@ -293,7 +388,7 @@ export function App() {
         and the main panel below (center chat/editor pane + right IDE panel,
         plus the bottom terminal inside the center main).
       */}
-      <div className="flex min-w-[800px] flex-1 flex-col">
+      <div className="flex min-w-[600px] flex-1 flex-col">
         {/*
           Workspace shell is ALWAYS mounted — the settings view renders as an
           overlay on top of it, not as a mutually-exclusive sibling. This is
@@ -616,7 +711,7 @@ function SplitCenterPane({ wide }: { wide: boolean }) {
           two columns split the center pane proportionally. When no file is
           open and no plan is viewed it takes the full width (flex-1). */}
       <div
-        className="flex min-w-[800px] shrink-0 flex-col"
+        className="flex min-w-[600px] shrink-0 flex-col"
         style={editorVisible ? { flexGrow: 0, flexBasis: `${100 - editorWidthPct}%` } : { flexGrow: 1, flexBasis: "0%" }}
       >
 

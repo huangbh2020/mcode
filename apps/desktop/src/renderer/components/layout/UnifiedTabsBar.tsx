@@ -24,6 +24,7 @@ import {
   SortableFileTab,
   FileTabContextMenu,
   useDirtyFiles,
+  useIdeCloseGuard,
 } from "../ide/OpenTabsBar.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -83,13 +84,13 @@ export function UnifiedTabsBar() {
     pid ? s.ideActiveFileByProject[pid] ?? null : null,
   );
   const setActiveFile = useSessionStore((s) => s.setIdeActiveFile);
-  const closeFile = useSessionStore((s) => s.closeFileInIde);
-  const closeOthers = useSessionStore((s) => s.closeOtherFilesInIde);
-  const closeAllFiles = useSessionStore((s) => s.closeAllFilesInIde);
   const reorderIdeFile = useSessionStore((s) => s.reorderIdeFile);
   const clearIdeActiveFile = useSessionStore((s) => s.clearIdeActiveFile);
   const enqueueChatFile = useSessionStore((s) => s.enqueueChatFile);
   const dirtySet = useDirtyFiles();
+  // File-tab close entries funnel through the same unsaved-changes guard as
+  // the sidebar tab bar (save & close / discard / cancel on dirty files).
+  const closeGuard = useIdeCloseGuard();
 
   // ── Editor focus + plan pseudo-tab (scoped to the active session) ──
   const centerTabFocus = useSessionStore((s) => s.centerTabFocus);
@@ -336,7 +337,7 @@ export function UnifiedTabsBar() {
                       setPlanTabActive(activeId, false);
                     }
                   }}
-                  onClose={() => closeFile(path)}
+                  onClose={() => closeGuard.requestClose({ kind: "one", path })}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setCtxMenu({ path, x: e.clientX, y: e.clientY });
@@ -504,13 +505,16 @@ export function UnifiedTabsBar() {
         ctxMenu={ctxMenu}
         onClose={() => setCtxMenu(null)}
         actions={{
-          close: (p) => closeFile(p),
-          closeOthers: (p) => closeOthers(p),
-          closeAll: () => closeAllFiles(),
+          close: (p) => closeGuard.requestClose({ kind: "one", path: p }),
+          closeOthers: (p) => closeGuard.requestClose({ kind: "others", keep: p }),
+          closeAll: () => closeGuard.requestClose({ kind: "all" }),
           activate: (p) => setActiveFile(p),
           addToChat: (p) => enqueueChatFile(p),
         }}
       />
+
+      {/* Unsaved-changes confirm for close requests that touch dirty files. */}
+      {closeGuard.dialog}
     </div>
   );
 }

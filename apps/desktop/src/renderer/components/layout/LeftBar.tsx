@@ -150,7 +150,9 @@ function LeftBarBase({
   const deleteSession = useSessionStore((s) => s.deleteSession);
   const archiveSession = useSessionStore((s) => s.archiveSession);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
-  const setLeftOpen = useSessionStore((s) => s.setLeftOpen);
+  // Collapse affordance shared with StreamSidebar: while the hover-peek drawer
+  // is showing (leftOpen is already false there) "collapse" dismisses the peek.
+  const collapseLeftPanel = useSessionStore((s) => s.collapseLeftPanel);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const renameSession = useSessionStore((s) => s.renameSession);
@@ -720,7 +722,7 @@ function LeftBarBase({
           clears the buttons (toggle starts at x≈78). The strip doubles as a
           window drag handle; the button opts out. win: keeps the original
           brand header (logo + name + tagline), clicking it collapses the
-          sidebar (setLeftOpen(false)) — settings remain in the footer. */}
+          sidebar (collapseLeftPanel()) — settings remain in the footer. */}
       {isMac ? (
         <div
           className="-mt-2 mb-2 flex h-10 items-center gap-1 pl-[70px]"
@@ -728,7 +730,7 @@ function LeftBarBase({
         >
           <button
             type="button"
-            onClick={() => setLeftOpen(false)}
+            onClick={() => collapseLeftPanel()}
             className={cn(
               "flex h-7 w-7 items-center justify-center rounded text-content-muted transition-colors",
               "hover:bg-surface-hover hover:text-content",
@@ -746,7 +748,7 @@ function LeftBarBase({
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setLeftOpen(false)}
+              onClick={() => collapseLeftPanel()}
               className={cn(
                 "group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
                 "hover:bg-surface-hover/60",
@@ -1131,7 +1133,7 @@ function LeftBarBase({
             footer button is inside the hidden sidebar then. */}
         {!isMac && (
           <button
-            onClick={() => setLeftOpen(false)}
+            onClick={() => collapseLeftPanel()}
             className={cn(
               "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
               "hover:bg-surface-hover hover:text-content",

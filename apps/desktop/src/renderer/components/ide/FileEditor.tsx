@@ -1872,6 +1872,53 @@ export function DiffPane({
   useEffect(() => {
     onStatsRef.current = onStats;
   }, [onStats]);
+  // rAF coalescing for the scroll-follow listener below (onDidScrollChange
+  // fires per frame chunk; the derivation only needs to run once per frame).
+  const hunkTrackRafRef = useRef(0);
+  // Until this timestamp, scroll-derived hunk tracking is suppressed. Set by
+  // goToChange: revealLinesInCenter cannot center a hunk near the end of the
+  // file (scrollBeyondLastLine:false clamps at max scroll), so the scroll
+  // events it fires would recompute a PREVIOUS hunk and snap the counter
+  // back. During the window the counter keeps the clicked position; the
+  // user's next real scroll resumes scroll-following.
+  const navSuppressUntilRef = useRef(0);
+
+  /** Derive the "current" hunk from the modified pane's scroll position: the
+   *  LAST hunk whose first line sits at/above the viewport midline. Syncs
+   *  changesIdxRef + reports stats only on change, so scrolling within a
+   *  hunk never re-renders the toolbar. No-ops while the nav-suppress window
+   *  (navSuppressUntilRef) is open and on zero-hunk diffs. */
+  const trackCurrentHunk = useCallback(() => {
+    const diffEditor = editorRef.current;
+    if (!diffEditor) return;
+    if (Date.now() < navSuppressUntilRef.current) return;
+    let changes: editor.ILineChange[] | null = null;
+    try {
+      changes = diffEditor.getLineChanges();
+    } catch {
+      return; // widget torn down mid file-switch
+    }
+    const count = changes?.length ?? 0;
+    if (count === 0) return;
+    const modifiedEditor = diffEditor.getModifiedEditor();
+    // Midline reference: a hunk counts as "reached" once its first line is
+    // at/above it — the same spot revealLinesInCenter parks a hunk at, so a
+    // nav click and the scroll events it triggers agree on the index (+2px
+    // epsilon for the centered line's sub-pixel placement).
+    const refY = modifiedEditor.getScrollTop() + modifiedEditor.getLayoutInfo().height / 2 + 2;
+    let idx = -1;
+    for (let i = 0; i < count; i++) {
+      const change = changes![i];
+      // Pure deletions carry an empty modified range — clamp to line 1 like
+      // goToChange so their top stays computable.
+      const line = Math.max(change.modifiedStartLineNumber, 1);
+      if (modifiedEditor.getTopForLineNumber(line) <= refY) idx = i;
+    }
+    if (idx >= 0 && idx !== changesIdxRef.current) {
+      changesIdxRef.current = idx;
+      onStatsRef.current?.({ index: idx, count });
+    }
+  }, []);
 
   /** Reveal hunk `idx` (wrap-around) in the modified pane, park the cursor at
    *  its first line, and report the new position. No-ops while the widget is
@@ -1892,6 +1939,7 @@ export function DiffPane({
       const change = changes![wrapped];
       if (!change) return;
       changesIdxRef.current = wrapped;
+      navSuppressUntilRef.current = Date.now() + 250;
       // A pure deletion carries an empty modified range (end < start) — clamp
       // to the line after the deletion point so the reveal still lands there.
       const start = Math.max(change.modifiedStartLineNumber, 1);
@@ -1986,6 +2034,10 @@ export function DiffPane({
   // eagerly on every scroll — nothing to save here.)
   useEffect(() => {
     return () => {
+      if (hunkTrackRafRef.current) {
+        cancelAnimationFrame(hunkTrackRafRef.current);
+        hunkTrackRafRef.current = 0;
+      }
       diffListenersRef.current.forEach((d) => d.dispose());
       diffListenersRef.current = [];
       const editor = editorRef.current;
@@ -2056,6 +2108,19 @@ export function DiffPane({
           diffListenersRef.current = [
             editor.getOriginalEditor().onDidScrollChange(stashViewState),
             editor.getModifiedEditor().onDidScrollChange(stashViewState),
+            // Scroll-follow for the toolbar counter: derive the current hunk
+            // from the modified pane's scroll position (rAF-throttled; only
+            // reports on hunk change). Keeps the "n/m" readout truthful while
+            // the user drags the scrollbar instead of stepping with the
+            // arrows. trackCurrentHunk resolves the widget through refs, so
+            // this listener survives file swaps for the widget's lifetime.
+            editor.getModifiedEditor().onDidScrollChange(() => {
+              if (hunkTrackRafRef.current) return;
+              hunkTrackRafRef.current = requestAnimationFrame(() => {
+                hunkTrackRafRef.current = 0;
+                trackCurrentHunk();
+              });
+            }),
             // Re-assert the cached position once diffs are (re)computed: the
             // post-swap restore can land before the diff exists, while the
             // widget's two panes still scroll 1:1. Skipped when the user has

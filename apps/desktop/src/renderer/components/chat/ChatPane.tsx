@@ -3725,6 +3725,30 @@ function ChatPaneForSession({
       if (it.kind === "opsGroup") {
         if (it.turnMeta) turnMeta = it.turnMeta;
         liveLedgerBlocks.push(...it.blocks);
+        let hasFollowingText = false;
+        // 本组之后是否还有正文行/ops 行：没有 → 本组持有回合的收尾块，末块是
+        // 流式中的思考时，其卡片要显示 loading（thinkingActive）。
+        let laterRowExists = false;
+        for (let j = i + 1; j < end; j++) {
+          const nextItem = items[j];
+          if (nextItem.kind === "single" || nextItem.kind === "opsGroup") {
+            laterRowExists = true;
+          }
+          if (
+            nextItem.kind === "single" &&
+            nextItem.msg.blocks.some((b) => b.kind === "text" && b.text.trim().length > 0)
+          ) {
+            hasFollowingText = true;
+          }
+          if (
+            nextItem.kind === "opsGroup" &&
+            nextItem.leading?.some((b) => b.kind === "text" && b.text.trim().length > 0)
+          ) {
+            hasFollowingText = true;
+          }
+        }
+        const tailBlock = it.blocks[it.blocks.length - 1];
+        const thinkingActive = !laterRowExists && tailBlock?.kind === "thinking";
         rows.push({
           key: `ops:${it.liveKey ?? it.anchorId}`,
           node: (
@@ -3752,7 +3776,9 @@ function ChatPaneForSession({
                 <BatchToolGroup
                   blocks={it.blocks}
                   turnActive
+                  hasFollowingText={hasFollowingText}
                   showTicker={false}
+                  thinkingActive={thinkingActive}
                   projectPath={projectPath}
                 />
               </RenderErrorBoundary>
@@ -3957,7 +3983,14 @@ function ChatPaneForSession({
                     (the group whose tool is executing shows it rolling; the
                     rest show their last op dimmed). */}
                 <RenderErrorBoundary>
-                  <BatchToolGroup blocks={item.blocks} turnActive projectPath={projectPath} />
+                  <BatchToolGroup
+                    blocks={item.blocks}
+                    turnActive
+                    thinkingActive={
+                      Boolean(item.isStreamingTail) && item.blocks[item.blocks.length - 1]?.kind === "thinking"
+                    }
+                    projectPath={projectPath}
+                  />
                 </RenderErrorBoundary>
               </div>
               {item.isStreamingTail && (

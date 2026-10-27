@@ -26,6 +26,7 @@ import {
   IconWorldSearch,
   IconHelpCircle,
   IconStack2,
+  IconLoader2,
 } from "@renderer/lib/icons.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -184,10 +185,22 @@ const MessageBlocks = memo(function MessageBlocks({
   const segKeys = segmentKeys(segments);
   return (
     <div className="space-y-[var(--chat-block-gap)]">
-      {segments.map((seg, i) =>
-        seg.kind === "single" ? (
+      {segments.map((seg, i) => {
+        const hasFollowingText = segments.slice(i + 1).some(
+          (s) => s.kind === "single" && s.block.kind === "text" && s.block.text.trim().length > 0,
+        );
+        return seg.kind === "single" ? (
           <RenderErrorBoundary key={segKeys[i]}>
-            <BlockView block={seg.block} defaultOpen={seg.defaultOpen} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} inlineFiles={inlineFiles} />
+            <BlockView
+              block={seg.block}
+              defaultOpen={seg.defaultOpen}
+              beforeMap={beforeMap}
+              isStreamingTail={isStreamingTail}
+              thinkingActive={Boolean(isStreamingTail) && seg.block.kind === "thinking" && i === segments.length - 1}
+              onOpenPlan={onOpenPlan}
+              projectPath={projectPath}
+              inlineFiles={inlineFiles}
+            />
           </RenderErrorBoundary>
         ) : seg.kind === "media" ? (
           <RenderErrorBoundary key={segKeys[i]}>
@@ -199,10 +212,19 @@ const MessageBlocks = memo(function MessageBlocks({
           </RenderErrorBoundary>
         ) : (
           <RenderErrorBoundary key={segKeys[i]}>
-            <BatchToolGroup blocks={seg.blocks} beforeMap={beforeMap} turnActive={isStreamingTail} projectPath={projectPath} />
+            <BatchToolGroup
+              blocks={seg.blocks}
+              beforeMap={beforeMap}
+              turnActive={isStreamingTail}
+              hasFollowingText={hasFollowingText}
+              thinkingActive={
+                Boolean(isStreamingTail) && i === segments.length - 1 && seg.blocks[seg.blocks.length - 1].kind === "thinking"
+              }
+              projectPath={projectPath}
+            />
           </RenderErrorBoundary>
-        ),
-      )}
+        );
+      })}
     </div>
   );
 });
@@ -374,6 +396,7 @@ function MultiBatchToolGroup({
   blocks,
   beforeMap,
   turnActive = false,
+  hasFollowingText = false,
   showTicker = true,
   projectPath,
 }: {
@@ -384,14 +407,60 @@ function MultiBatchToolGroup({
    *  right now. Clears when the turn ends so historical cards never show a
    *  stale operation. */
   turnActive?: boolean;
+  /** Whether normal user-facing prose text has been emitted after this tool group.
+   *  When true, the tool group card auto-collapses to keep the focus on the reply text. */
+  hasFollowingText?: boolean;
   /** Whether to render this group's own current-op ticker. Off when the group
    *  sits inside a running-ledger body: the ledger HEAD already shows the
    *  turn's current operation, so a per-group ticker would just repeat it. */
   showTicker?: boolean;
   projectPath?: string | null;
 }) {
-  // 胶囊自身默认收起，用户不点击时保持单行紧凑状态（如图所示）
-  const [open, setOpen] = useState(false);
+  // 胶囊自身在运行中且后续未输出文字时默认展开；文字到达后自动收起
+  const shouldDefaultOpen = Boolean(turnActive && !hasFollowingText);
+  const [open, setOpen] = useState(shouldDefaultOpen);
+  const userToggledRef = useRef(false);
+
+  // 监听 turnActive 和 hasFollowingText：
+  // 当文字开始输出时（hasFollowingText 变为 true），若用户未手动点击，自动收起
+  // 当正在运行且未输出文字时，若未被用户手动收起，保持展开
+  useEffect(() => {
+    if (userToggledRef.current) return;
+    if (hasFollowingText || !turnActive) {
+      setOpen(false);
+    } else if (turnActive && !hasFollowingText) {
+      setOpen(true);
+    }
+  }, [turnActive, hasFollowingText]);
+
+  const listRef = useRef<HTMLDivElement>(null);
+  const autoScrollRef = useRef(true);
+
+  // 用户滚动监听：如果用户主动向上滚动，暂缓自动吸底；靠近底部时恢复自动吸底
+  const handleScroll = () => {
+    const el = listRef.current;
+    if (!el) return;
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 36;
+    autoScrollRef.current = isNearBottom;
+  };
+
+  // 自动滚动到最新执行的位置
+  const lastBlock = blocks[blocks.length - 1];
+  const lastBlockStatus = lastBlock?.kind === "tool_use" ? lastBlock.status : undefined;
+  const lastBlockTextLen = lastBlock?.kind === "thinking" ? lastBlock.text.length : 0;
+
+  useEffect(() => {
+    if (!open) return;
+    const el = listRef.current;
+    if (!el || !autoScrollRef.current) return;
+
+    requestAnimationFrame(() => {
+      if (listRef.current && autoScrollRef.current) {
+        listRef.current.scrollTop = listRef.current.scrollHeight;
+      }
+    });
+  }, [open, blocks.length, lastBlockStatus, lastBlockTextLen]);
+
   // While open, suspend the virtual list's height-triggered bottom-pinning so
   // the bar the user clicked stays put and content only grows below it.
   const holdFold = useFoldHold();
@@ -473,6 +542,7 @@ function MultiBatchToolGroup({
     <div className="my-0.5 [font-size:var(--chat-fs-sm)]">
       <button
         onClick={(e) => {
+          userToggledRef.current = true;
           holdFold(!open);
           toggleHoldPosition(e, setOpen);
         }}
@@ -482,15 +552,18 @@ function MultiBatchToolGroup({
         {isLiveRunning ? (
           <span className="shrink-0 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
         ) : activeOp?.kind === "thinking" || isSingleThinking ? (
-          <IconBrain size={13} className="shrink-0 text-amber-500/80" />
+          <IconBrain size={13} className="shrink-0 text-content-subtle" />
         ) : activeOp?.kind === "tool" && activeOp.toolName ? (
           <ToolIcon name={activeOp.toolName} className="shrink-0 text-content-subtle" />
         ) : (
           <IconStack2 size={13} className="shrink-0 text-content-subtle" />
         )}
 
-        {/* 1. If actively executing, prominently show which tool/thinking is running right now */}
-        {isLiveRunning && activeOp ? (
+        {/* 1. Collapsed + actively executing: prominently show which
+               tool/thinking is running right now. Expanded hides it — the
+               open body below already shows the live cards, so the header
+               falls back to the plain count label. */}
+        {isLiveRunning && activeOp && !open ? (
           <span className="flex items-center gap-1.5 min-w-0 truncate">
             <span className="shrink-0 font-medium text-emerald-600 dark:text-emerald-400 font-mono text-xs">
               {activeOp.name}
@@ -501,8 +574,17 @@ function MultiBatchToolGroup({
               </span>
             )}
           </span>
+        ) : isLiveRunning && activeOp ? (
+          /* 2. Expanded while running: show only the executing operation's
+             name (执行命令 / 更新任务 …) — its detail lives in the open body
+             right below, and the old "N 个操作" count is gone. */
+          <span className="flex items-center gap-1.5 min-w-0 truncate">
+            <span className="shrink-0 whitespace-nowrap font-medium text-emerald-600 dark:text-emerald-400 font-mono text-xs">
+              {activeOp.name}
+            </span>
+          </span>
         ) : (
-          /* 2. Normal / completed state: show last operation hint directly (no "N个操作" label) */
+          /* 3. Normal / completed state: show last operation hint directly (no "N个操作" label) */
           <span className="flex items-center gap-1.5 min-w-0 truncate">
             {isSingleThinking && firstBlock?.kind === "thinking" ? (
               <>
@@ -529,10 +611,21 @@ function MultiBatchToolGroup({
       </button>
 
       {open && (
-        <div className="mt-1 max-h-72 space-y-1.5 overflow-y-auto border-l border-edge py-1 pl-2">
+        <div
+          ref={listRef}
+          onScroll={handleScroll}
+          className="mt-1 max-h-72 space-y-1.5 overflow-y-auto border-l border-edge py-1 pl-2"
+        >
           {blocks.map((b, i) => (
             <RenderErrorBoundary key={b.kind === "tool_use" ? `tu:${b.toolCallId}` : `th:${i}`}>
-              <BlockView block={b} beforeMap={beforeMap} liveTurn={turnActive} projectPath={projectPath} defaultOpen={false} />
+              <BlockView
+                block={b}
+                beforeMap={beforeMap}
+                liveTurn={turnActive}
+                thinkingActive={turnActive && b.kind === "thinking" && i === blocks.length - 1}
+                projectPath={projectPath}
+                defaultOpen={false}
+              />
             </RenderErrorBoundary>
           ))}
         </div>
@@ -978,14 +1071,18 @@ export function TurnPanel({
             {(() => {
               const segments = groupBlocks(blocks);
               const segKeys = segmentKeys(segments);
-              return segments.map((seg, i) =>
-                seg.kind === "single" ? (
+              return segments.map((seg, i) => {
+                const hasFollowingText = segments.slice(i + 1).some(
+                  (s) => s.kind === "single" && s.block.kind === "text" && s.block.text.trim().length > 0,
+                );
+                return seg.kind === "single" ? (
                   <RenderErrorBoundary key={segKeys[i]}>
                     <BlockView
                       block={seg.block}
                       defaultOpen={seg.defaultOpen}
                       beforeMap={beforeMap}
                       liveTurn={turnActive}
+                      thinkingActive={turnActive && seg.block.kind === "thinking" && i === segments.length - 1}
                       onOpenPlan={onOpenPlan}
                       projectPath={projectPath}
                     />
@@ -1004,11 +1101,15 @@ export function TurnPanel({
                       blocks={seg.blocks}
                       beforeMap={beforeMap}
                       turnActive={turnActive}
+                      hasFollowingText={hasFollowingText}
+                      thinkingActive={
+                        turnActive && i === segments.length - 1 && seg.blocks[seg.blocks.length - 1].kind === "thinking"
+                      }
                       projectPath={projectPath}
                     />
                   </RenderErrorBoundary>
-                ),
-              );
+                );
+              });
             })()}
           </div>
         </div>
@@ -1027,6 +1128,7 @@ const BlockView = memo(function BlockView({
   beforeMap,
   isStreamingTail,
   liveTurn,
+  thinkingActive,
   onOpenPlan,
   projectPath,
   inlineFiles,
@@ -1044,6 +1146,11 @@ const BlockView = memo(function BlockView({
    *  arc, cross-fading to a check on completion). Undefined on display-only
    *  paths — tool cards of settled turns stay glyph-quiet except errors. */
   liveTurn?: boolean;
+  /** This thinking block is the one currently streaming (turn live + it is
+   *  the turn's last block) — the thinking card shows a spinner instead of
+   *  the static brain glyph. Only the segment callers know the block's
+   *  position in the turn, so they compute it; undefined = not running. */
+  thinkingActive?: boolean;
   /** Forwarded to PlanStreamBlock - opens the PlanDrawer on click. */
   onOpenPlan?: (plan: string) => void;
   /** Project root for resolving file paths in text blocks and tool cards. */
@@ -1111,7 +1218,12 @@ const BlockView = memo(function BlockView({
 
     case "thinking":
       return (
-        <Collapsible label={t("chatStream.thinking")} hint={summarize(block.text)} defaultOpen={defaultOpen}>
+        <Collapsible
+          label={t("chatStream.thinking")}
+          hint={summarize(block.text)}
+          defaultOpen={defaultOpen}
+          running={Boolean(thinkingActive)}
+        >
           {block.text}
         </Collapsible>
       );
@@ -1265,7 +1377,13 @@ export function BatchToolGroup(props: {
   blocks: ProceduralBlock[];
   beforeMap?: BeforeContentMap;
   turnActive?: boolean;
+  hasFollowingText?: boolean;
   showTicker?: boolean;
+  /** The turn is live AND this run is the turn's tail (its last block is the
+   *  one streaming). Only meaningful when that last block is thinking — it
+   *  drives the standalone thinking card's spinner. Multi-block runs derive
+   *  the same fact internally. */
+  thinkingActive?: boolean;
   projectPath?: string | null;
 }) {
   if (props.blocks.length === 1) {
@@ -1275,6 +1393,7 @@ export function BatchToolGroup(props: {
           block={props.blocks[0]}
           beforeMap={props.beforeMap}
           liveTurn={props.turnActive}
+          thinkingActive={props.thinkingActive}
           projectPath={props.projectPath}
           defaultOpen={false}
         />
@@ -2088,11 +2207,15 @@ function Collapsible({
   label,
   hint,
   defaultOpen = false,
+  running = false,
   children,
 }: {
   label: string;
   hint: string;
   defaultOpen?: boolean;
+  /** This thinking segment is streaming right now — the brain glyph swaps
+   *  for a spinner until the model moves on or the turn ends. */
+  running?: boolean;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -2106,7 +2229,11 @@ function Collapsible({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left text-content-muted hover:bg-surface-muted/40"
       >
-        <IconBrain size={13} className="shrink-0 text-amber-500/80" />
+        {running ? (
+          <IconLoader2 size={13} className="shrink-0 animate-spin text-accent" />
+        ) : (
+          <IconBrain size={13} className="shrink-0 text-content-subtle" />
+        )}
         {/* shrink-0 + whitespace-nowrap keep the short label on one line even
             in a narrow pane; flex-1 + min-w-0 let the hint own the leftover
             width and truncate with an ellipsis instead of pushing the header

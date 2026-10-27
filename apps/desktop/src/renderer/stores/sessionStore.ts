@@ -30,7 +30,7 @@ import type {
 import type { ContentTag } from "@renderer/lib/contentTag.js";
 import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
-import { disposeModel, getDisplayedPath } from "@renderer/lib/editorModelCache.js";
+import { disposeModel, getDisplayedPath, getModelEntry, updateBaseline } from "@renderer/lib/editorModelCache.js";
 import type { CustomModelPublic } from "@contracts/customModel";
 import type { PiThinkingLevelMap } from "@contracts/piModel";
 import { resolveEffortLevels, coerceEffortValue, defaultEffortForLevels } from "@renderer/lib/thinkingLevels.js";
@@ -1098,6 +1098,13 @@ export interface SessionState {
    *  command palette (and other store consumers) can toggle it. Workspace-only
    *  — the settings view pins it open. NOT persisted (matches original behavior). */
   leftOpen: boolean;
+  /** Left-panel hover-peek drawer is slid in. Only meaningful while
+   *  leftOpen=false and the workspace is visible: the mounted aside presents
+   *  as a fixed floating overlay (no layout space) instead of the pinned
+   *  in-flow sidebar. NOT persisted (pure interaction state). Set by the
+   *  left-edge trigger strip in App.tsx; dismissed by mouse-leave grace,
+   *  scrim click, or collapseLeftPanel. */
+  leftPeekOpen: boolean;
   /** Right (IDE) panel visibility. Lifted from App.tsx local state. NOT persisted.
    *  `ideFocusNonce` bumps still drive this to `true` (the App effect now
    *  calls setRightOpen(true) instead of touching local state). */
@@ -1223,9 +1230,11 @@ export interface SessionState {
    *  snapshot and restores the target's remembered one — switching SDKs back
    *  re-selects what the user last used with that provider (values the target
    *  doesn't declare are snapped to "default" via coerceSlotsForProvider)
-   *  instead of carrying the outgoing provider's values over. Persisted as
-   *  part of the composer selection setting. Entries whose model was deleted
-   *  are dropped (see validateComposerSelection). */
+   *  instead of carrying the outgoing provider's values over. startSession
+   *  seeds a NEW thread from the entry too (view slots can carry a visited
+   *  thread's stale config — the entry is the user's standing pick for the
+   *  SDK). Persisted as part of the composer selection setting. Entries whose
+   *  model was deleted are dropped (see validateComposerSelection). */
   lastModelByProvider: Record<
     string,
     {
@@ -1926,6 +1935,13 @@ export interface SessionState {
   setSearchDialogOpen: (open: boolean) => void;
   /** Toggle the left sidebar open/closed (direct set). NOT persisted. */
   setLeftOpen: (open: boolean) => void;
+  /** Slide the left-panel hover-peek drawer in/out (only visible while
+   *  leftOpen=false). NOT persisted. */
+  setLeftPeekOpen: (open: boolean) => void;
+  /** Shared "collapse the left panel" affordance for the sidebar footers:
+   *  while the hover-peek drawer is showing (leftOpen is already false there),
+   *  collapse means dismiss the peek; otherwise the classic toggle closed. */
+  collapseLeftPanel: () => void;
   /** Toggle the right IDE panel open/closed (direct set). NOT persisted. */
   setRightOpen: (open: boolean) => void;
   /** Toggle the bottom terminal bar open/closed (direct set). NOT persisted. */
@@ -2564,6 +2580,10 @@ export interface SessionState {
   /** Write content to disk via file.writeFile. Returns ok. Does NOT touch
    *  editor state — the caller (FileEditor) keeps its own dirty tracking. */
   saveFileContent: (filePath: string, content: string) => Promise<boolean>;
+  /** Save dirty editor files from their cached Monaco models (close-tab "save
+   *  & close" flow). Returns the paths that were persisted successfully —
+   *  the caller clears dirty flags and closes only when every path came back. */
+  saveIdeFilesFromModels: (filePaths: string[]) => Promise<string[]>;
   /** Stash a git diff "before" content for a file so the center editor can
    *  show a Monaco diff against the working tree. Keyed by the active project.
    *  Ephemeral. Equivalent to `setGitDiffPair(path, { before })`. */
@@ -2976,7 +2996,7 @@ export const BOTTOM_TERMINAL_HEIGHT_MAX = 600;
 export const EDITOR_WIDTH_PCT_MIN = 20;
 export const EDITOR_WIDTH_PCT_MAX = 80;
 /** Minimum width for the center chat panel in pixels. */
-export const CENTER_CHAT_WIDTH_MIN = 800;
+export const CENTER_CHAT_WIDTH_MIN = 600;
 
 /** Clamp helper for the four persisted pane sizes. Falls back to defaults on
  *  any non-finite value so the layout never breaks. */
@@ -5611,6 +5631,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // starts hidden by default (the titlebar toggle / command palette reopens
   // it). NOT persisted.
   leftOpen: true,
+  // Hover-peek drawer starts parked (the aside is either in-flow or hidden).
+  leftPeekOpen: false,
   rightOpen: false,
   bottomTerminalOpen: false,
   terminalPosition: "right",
@@ -6988,15 +7010,63 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // `overrides` (plan handoff) replaces the composer-slot defaults for this
     // creation only — the slots themselves are re-synced from the new session
     // row below, so the foreground chips match the thread the user lands on.
-    const model = overrides?.model ?? get().model;
+    const s0 = get();
+    // Per-provider remembered config — the last model / effort / permission
+    // the user picked with THIS SDK (lastModelByProvider; every chip writer
+    // records the full snapshot). The raw view slots are NOT a reliable
+    // "what I want next": selecting an existing thread re-seeds them from
+    // that row's config (syncConfigFromSession), so a plain "+" would clone
+    // the visited thread's stale config instead of the user's standing pick.
+    // Precedence: explicit `overrides` (plan handoff / GitHub AI-fix — flows
+    // with their own config intent) > remembered entry > view slots; a
+    // provider with no remembered entry keeps the old view-slot behavior.
+    const hasConfigOverride =
+      overrides?.providerId !== undefined ||
+      overrides?.model !== undefined ||
+      overrides?.customModelId !== undefined ||
+      overrides?.permissionMode !== undefined;
+    const remembered = hasConfigOverride ? undefined : s0.lastModelByProvider[s0.providerId];
+    const rememberedValid =
+      remembered && isValidRememberedModel(s0, s0.providerId, remembered) ? remembered : undefined;
+    const model = overrides?.model ?? rememberedValid?.model ?? s0.model;
+    const customModelId =
+      overrides?.customModelId !== undefined
+        ? overrides.customModelId
+        : rememberedValid
+          ? sanitizeBinding(s0, s0.providerId, rememberedValid.customModelId)
+          : s0.customModelId;
+    // effort / permissionMode are provider-namespaced — coerce the applied
+    // config against the provider's declared lists, scoped to the APPLIED
+    // model binding (model-scoped thinking ladders on OpenAI-protocol
+    // endpoints included), so a stale remembered value snaps to the neutral
+    // slot instead of being sent raw to an SDK that can't read it.
+    const coercedStart = rememberedValid
+      ? coerceSlotsForProvider(
+          {
+            providers: s0.providers,
+            customModels: s0.customModels,
+            customModelId,
+            model,
+            effort: rememberedValid.effort ?? s0.effort,
+            permissionMode: rememberedValid.permissionMode ?? s0.permissionMode,
+            piModelMaps: s0.piModelMaps,
+            opencodeModelVariants: s0.opencodeModelVariants,
+          },
+          s0.providerId,
+          { customModelId, model },
+        )
+      : undefined;
+    const effort = coercedStart?.effort ?? s0.effort;
+    const permissionMode =
+      overrides?.permissionMode ?? coercedStart?.permissionMode ?? s0.permissionMode;
     const { session } = await api.claude.startSession({
       projectId,
       kind: "chat",
-      providerId: overrides?.providerId ?? get().providerId,
+      providerId: overrides?.providerId ?? s0.providerId,
       model: model !== "default" ? model : undefined,
-      effort: get().effort,
+      effort,
       title: overrides?.title,
-      permissionMode: overrides?.permissionMode ?? get().permissionMode,
+      permissionMode,
       // Working-environment intent from the composer chip — materialized on
       // the first turn (see sendTurn's resolveSessionCwd), never here. An
       // explicit worktreePath (LeftBar "在此工作树中新建会话") BINDS the new
@@ -7014,8 +7084,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ? get().envChoice === "wt-branch" ? "branch" : "detached"
           : undefined,
       worktreePath: overrides?.worktreePath,
-      customModelId:
-        overrides?.customModelId !== undefined ? overrides.customModelId : get().customModelId,
+      customModelId,
     });
     set((s) => {
       // Worktree-bound thread (LeftBar "在此工作树中新建会话" bind): it lands
@@ -7130,11 +7199,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         centerTabFocus: "chat" as const,
       };
     });
-    // With explicit overrides the new row's config differs from the composer
-    // slots — re-sync so the chips reflect the session the user just landed
-    // on. Skipped in the normal path (slots were the row's source anyway) to
-    // keep that behavior untouched.
-    if (overrides) syncConfigFromSession(set, get, session.id);
+    // With explicit overrides — or a remembered per-provider config — the new
+    // row's config differs from the composer slots (which may still hold the
+    // previously-viewed thread's values) — re-sync so the chips reflect the
+    // session the user just landed on AND the next turn sends this row's
+    // config (sendTurn rides the view slots). Skipped only in the pure
+    // legacy path (no overrides, no remembered entry — slots were the row's
+    // source anyway) to keep that behavior untouched.
+    if (overrides || coercedStart) syncConfigFromSession(set, get, session.id);
   },
 
   /** Terminal session (see the interface doc). The session.changed broadcast
@@ -10408,7 +10480,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // While wide-panel (3:7) mode is on the left sidebar must stay closed —
     // guard in the store so no caller/command can open it.
     if (open && get().widePanelOpen) return;
-    set({ leftOpen: open });
+    // Pinning the panel (open or closed) always dismisses the hover-peek
+    // drawer — the floating and in-flow presentations must never stack.
+    set({ leftOpen: open, leftPeekOpen: false });
+  },
+  setLeftPeekOpen: (open) => set({ leftPeekOpen: open }),
+  collapseLeftPanel: () => {
+    if (get().leftPeekOpen) set({ leftPeekOpen: false });
+    else set({ leftOpen: false });
   },
   setRightOpen: (open) => set({ rightOpen: open }),
   setBottomTerminalOpen: (open) => set({ bottomTerminalOpen: open }),
@@ -10418,7 +10497,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // active at once (they'd fight over the shared WebContentsView). Closing
     // the overlay leaves rightOpen as-is (the user can reopen the panel).
     if (open) {
-      set({ browserPanelOpen: true, rightOpen: false });
+      // The fullscreen overlay owns the workspace — dismiss the hover-peek
+      // drawer with it (its trigger strip is gated while the overlay is up).
+      set({ browserPanelOpen: true, rightOpen: false, leftPeekOpen: false });
     } else {
       set({ browserPanelOpen: false });
     }
@@ -10439,6 +10520,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
         widePanelOpen: true,
         leftOpen: false,
+        // The hover-peek drawer must not survive the mode switch (it would
+        // float over the wide split with no trigger to re-dismiss it).
+        leftPeekOpen: false,
         // The right panel is the mode's centerpiece — always show it on enter.
         // (The titlebar right-panel toggle then hides/shows it during the
         // mode; exit still restores the pre-enter rightOpen from the snapshot.)
@@ -13610,6 +13694,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       console.error("file.writeFile failed:", err);
       return false;
     }
+  },
+
+  saveIdeFilesFromModels: async (filePaths) => {
+    const saved: string[] = [];
+    for (const filePath of filePaths) {
+      // A dirty file always has a cached model (only FileEditor's onChange
+      // sets the flag) — the guard is just belt-and-braces.
+      const value = getModelEntry(filePath)?.model.getValue();
+      if (value === undefined) continue;
+      const ok = await get().saveFileContent(filePath, value);
+      if (ok) {
+        updateBaseline(filePath, value);
+        saved.push(filePath);
+      }
+    }
+    return saved;
   },
 
   setGitDiffBefore: (filePath, before) => {

@@ -13,7 +13,7 @@ import {
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { worktreeDisplayName } from "@renderer/lib/worktree.js";
-import { ProjectBranchIndicator } from "@renderer/components/chat/ProjectBranchIndicator.js";
+import { ToolbarGitCommit } from "@renderer/components/layout/ToolbarGitCommit.js";
 import { WorktreeMergeToolbarButton } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -194,10 +194,6 @@ export function Titlebar({
                 pinned and regular threads alike; the left bar no longer shows
                 the owner on pinned rows, so this is the single owner hint. */}
             <ActiveProjectChip />
-            {/* Git branch indicator - compact pill (no project name), click to
-                switch branches. Only renders when a project is active and is a
-                git repo. Sits right of the thread title. */}
-            <ToolbarBranchIndicator />
             {/* Worktree chip — the active thread's isolated-checkout name.
                 Renders only for worktree sessions; local threads leave no
                 gap (the component returns null). */}
@@ -206,6 +202,10 @@ export function Titlebar({
                 without closing the open file. Sits right of the branch pill. */}
             {!isBrowserMode && <EditorColumnToggle />}
             <div className="flex-1" />
+            {/* Git indicator - compact branch pill + change-count badge that
+                opens the quick-commit popover. Placed right-aligned with the
+                workbench controls for prominent access and clean title area. */}
+            <ToolbarGitCommit />
             {/* Worktree merge-back (Land) — session-scoped, right-aligned with
                 the panel toggles. Shown only while the active session runs in
                 a worktree with unmerged changes; self-hiding otherwise (the
@@ -356,33 +356,6 @@ function ActiveWorktreeChip() {
     >
       <IconGitFork size={13} className="shrink-0" />
       <span className="truncate">{worktreeDisplayName(worktreePath, worktreeNames)}</span>
-    </div>
-  );
-}
-
-/** Compact git-branch pill for the toolbar. Renders only the branch switcher
- *  (no folder icon / project name) via ProjectBranchIndicator's compact mode.
- *  Hidden when no project is active. The interactive pill opts out of the
- *  titlebar's drag region so clicks work. */
-function ToolbarBranchIndicator() {
-  const activeProjectId = useSessionStore((s) => s.activeProjectId);
-  const projects = useSessionStore((s) => s.projects);
-  const { projectPath, projectName } = useMemo(() => {
-    if (!activeProjectId) return { projectPath: "", projectName: "" };
-    const p = projects.find((x) => x.id === activeProjectId);
-    return { projectPath: p?.path ?? "", projectName: p?.name ?? "" };
-  }, [activeProjectId, projects]);
-  if (!projectPath) return null;
-  return (
-    <div
-      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-      className="shrink-0"
-    >
-      <ProjectBranchIndicator
-        projectPath={projectPath}
-        projectName={projectName}
-        compact
-      />
     </div>
   );
 }

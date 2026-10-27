@@ -601,6 +601,21 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, showActiveView]);
 
+  // Agent-opened views are adopted straight into the store by App.tsx's global
+  // agentOpened handler (adoptAgentBrowserTab) — they never pass through
+  // createTab / adoptWindowOpenTab, whose showActiveView calls are the only
+  // thing that surfaces a view. When this container is ALREADY active (the
+  // browser tab is open), no isActive flip fires, so the freshly created view
+  // stays parked offscreen and the stage reads blank until the user manually
+  // switches tabs away and back. Re-show on every active-tab change: redundant
+  // for the internal paths (show() is idempotent in main), load-bearing for
+  // agent adoptions and background-tab reuse.
+  useEffect(() => {
+    if (!isActive) return;
+    if (!tabsRef.current.some((t) => t.id === activeTabId)) return;
+    showActiveView();
+  }, [activeTabId, isActive, showActiveView]);
+
   // React to the suppression counter: while > 0, a renderer-DOM overlay may
   // need to cover the OS-level WebContentsView (which always floats above the
   // DOM). Hide the active view ONLY when one of the open popups actually

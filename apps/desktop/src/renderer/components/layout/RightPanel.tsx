@@ -7,8 +7,6 @@ import {
   IconWorld,
   IconListDetails,
   IconMessages,
-  IconArrowsMaximize,
-  IconArrowsMinimize,
   IconClock,
   IconGitFork,
   IconPlus,
@@ -79,8 +77,6 @@ export function RightPanel() {
   const terminalPosition = useSessionStore((s) => s.terminalPosition);
   const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
   const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
-  const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
-  const setWidePanelOpen = useSessionStore((s) => s.setWidePanelOpen);
   const orchRuns = useSessionStore((s) => (sessionId ? s.orchRunsBySession[sessionId] : undefined));
   const orchAuto = useSessionStore((s) => (sessionId ? !!s.orchAutoBySession[sessionId] : false));
   const messages = useSessionStore((s) => (sessionId ? s.messagesBySession[sessionId] : undefined));
@@ -232,9 +228,8 @@ export function RightPanel() {
             </RailButton>
           );
         })}
-        {/* Right end: the "+" menu that opens the session-scoped tabs, then
-            the wide-panel (3:7) toggle. Pushed to the rail's far right with
-            ml-auto. */}
+        {/* Right end: the "+" menu that opens the session-scoped tabs.
+            Pushed to the rail's far right with ml-auto. */}
         <div className="ml-auto flex items-center gap-1">
           <Menu.Root open={addOpen} onOpenChange={setAddOpen}>
             <Menu.Trigger
@@ -307,23 +302,6 @@ export function RightPanel() {
               </Menu.Positioner>
             </Menu.Portal>
           </Menu.Root>
-          <div className="h-5 w-px bg-edge" />
-          <RailButton
-            active={widePanelOpen}
-            onClick={() => setWidePanelOpen(!widePanelOpen)}
-            title={
-              (widePanelOpen ? t("layout.exitWideMode") : t("layout.wideMode")) +
-              hintFor("layout.toggle-wide-panel")
-            }
-          >
-            {/* Maximize when entering, minimize (restore) when already wide —
-                the standard expand/collapse affordance pair. */}
-            {widePanelOpen ? (
-              <IconArrowsMinimize size={16} className="shrink-0" />
-            ) : (
-              <IconArrowsMaximize size={16} className="shrink-0" />
-            )}
-          </RailButton>
         </div>
       </div>
 
