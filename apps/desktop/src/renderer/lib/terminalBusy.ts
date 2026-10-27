@@ -149,6 +149,15 @@ export function footerIndicatesRunningTasks(lines: string[]): boolean {
  *  - `esc interrupt` — opencode's footer pill for the same phase (its
  *    idle footer shows `ctrl+p commands` instead; the pills render
  *    key + verb with no "to", so the claude hint never collides).
+ *  - `esc to cancel` — agy's (Antigravity CLI) turn-active footer
+ *    ("esc to cancel" + model name); idle swaps it for "? for
+ *    shortcuts". This footer is the ONLY in-window during-turn signal
+ *    agy renders: its spinner caption ("⢿  Running command...") sits
+ *    ~8 rows above the buffer end (input box + footer + trailing blank
+ *    rows), outside the six-row window the host scans — so a silent
+ *    stretch that produces no caption output (file reads, long thinks)
+ *    must be held by the footer alone (2026-10-27: the reported "reads
+ *    drop the spinner" session was agy).
  *  - `Running command…` — the foreground-command spinner caption.
  *  - the `N task(s)` footer indicator (delegated).
  *
@@ -166,6 +175,7 @@ export function screenIndicatesActivity(lines: string[]): boolean {
   return (
     joined.includes("esc to interrupt") ||
     joined.includes("esc interrupt") ||
+    joined.includes("esc to cancel") ||
     joined.includes("running command")
   );
 }

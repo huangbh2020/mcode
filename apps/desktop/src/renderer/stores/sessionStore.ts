@@ -13245,18 +13245,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // plan tab is active, fall back to the chat view.
       const sid = s.activeSessionId;
       const planActive = !!(sid && s.planTabActiveBySession[sid]);
+      // Deliberately NO width change when the last file closes: the sidebar
+      // keeps its staged (preview) width and stays isRightPreviewExpanded, so
+      // the empty editor column just shows its placeholder instead of the
+      // panel snapping back to normalRightWidth. Width-linked state must stay
+      // consistent too — while expanded, divider drags tune previewRightWidth
+      // and openFileInIde leaves normalRightWidth untouched.
       return {
         ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
         ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },
         ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
         ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
         centerTabFocus: active == null && !planActive ? ("chat" as const) : s.centerTabFocus,
-        ...(active == null && s.isRightPreviewExpanded
-          ? {
-              rightWidth: s.normalRightWidth,
-              isRightPreviewExpanded: false,
-            }
-          : {}),
       };
     });
 

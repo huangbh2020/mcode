@@ -64,44 +64,6 @@ export function usePeekAutoClose(
   return { schedule, cancel };
 }
 
-/** Invisible hover hotzone rendered INSIDE the titlebar, right of the pin
- *  button (Titlebar mounts it in the workspace branch while the sidebar is
- *  closed). Complements the edge strip: on multi-monitor setups the cursor
- *  entering from the left often flies across onto the other screen before the
- *  8px edge strip can catch it — this zone is a ~90×40px landing pad in the
- *  top-left corner. Same intent delay as the edge strip; clicking also
- *  activates. Must be no-drag (the titlebar row is a drag region, which would
- *  swallow mouse events). It is a flex sibling of the pin button, so it never
- *  covers it — the button stays clickable for pinning the panel open. */
-export function LeftTitlebarPeekZone({ onActivate }: { onActivate: () => void }) {
-  const timer = useRef<number | null>(null);
-  const clear = useCallback(() => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current);
-      timer.current = null;
-    }
-  }, []);
-  useEffect(() => clear, [clear]);
-  return (
-    <div
-      className="h-full w-[90px] shrink-0 cursor-pointer self-stretch"
-      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-      onMouseEnter={() => {
-        if (timer.current !== null) return;
-        timer.current = window.setTimeout(() => {
-          timer.current = null;
-          onActivate();
-        }, OPEN_INTENT_MS);
-      }}
-      onMouseLeave={clear}
-      onClick={() => {
-        clear();
-        onActivate();
-      }}
-    />
-  );
-}
-
 /** Invisible left-edge hover strip with the intent delay + handle pill. */
 export function LeftEdgePeekTrigger({ onActivate }: { onActivate: () => void }) {
   const [hinted, setHinted] = useState(false);

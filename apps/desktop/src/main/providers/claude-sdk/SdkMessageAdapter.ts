@@ -169,10 +169,48 @@ const NON_AGENT_TASK_TYPES = new Set(["local_bash", "local_workflow"]);
  *  stalls the snapshot publish. 3s cleanly separates the two. */
 const CONTEXT_USAGE_PATH_B_TIMEOUT_MS = 3_000;
 
-/** Grace period between the settle condition flipping and the stdin-hold
- *  release (see maybeSettle) — covers the CLI's session-state finalization
- *  lag after the last background-agent edge. */
+/** Grace period between the settle condition flipping and the logical turn
+ *  end (see maybeSettle / finalizeLogical) — covers the CLI's session-state
+ *  finalization lag after the last background-agent edge. */
 const SETTLE_GRACE_MS = 1_500;
+
+/** How long a turn whose result already arrived may stay open waiting for
+ *  RUNNING background bash commands to finish (so the CLI's task-notification
+ *  resume keeps the model's report inside the turn). A dev server / service
+ *  never exits — waiting on it is what used to pin the session in "running"
+ *  forever (the CLI process outlives stdin EOF while it babysits background
+ *  tasks, so the generator never closed and turn.done never fired). After
+ *  this window the turn ends regardless; the command keeps running in the
+ *  live CLI process and follow-up turns ride the same process (prompt feed).
+ *  Finite commands that finish within the window still report in-turn. */
+const BASH_SETTLE_PATIENCE_MS = 60_000;
+
+/** Cross-turn wiring for the adapter (optional). With the persistent
+ *  transport, one CLI process serves several logical turns; each turn gets a
+ *  fresh adapter wired to the provider's transport controls. */
+export interface AdapterTurnHooks {
+  /** Called ONCE when the turn's LOGICAL end fires (result seen, no blocking
+   *  subagents, bash patience respected) — the provider resolves that turn's
+   *  TurnHandle here. The CLI process may keep running past this point. */
+  onLogicalEnd?: (reason: TurnDoneEvent["reason"]) => void;
+  /** Called when the turn is over AND nothing is running anymore (no
+   *  subagents, no live bash tasks) — the provider may close the prompt feed
+   *  so the CLI process can exit. Idempotent at the provider side; repeated
+   *  calls after task edges are expected and no-op there. */
+  requestFeedClose?: () => void;
+}
+
+/** Roster state carried from the previous logical turn's adapter into the
+ *  next one. With the persistent transport, background tasks of turn N keep
+ *  running while turn M>N is current; their lifecycle edges (task_updated /
+ *  task_notification) arrive on the CURRENT adapter, which can only reconcile
+ *  them if it inherited the roster. */
+export interface AdapterCarryover {
+  bashTasks: BashTaskSnapshot[];
+  subagents: SubagentSnapshot[];
+  ignoredTaskIds: string[];
+  backgroundTaskIds: string[];
+}
 
 /** Trailing punctuation that never legitimately ends a COMPLETE final reply:
  *  (full/half-width) colon, comma, enumeration comma, semicolon. When the
@@ -449,11 +487,12 @@ interface AdapterState {
   interactionToolSeen: boolean;
   /** Level signal of live background tasks (SDK `background_tasks_changed`).
    *  The SDK documents it as the authoritative "is background work running"
-   *  source — we track the task_ids here for observability / future use.
-   *  (Previously fed a turn.done gate in maybeEmitTurnDone; that gate is gone
-   *  — turn.done is now emitted solely by flushFinal() when the generator
-   *  closes — but we keep consuming the level signal so the wiring is intact
-   *  if we need an authoritative "still working" check later.) */
+   *  source. Observability + carryover only — it does NOT gate the logical
+   *  turn end anymore: a background SERVICE never exits, and gating on it
+   *  pinned the session in "running" forever (the CLI process outlives stdin
+   *  EOF while it babysits background tasks, so the generator never closed).
+   *  Subagent blocking runs off the subagents roster; bash commands get the
+   *  bounded patience window (BASH_SETTLE_PATIENCE_MS). */
   backgroundTaskIds: Set<string>;
   /** True once any renderable assistant content (text / thinking / tool_use)
    *  has been emitted to the renderer this turn. Read by the provider's
@@ -461,10 +500,18 @@ interface AdapterState {
    *  content has streamed, recreating the query + adapter would orphan the
    *  partial output in the message stream. */
   contentStarted: boolean;
-  /** True once the turn-settle gate fired (result seen AND no running
-   *  subagents / background tasks). Guards maybeSettle's idempotence. See
-   *  setSettleGate / the provider's buildPromptInput for the full story. */
+  /** True once the turn-settle condition flipped (result seen AND no running
+   *  subagents, bash patience respected). Guards maybeSettle's idempotence —
+   *  the flag schedules the logical-end finalize (finalizeLogical); the
+   *  process itself may keep living (persistent transport). */
   settled: boolean;
+  /** Pending patience timer for the bash-task settle deferral (see
+   *  BASH_SETTLE_PATIENCE_MS). Null while not armed. */
+  bashPatienceTimer: NodeJS.Timeout | null;
+  /** True once the bash patience window expired — running background bash
+   *  commands no longer defer the logical turn end (services must not pin
+   *  the turn; the command keeps running in the live CLI process). */
+  bashPatienceExpired: boolean;
   /** Wall-clock ms of the last `result` message (0 = none yet). Settling
    *  requires a result NEWER than the last subagent/background-task edge —
    *  see lastAgentActivityAt. */
@@ -484,9 +531,6 @@ interface AdapterState {
 
 export class SdkMessageAdapter {
   private state: AdapterState;
-  /** The provider's turn-settle release fn (unblocks the prompt iterable's
-   *  stdin hold). Set via setSettleGate after construction. */
-  private settleRelease: (() => void) | null = null;
 
   constructor(
     private ctx: ProviderContext,
@@ -539,7 +583,12 @@ export class SdkMessageAdapter {
      *  garbage totals gateways report. Official Anthropic answers in
      *  milliseconds with trustworthy values, so path B stays enabled there. */
     private enableControlChannel = true,
+    /** Persistent-transport wiring: roster carryover from the previous
+     *  logical turn's adapter + the provider's transport hooks. Absent in
+     *  tests / single-turn constructions. */
+    turnSetup?: { carryover?: AdapterCarryover; hooks?: AdapterTurnHooks },
   ) {
+    this.hooks = turnSetup?.hooks ?? null;
     this.state = {
       blockMessageIds: new Map(),
       emittedToolUse: new Set(),
@@ -547,11 +596,11 @@ export class SdkMessageAdapter {
       tasks: [...initialTodos],
       textScanners: new Map(),
       lastKnownContextWindow: 0,
-      subagents: new Map(),
+      subagents: new Map((turnSetup?.carryover?.subagents ?? []).map((s) => [s.taskId, s])),
       subagentTranscripts: new Map(),
       subagentPendingTools: new Map(),
-      ignoredTaskIds: new Set(),
-      bashTasks: new Map(),
+      ignoredTaskIds: new Set(turnSetup?.carryover?.ignoredTaskIds ?? []),
+      bashTasks: new Map((turnSetup?.carryover?.bashTasks ?? []).map((t) => [t.taskId, t])),
       inPlanMode: false,
       pendingContextUsage: null,
       assistantMessageCount: 0,
@@ -567,11 +616,29 @@ export class SdkMessageAdapter {
       lastAssistantText: "",
       lastAssistantHadToolUse: false,
       interactionToolSeen: false,
-      backgroundTaskIds: new Set(),
+      backgroundTaskIds: new Set(turnSetup?.carryover?.backgroundTaskIds ?? []),
       contentStarted: false,
       settled: false,
+      bashPatienceTimer: null,
+      bashPatienceExpired: false,
       lastResultAt: 0,
       lastAgentActivityAt: 0,
+    };
+  }
+
+  /** Transport hooks (see AdapterTurnHooks). Null in tests. */
+  private hooks: AdapterTurnHooks | null;
+
+  /** Snapshot of the roster state a FOLLOW-UP adapter must inherit so
+   *  lifecycle edges of this turn's background tasks (which keep running
+   *  while a later turn is current) still reconcile on the current adapter
+   *  instead of being dropped as orphans. */
+  exportCarryover(): AdapterCarryover {
+    return {
+      bashTasks: Array.from(this.state.bashTasks.values()),
+      subagents: Array.from(this.state.subagents.values()),
+      ignoredTaskIds: Array.from(this.state.ignoredTaskIds),
+      backgroundTaskIds: Array.from(this.state.backgroundTaskIds),
     };
   }
 
@@ -583,20 +650,21 @@ export class SdkMessageAdapter {
     return this.state.contentStarted;
   }
 
-  /** Wire the turn-settle gate (see ClaudeAgentSdkProvider.buildPromptInput):
-   *  `release` unblocks the prompt iterable's stdin hold so the CLI process
-   *  can exit. Called once per adapter construction; safe to call before or
-   *  after the settle condition is already met. */
-  setSettleGate(release: () => void): void {
-    this.settleRelease = release;
-    this.maybeSettle();
+  /** Any bash-command roster entry still running. Feeds the bounded settle
+   *  patience and the feed-close idle check. */
+  private hasRunningBashTask(): boolean {
+    for (const t of this.state.bashTasks.values()) {
+      if (t.status === "running") return true;
+    }
+    return false;
   }
 
-  /** Release the settle gate once the turn is settled: a result message has
-   *  arrived AND no subagents / background tasks are still running. Rechecked
-   *  on every result, subagent-status change, and background-task level
-   *  signal, because the final result may precede the last agent's completion
-   *  edge (or follow it). Idempotent. */
+  /** Release the turn once it is LOGICALLY settled: a result message has
+   *  arrived AND no subagents are still running. Background BASH commands
+   *  only defer the end for a bounded patience window (BASH_SETTLE_PATIENCE_MS)
+   *  — a service never exits, and holding the turn until it does pinned the
+   *  session in "running" forever. Rechecked on every result, subagent-status
+   *  change, and bash-roster flush. Idempotent. */
   private maybeSettle(): void {
     if (this.state.settled) return;
     // No result yet → the turn is still mid-flight (or streaming agent
@@ -606,22 +674,102 @@ export class SdkMessageAdapter {
     // triggers the CLI's task-notification resume flow (synthetic user
     // message → the main loop continues), so a result older than the last
     // agent edge is intermediate — the turn still has resumed phases to run
-    // and their permission asks need the stdin hold.
+    // and their permission asks need the CLI process alive.
     if (this.state.lastResultAt < this.state.lastAgentActivityAt) return;
     for (const s of this.state.subagents.values()) {
       if (s.status === "running") return;
     }
-    if (this.state.backgroundTaskIds.size > 0) return;
+    // Running background bash commands defer the end within the patience
+    // window only — their completion (and the model's report on the
+    // task-notification resume) usually lands inside it; a service doesn't,
+    // and after the window the turn ends while the command keeps running.
+    if (!this.state.bashPatienceExpired && this.hasRunningBashTask()) {
+      if (this.state.bashPatienceTimer === null) {
+        this.ctx.log.info(
+          `claude turn settle: deferring logical end ${BASH_SETTLE_PATIENCE_MS}ms for running background command(s)`,
+        );
+        this.state.bashPatienceTimer = setTimeout(() => {
+          this.state.bashPatienceTimer = null;
+          this.state.bashPatienceExpired = true;
+          this.ctx.log.info("claude turn settle: patience window expired — ending turn with live background command(s)");
+          this.maybeSettle();
+        }, BASH_SETTLE_PATIENCE_MS);
+      }
+      return;
+    }
     this.state.settled = true;
     // Grace period: the CLI's session-state finalization (last agent
-    // completion records) can lag the last edge we saw. Releasing stdin a
-    // beat later keeps a fast follow-up turn from resuming mid-finalization
-    // — the state that breaks the permission-ask channel (2026-08-26).
+    // completion records) can lag the last edge we saw. Finalizing a beat
+    // later keeps ordering sane when the generator closes right behind us.
     const roster = Array.from(this.state.subagents.values());
+    const bgBash = Array.from(this.state.bashTasks.values()).filter((t) => t.status === "running").length;
     this.ctx.log.info(
-      `claude turn settled: subtype=${this.state.lastResultSubtype} agents=${roster.length} bgTasks=${this.state.backgroundTaskIds.size} resultAt=+${this.state.lastResultAt} agentEdge=+${this.state.lastAgentActivityAt} — releasing stdin hold in ${SETTLE_GRACE_MS}ms`,
+      `claude turn settled: subtype=${this.state.lastResultSubtype} agents=${roster.length} bgBashCommands=${bgBash} resultAt=+${this.state.lastResultAt} agentEdge=+${this.state.lastAgentActivityAt} — finalizing turn in ${SETTLE_GRACE_MS}ms`,
     );
-    setTimeout(() => this.settleRelease?.(), SETTLE_GRACE_MS);
+    setTimeout(() => {
+      void this.finalizeLogical(this.state.lastResultReason ?? "interrupted");
+    }, SETTLE_GRACE_MS);
+  }
+
+  /** LOGICAL end of the turn: the model's work is done (result seen, no
+   *  blocking subagents, bash patience respected). Freezes the files card,
+   *  collapses plan mode, runs the truncation diagnostics and emits
+   *  turn.done — while the CLI process may keep living in the background
+   *  (babysitting services). Deliberately runs NO kill-nets: the still-running
+   *  rosters are alive on purpose; the generator-close path (flushFinal)
+   *  owns the honest "the process is exiting, kill the rosters" verdict.
+   *  Runs exactly once (guarded by turnDoneEmitted via emitTurnDone). */
+  private async finalizeLogical(reason: TurnDoneEvent["reason"]): Promise<void> {
+    if (this.state.turnDoneEmitted) return;
+    // Freeze and emit the snapshot list — same contract as flushFinal's
+    // files card. After freeze(), late tool_use events are ignored by
+    // recordPre (the turn is over; post-turn resume-phase edits surface in
+    // the NEXT turn's card instead).
+    const files = await this.snapshots.freeze();
+    if (files.length > 0) {
+      this.ctx.emit({
+        type: "turn.files",
+        sessionId: this.sessionId,
+        files,
+      } satisfies TurnFilesEvent);
+    }
+    // End-of-turn safety net: if the model was still in plan mode (deny,
+    // interrupt, or the turn ended before ExitPlanMode finalized), make
+    // sure the renderer's plan section collapses instead of getting stuck
+    // on a stale "草拟中" badge.
+    if (this.state.inPlanMode) {
+      this.state.inPlanMode = false;
+      this.ctx.emit({
+        type: "plan.update",
+        sessionId: this.sessionId,
+        plan: "",
+        phase: "cleared",
+      } satisfies PlanUpdateEvent);
+    }
+    // Gateway-truncation diagnostics, then the end — exactly once.
+    this.maybeEmitTurnIncomplete();
+    this.emitTurnDone(reason);
+    this.hooks?.onLogicalEnd?.(reason);
+    // Nothing is blocking anymore by construction (subagents gate the settle;
+    // bash commands passed the patience window or finished) — but a command
+    // may have finished BETWEEN the settle check and this finalize. Give the
+    // feed a chance to close if the process is fully idle now.
+    this.maybeCloseFeed();
+  }
+
+  /** Ask the provider to close the prompt feed once the turn is over AND the
+   *  CLI process has nothing left to babysit (no running subagents, no live
+   *  bash commands). Only then is stdin EOF safe: with live background tasks
+   *  the CLI ignores EOF and lingers, which is exactly what we want while a
+   *  service runs (follow-up turns ride the same process). Idempotent —
+   *  called from every roster edge after the turn ended. */
+  private maybeCloseFeed(): void {
+    if (!this.state.turnDoneEmitted) return;
+    for (const s of this.state.subagents.values()) {
+      if (s.status === "running") return;
+    }
+    if (this.hasRunningBashTask()) return;
+    this.hooks?.requestFeedClose?.();
   }
 
   /** Feed one SDKMessage through the normalization pipeline. */
@@ -759,14 +907,12 @@ export class SdkMessageAdapter {
     if (subagentsChanged) this.flushSubagents();
     // Same safety net for the bash-task roster: a foreground command whose
     // stream died before its tool_result (interrupt / transport break) must
-    // not sit on "running" forever. An aborted turn killed it (the CLI tears
-    // down its tools on interrupt — and without perTaskStopAffordance
-    // declared, its fail-closed rule kills BACKGROUND tasks too, mirroring
-    // the subagent handling above). A normally-ended turn's blocking command
-    // must have finished, and any still-"running" BACKGROUND entry only
-    // survives here when the settle fallback released the hold (the CLI
-    // process is exiting with the stream, taking the command with it) —
-    // killed is the honest verdict in both cases.
+    // not sit on "running" forever. This path runs when the GENERATOR closed
+    // — the CLI process is exiting (feed closed at idle, user abort, or
+    // crash) — so any still-"running" entry dies with it and killed is the
+    // honest verdict. (The LOGICAL turn end — finalizeLogical — deliberately
+    // does NOT run these nets: there the process stays alive babysitting the
+    // commands, and follow-up turns keep riding it.)
     let bashTasksChanged = false;
     for (const [id, t] of this.state.bashTasks) {
       if (t.status === "running") {
@@ -782,17 +928,19 @@ export class SdkMessageAdapter {
     // Flag gateway-truncated turns BEFORE turn.done so the renderer can
     // replace its "回合完成" toast with an accurate "任务提前中断" warning.
     this.maybeEmitTurnIncomplete();
-    // Turn end, exactly once. Three paths converge here:
-    //  - a result arrived while subagents were still running → held back by
-    //    maybeEmitTurnDone, now emitted with the final result's reason;
-    //  - the stream ended without any result → safety-net "interrupted"
+    // Turn end, exactly once. Paths converging here:
+    //  - the logical end already ran (finalizeLogical) → no-op (guard inside);
+    //  - the stream ended before any result → safety-net "interrupted"
     //    (preserves the pre-existing fallback semantics);
-    //  - a normal result already emitted turn.done → no-op (guard inside).
-    // An explicit finalReason (the provider's thrown-error path) wins over
-    // the result-derived reason: a stream that broke after an intermediate
-    // result ended in an error, not in that result's stop_reason.
+    //  - an explicit finalReason (the provider's thrown-error path) wins
+    //    over the result-derived reason: a stream that broke after an
+    //    intermediate result ended in an error, not in that stop_reason.
     if (!this.state.turnDoneEmitted) {
       this.emitTurnDone(finalReason ?? this.state.lastResultReason ?? "interrupted");
+      // The provider's turn tracker resolves here when the generator closed
+      // BEFORE the logical end did (crash / abort / process death) — without
+      // this the TurnHandle would stay "running" forever.
+      this.hooks?.onLogicalEnd?.(finalReason ?? this.state.lastResultReason ?? "interrupted");
     }
   }
 
@@ -812,6 +960,11 @@ export class SdkMessageAdapter {
    *    outlives the parent stream, and its Task tool_use may never get an
    *    in-stream tool_result. */
   private maybeEmitTurnIncomplete(): void {
+    // The logical end already emitted turn.done (and ran this check there) —
+    // a late generator close (post-turn resume phases, lingering process
+    // finally exiting) must not surface a stale truncation warning against
+    // events that arrived after the turn was already over.
+    if (this.state.turnDoneEmitted) return;
     if (this.state.lastResultSubtype !== "success") return;
     if (this.abortSignal?.aborted) return;
 
@@ -1089,9 +1242,10 @@ export class SdkMessageAdapter {
   /** Level signal: the SDK's authoritative "which background tasks are live"
    *  roster. REPLACE semantics per the SDK docs — swap the whole id set. We
    *  don't emit a `subagent.update` here (the edge events task_started /
-   *  task_updated already drive the renderer roster); this set only feeds the
-   *  turn.done gate so a backgrounded task that skipped its task_started edge
-   *  still counts as "work in progress" and holds the composer locked. */
+   *  task_updated already drive the renderer roster); the set feeds roster
+   *  carryover between logical turns and observability. It does NOT gate the
+   *  logical turn end — background services never exit, and gating on them
+   *  used to pin the session in "running" forever. */
   private handleBackgroundTasksChanged(m: {
     subtype: "background_tasks_changed";
     tasks: { task_id: string; task_type: string; description: string; ambient?: boolean }[];
@@ -1238,9 +1392,10 @@ export class SdkMessageAdapter {
     } satisfies UpstreamIssueEvent);
   }
 
-  /** Emit the turn.done event exactly once per turn. Both handleResult (when
-   *  the result isn't held back) and flushFinal (deferred end) route through
-   *  here so the guard can't be bypassed by a result message followed by a
+  /** Emit the turn.done event exactly once per turn. Both finalizeLogical
+   *  (the logical end: result seen, subagents idle, bash patience respected)
+   *  and flushFinal (generator close / abort / error) route through here so
+   *  the guard can't be bypassed by a result message followed by a
    *  stream-teardown emit. */
   private emitTurnDone(reason: TurnDoneEvent["reason"]): void {
     if (this.state.turnDoneEmitted) return;
@@ -1266,17 +1421,24 @@ export class SdkMessageAdapter {
     // task-notification resume flow, so any prior result is intermediate.
     this.state.lastAgentActivityAt = Date.now();
     this.maybeSettle();
+    // A subagent completing after the turn already ended can be the last
+    // thing keeping the CLI process alive — give the feed a chance to close.
+    this.maybeCloseFeed();
   }
 
   /** Emit the current bash-task roster as a single `bash-tasks.update` event.
    *  REPLACE semantics, mirroring flushSubagents — the renderer swaps its
-   *  list, no client-side merge. */
+   *  list, no client-side merge. A roster edge can also be the last one
+   *  blocking the logical end (patience path) or the last thing keeping the
+   *  CLI process alive (feed close), so both are rechecked here. */
   private flushBashTasks(): void {
     this.ctx.emit({
       type: "bash-tasks.update",
       sessionId: this.sessionId,
       tasks: Array.from(this.state.bashTasks.values()),
     } satisfies BashTasksEvent);
+    this.maybeSettle();
+    this.maybeCloseFeed();
   }
 
   /** Look up a subagent snapshot by its originating Task tool_use id.

@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { is } from "@main/utils.js";
-import type { Options, CanUseTool, OnUserDialog, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, CanUseTool, OnUserDialog, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentProvider,
   StartTurnRequest,
@@ -19,7 +19,7 @@ import type {
 } from "@contracts/provider";
 import { effortLevelValuesForModel } from "@contracts/customModel";
 import type { AskUserQuestionItem, PermissionMode } from "@contracts/runtime";
-import { SdkMessageAdapter, parseQuestions } from "./SdkMessageAdapter.js";
+import { SdkMessageAdapter, parseQuestions, type AdapterCarryover } from "./SdkMessageAdapter.js";
 import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEnv.js";
 import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
 import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
@@ -36,6 +36,7 @@ import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
   FILE_MUTATING_TOOLS,
   FILE_READING_TOOLS,
+  FileSnapshot,
   getToolFilePath,
   getToolReadPath,
   normalizeToolFilePath,
@@ -115,56 +116,68 @@ async function loadQuery(): Promise<typeof import("@anthropic-ai/claude-agent-sd
  *  SendTurnImageSchema.mimeType (the zod enum already restricts to this set). */
 type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
-/** Promise that resolves when the signal fires (immediately if already
- *  aborted). Used to unblock the prompt iterable's hold on user stop. */
-function abortSignalPromise(signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
+/** A queue-backed prompt feed: the provider pushes one SDKUserMessage per
+ *  LOGICAL turn, and the SDK's streamInput keeps consuming the iterable for
+ *  the lifetime of the CLI process (each yielded message becomes one stdin
+ *  line = the CLI's next user turn — the SDK's native multi-turn streaming
+ *  input; `isSingleUserTurn` is only true for string prompts). The iterable
+ *  ends when `close()` is called, which is what lets the CLI process exit:
+ *  the provider closes the feed when the turn is over AND the process has
+ *  nothing left to babysit (no running subagents, no live background bash
+ *  commands — a lingering dev server keeps the process and the feed alive,
+ *  and follow-up turns keep riding it). */
+interface PromptFeed {
+  push(m: SDKUserMessage): void;
+  close(): void;
+  iterable: AsyncIterable<SDKUserMessage>;
 }
 
-/** A turn-settle gate: the prompt iterable awaits `promise` after yielding the
- *  user message, and the adapter calls `release` once the turn is settled
- *  (result received AND no subagents / background tasks still running). See
- *  buildPromptInput for why the hold exists. */
-function makeSettleGate(): { promise: Promise<void>; release: () => void } {
-  let release!: () => void;
-  const promise = new Promise<void>((r) => (release = r));
-  return { promise, release };
+function makePromptFeed(): PromptFeed {
+  const queue: SDKUserMessage[] = [];
+  let ended = false;
+  let wake: (() => void) | null = null;
+  const iterable: AsyncIterable<SDKUserMessage> = (async function* () {
+    while (true) {
+      if (queue.length > 0) {
+        yield queue.shift()!;
+        continue;
+      }
+      if (ended) return;
+      await new Promise<void>((r) => {
+        wake = r;
+      });
+    }
+  })();
+  return {
+    push(m) {
+      if (ended) return;
+      queue.push(m);
+      wake?.();
+      wake = null;
+    },
+    close() {
+      if (ended) return;
+      ended = true;
+      wake?.();
+      wake = null;
+    },
+    iterable,
+  };
 }
 
 /**
- * Build the SDK `prompt` argument for a turn: an AsyncIterable yielding ONE
- * user message (text block + any inline base64 image blocks — the same
- * inline-encoding the Claude Code CLI uses for user-attached images), then
- * HOLDING OPEN until the turn settles.
- *
- * Why the hold: with a plain string (or a one-shot iterable) the SDK closes
- * the CLI's stdin after the first result message (`isSingleUserTurn` /
- * `streamInput` endInput). The CLI process then exits while backgrounded
- * subagents are still running, orphaning them — they keep writing the shared
- * session file, and a turn that resumes in that window reads torn state in
- * which every permission ask dies instantly ("Tool permission request
- * failed: AbortError: Stream closed"; observed with plan-mode sessions,
- * 2026-08-26). Holding stdin open keeps the CLI process alive until the
- * adapter confirms the turn settled, so the session file is complete before
- * the next turn can resume it. The hold races the abort signal so a user
- * stop never deadlocks the iterable.
- *
- * A new iterable + gate is created per call because the transport-retry path
- * needs a replayable source after recreating the query.
+ * Build the SDKUserMessage for one logical turn: a text block (with the
+ * `/schedule` natural-language rewrite — the CLI treats a leading slash as an
+ * internal command and would exit on an unrecognized one) plus any inline
+ * base64 image blocks (the same inline-encoding the Claude Code CLI uses for
+ * user-attached images). Image-only turns send no text block (the images
+ * still reach the model).
  */
-function buildPromptInput(
-  req: StartTurnRequest,
-  gate: { promise: Promise<void> },
-  signal: AbortSignal,
-): AsyncIterable<SDKUserMessage> {
+function buildTurnUserMessage(req: StartTurnRequest): SDKUserMessage {
   const content: (
     | { type: "text"; text: string }
     | { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } }
   )[] = [];
-  // Image-only turns send no text block (the images still reach the model).
   if (req.prompt.trim()) {
     let text = req.prompt;
     // Claude CLI interprets leading slash in prompt as an internal CLI command.
@@ -183,14 +196,99 @@ function buildPromptInput(
       source: { type: "base64", media_type: img.mimeType as ImageMediaType, data: img.data },
     });
   }
-  return (async function* () {
-    yield {
-      type: "user",
-      message: { role: "user", content },
-      parent_tool_use_id: null,
-    } satisfies SDKUserMessage;
-    await Promise.race([gate.promise, abortSignalPromise(signal)]);
-  })();
+  return {
+    type: "user",
+    message: { role: "user", content },
+    parent_tool_use_id: null,
+  } satisfies SDKUserMessage;
+}
+
+/** Per-logical-turn completion tracker. The TurnHandle's `done` resolves when
+ *  the ADAPTER's logical end fires (result seen, subagents idle, bash
+ *  patience respected) — NOT when the CLI process exits. The process may keep
+ *  running for a long time after the turn is over (a dev server it started);
+ *  the SDK generator keeps draining in the background so late roster edges
+ *  and post-turn resume content still land. */
+interface TurnTracker {
+  promise: Promise<void>;
+  /** Idempotent resolve. */
+  resolve(): void;
+  isEnded(): boolean;
+}
+
+function makeTurnTracker(): TurnTracker {
+  let resolveInner!: () => void;
+  let ended = false;
+  const promise = new Promise<void>((r) => {
+    resolveInner = () => {
+      if (ended) return;
+      ended = true;
+      r();
+    };
+  });
+  return { promise, resolve: resolveInner, isEnded: () => ended };
+}
+
+/** One CLI process serving a session across logical turns (the persistent
+ *  transport). The process outlives individual turns whenever background
+ *  work runs (a dev server keeps it — and the stdin feed — alive; the CLI
+ *  ignores stdin EOF while it babysits background tasks, so closing the feed
+ *  early would only strand it process-side with follow-ups unable to ride
+ *  it). Follow-up turns push into the live feed instead of spawning a second
+ *  CLI on the same session file — two writers on one session is the torn
+ *  state every permission-ask failure here has ever traced back to. */
+interface LiveTransport {
+  sessionId: string;
+  /** Kills the CLI process (user stop / reap / dispose). Shared by every
+   *  TurnHandle issued over this transport. */
+  ac: AbortController;
+  feed: PromptFeed;
+  feedClosed: boolean;
+  /** The live query; replaced by the transport-retry loop. stopTask routes
+   *  here so per-task stop works across (and after) logical turns. */
+  query: Query;
+  /** Everything the CLI process bakes in at spawn (model, env, mode, cwd…).
+   *  A follow-up whose fingerprint differs reaps the process and respawns —
+   *  per-process options can't change mid-flight. */
+  fingerprint: string;
+  /** Current logical turn's adapter. Swapped per follow-up; the drain loop
+   *  always dispatches here. */
+  adapter: SdkMessageAdapter;
+  /** Mutable turn number for the browser MCP server's screenshot paths. */
+  turnNumberBox: { n: number | undefined };
+  /** The background drain; resolves when the generator closes (process
+   *  exit) — which may be long after every turn it served is done. */
+  drain: Promise<void>;
+  done: boolean;
+}
+
+/** Stable string describing everything the CLI process bakes in at spawn.
+ *  Two turns with equal fingerprints can share one process; a difference
+ *  means the old process must be reaped (its background tasks die with it —
+ *  model/mode/config changes are deliberate user acts). NOTE `resume` is
+ *  deliberately excluded: turn 1 of a fresh session spawns with no CLI
+ *  session id and turn 2 resumes with one — same process identity either
+ *  way (follow-ups never re-resume; fresh spawns use the current binding). */
+function transportFingerprint(req: StartTurnRequest, options: Options): string {
+  return JSON.stringify({
+    cwd: req.cwd,
+    model: options.model ?? null,
+    effort: options.effort ?? null,
+    permissionMode: options.permissionMode ?? null,
+    skills: options.skills ?? null,
+    orchestration: req.orchestration === true,
+    binary: options.pathToClaudeCodeExecutable ?? null,
+    env: options.env ?? null,
+    mcp: Object.keys(options.mcpServers ?? {}).sort(),
+    settings: options.settings ?? null,
+    systemAppend:
+      typeof options.systemPrompt === "object" &&
+      options.systemPrompt !== null &&
+      !Array.isArray(options.systemPrompt) &&
+      options.systemPrompt.type === "preset"
+        ? options.systemPrompt.append ?? ""
+        : "",
+  });
 }
 
 // `createSdkMcpServer` builds an in-process MCP server that surfaces custom
@@ -244,7 +342,11 @@ async function buildBrowserMcpServer(
   projectPath: string,
   ctx: ProviderContext,
   sessionId: string,
-  turnNumber?: number,
+  /** Resolved at CALL time, not construction time: the browser MCP server
+   *  lives as long as the CLI process (the persistent transport), which now
+   *  serves several logical turns — a statically captured turn number would
+   *  pin every follow-up turn's screenshots into the first turn's directory. */
+  getTurnNumber: () => number | undefined,
 ) {
   const createSdkMcpServer = await loadCreateMcpServer();
 
@@ -508,7 +610,7 @@ async function buildBrowserMcpServer(
             {
               toolCallId: randomUUID(),
               sessionId,
-              turnNumber,
+              turnNumber: getTurnNumber(),
             },
           ),
       },
@@ -556,7 +658,7 @@ async function buildBrowserMcpServer(
             // The final-screenshot image flows back through the tool_result
             // content (same round-trip as browser_screenshot — no separate
             // browser.image emit on the Claude path).
-            { toolCallId: randomUUID(), sessionId, turnNumber },
+            { toolCallId: randomUUID(), sessionId, turnNumber: getTurnNumber() },
           ),
       },
       {
@@ -586,7 +688,7 @@ async function buildBrowserMcpServer(
             {
               toolCallId: randomUUID(),
               sessionId,
-              turnNumber,
+              turnNumber: getTurnNumber(),
             },
           );
         },
@@ -661,12 +763,6 @@ function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): 
  *  the SDK's own retry loop doesn't cover. */
 const CLAUDE_MAX_TRANSPORT_RETRIES = 3;
 
-/** Hard cap on the prompt iterable's stdin hold (see buildPromptInput). If
- *  the adapter's settle signal never fires, release the hold after this long
- *  so the turn can still finish — the CLI exits and any straggler background
- *  agents orphan, which is exactly the pre-fix behavior, not a deadlock. */
-const PROMPT_SETTLE_FALLBACK_MS = 5 * 60_000;
-
 /** True for a thrown error that warrants a transport-level retry. Covers
  *  stream/stdio breaks, network failures, timeouts, and HTTP 429/5xx that
  *  escape the SDK's retry loop and surface as a thrown exception (possible on
@@ -724,6 +820,10 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 export class ClaudeAgentSdkProvider implements AgentProvider {
   readonly id = "claude-sdk";
   readonly displayName = "Claude";
+  /** Live CLI processes keyed by GUI session id. A transport survives its
+   *  turns while background work runs (services); follow-up turns ride the
+   *  same process instead of spawning a second CLI on the session file. */
+  private transports = new Map<string, LiveTransport>();
   readonly capabilities: ProviderCapabilities = {
     supportsApproval: true,
     supportsResume: true,
@@ -781,6 +881,16 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
    * providerSessionId slot is cleared via input-provider hooks below).
    */
   async reviseConversation(input: ProviderReviseInput): Promise<{ cleared?: boolean }> {
+    // A live CLI process holds the conversation IN MEMORY — a transcript
+    // truncation on disk wouldn't reach it, and its next task-notification
+    // resume would write the old context back into the (now edited) session
+    // file. Tear the transport down first so the next turn respawns from the
+    // revised file. Background tasks die with it — revision is a destructive
+    // act by definition.
+    const live = this.transports.get(input.sessionId);
+    if (live) {
+      await this.reapTransport(live, "conversation revised", input.log);
+    }
     const providerSessionId = input.providerSessionId;
     if (!providerSessionId) {
       // No CLI session ever ran — nothing to rewind host-side.
@@ -832,6 +942,10 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
 
   async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
     const ac = new AbortController();
+    // Mutable turn number for the browser MCP server's screenshot paths —
+    // the server instance lives as long as the CLI process (persistent
+    // transport), so the value must be read at call time, not captured.
+    const turnNumberBox: { n: number | undefined } = { n: req.turnNumber };
 
     // UI "Plan" mode → run the CLI under `default` and steer the model into
     // plan mode via the EnterPlanMode tool instead. The CLI's plan
@@ -1501,7 +1615,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         // Pure constructor after the (cached) SDK import — building it
         // unconditionally is free; only ATTACHING it below is gated on the
         // browserDisabled setting.
-        buildBrowserMcpServer(req.cwd, ctx, req.sessionId, req.turnNumber),
+        buildBrowserMcpServer(req.cwd, ctx, req.sessionId, () => turnNumberBox.n),
         readProjectMcpServers(req.cwd),
         getOutputStyleSetting(),
         getCustomPromptSetting(),
@@ -1615,19 +1729,6 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       }
     }
 
-    const gate = makeSettleGate();
-    // Fallback cap for the stdin hold: if the settle signal never arrives
-    // (CLI stops emitting task edges, unexpected states), release anyway so
-    // the turn can't hang — degrades to the pre-fix early-exit behavior
-    // instead of deadlocking. Long enough for real background agents.
-    const settleTimers: NodeJS.Timeout[] = [];
-    settleTimers.push(setTimeout(() => gate.release(), PROMPT_SETTLE_FALLBACK_MS));
-    let retryGate: ReturnType<typeof makeSettleGate> | null = null;
-    ctx.log.info(
-      `claude turn start: session=${req.sessionId} uiMode=${req.permissionMode} sdkMode=${(typeof options.permissionMode === "string" ? options.permissionMode : "default")} settleGate=on`,
-    );
-    const q = (await loadQuery())({ prompt: buildPromptInput(req, gate, ac.signal), options });
-
     // Resolve the user-declared context-window tag from the selected model's
     // `supports1m` flag. `resolveActiveModel` appends a `[1m]` suffix exactly
     // when the selected model declares 1M, so its presence signals a 1M
@@ -1642,157 +1743,289 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         : "200k"
       : undefined;
 
-    const adapter = new SdkMessageAdapter(
+    // ── Persistent transport: ride the LIVE CLI process when one exists ──
+    // A process whose background service keeps it alive serves follow-up
+    // turns directly (streaming-input multi-turn). Spawning a second CLI on
+    // the same session file would mean two writers — the torn state behind
+    // every "permission ask dies instantly" incident. A fingerprint
+    // difference (model / mode / env / config changed) reaps the old
+    // process first: per-process options can't change mid-flight.
+    const fingerprint = transportFingerprint(req, options);
+    const existing = this.transports.get(req.sessionId);
+    if (
+      existing &&
+      !existing.done &&
+      !existing.feedClosed &&
+      !existing.ac.signal.aborted &&
+      existing.fingerprint === fingerprint
+    ) {
+      return this.startFollowupTurn(req, ctx, existing, configured);
+    }
+    if (existing) {
+      // feedClosed (process exiting after idle) counts as stale too: a push
+      // into a closed feed would silently drop the user's message.
+      await this.reapTransport(
+        existing,
+        existing.fingerprint !== fingerprint ? "process options changed (model/mode/config)" : "stale or exiting transport",
+        ctx.log,
+      );
+    }
+
+    // ── Fresh transport: spawn the CLI process for this turn ──
+    const feed = makePromptFeed();
+    const q = (await loadQuery())({ prompt: feed.iterable, options });
+    const turn = makeTurnTracker();
+    const transport: LiveTransport = {
+      sessionId: req.sessionId,
+      ac,
+      feed,
+      feedClosed: false,
+      query: q,
+      fingerprint,
+      adapter: null!,
+      turnNumberBox,
+      drain: Promise.resolve(),
+      done: false,
+    };
+    transport.adapter = this.createTurnAdapter(req, ctx, transport, turn, configured, snapshot);
+    this.transports.set(req.sessionId, transport);
+    transport.drain = this.runDrain(req, ctx, transport, options, turn, configured, snapshot);
+    feed.push(buildTurnUserMessage(req));
+    ctx.log.info(
+      `claude turn start: session=${req.sessionId} uiMode=${req.permissionMode} sdkMode=${(typeof options.permissionMode === "string" ? options.permissionMode : "default")} transport=fresh`,
+    );
+
+    return {
+      done: turn.promise,
+      interrupt: () => ac.abort(),
+      isRunning: () => !turn.isEnded() && !ac.signal.aborted,
+      // Per-task stop (SDK `stop_task` control request): kills ONE running
+      // CLI task — a long-running bash command (a dev server) — without
+      // aborting the turn. Valid while the CLI PROCESS is alive, including
+      // after the turn's logical end (the process lingers, babysitting
+      // background work; the 运行命令 panel's stop button must keep working
+      // there). NOTE we deliberately do NOT declare `perTaskStopAffordance`
+      // — without the declaration an interrupt kills background tasks too
+      // (the CLI's fail-closed rule), which keeps Mcode's stop button
+      // meaning "stop everything".
+      stopTask: async (taskId: string) => {
+        if (transport.done || transport.ac.signal.aborted) {
+          throw new Error("回合已结束,无法停止任务(turn already finished)");
+        }
+        await transport.query.stopTask(taskId);
+      },
+    };
+  }
+
+  /** Build a per-logical-turn adapter wired to the transport's controls:
+   *  the adapter's logical end resolves that turn's TurnTracker, and its
+   *  idle signal closes the feed (letting the CLI process exit). Follow-up
+   *  adapters inherit the previous adapter's roster so late lifecycle edges
+   *  of turn N's background tasks still reconcile while turn M is current. */
+  private createTurnAdapter(
+    req: StartTurnRequest,
+    ctx: ProviderContext,
+    transport: LiveTransport,
+    turn: TurnTracker,
+    configured: ClaudeContextWindowTag | undefined,
+    snapshot: FileSnapshot,
+    carryover?: AdapterCarryover,
+  ): SdkMessageAdapter {
+    return new SdkMessageAdapter(
       ctx,
       req.sessionId,
       this.capabilities.supportsAskUserQuestion,
       req.cwd,
       snapshot,
-      ac.signal,
-      q,
+      transport.ac.signal,
+      transport.query,
       req.initialTodos ?? [],
       configured,
       !req.apiConfig,
+      {
+        carryover,
+        hooks: {
+          onLogicalEnd: () => turn.resolve(),
+          requestFeedClose: () => this.closeTransportFeed(transport, ctx.log),
+        },
+      },
     );
-    // Wire the settle gate: the adapter releases the prompt iterable's hold
-    // once the turn is settled (result + no running subagents / background
-    // tasks), letting the CLI process exit with complete session state.
-    adapter.setSettleGate(gate.release);
+  }
 
-    let finished = false;
-    // The query the stopTask control request routes to. The transport-retry
-    // loop below replaces the query object; keeping a live reference lets
-    // the TurnHandle's stopTask always reach the CLI process that owns the
-    // task, including after a retry.
-    let liveQuery = q;
-    const done = (async () => {
-      // Transport-level retry loop. The SDK already retries API-level
-      // transient errors (429 / overloaded / 5xx) internally — surfaced via
-      // `api_retry` system messages the adapter now logs — and those close
-      // the iterator cleanly with a `result{subtype:"error"}` (handled by
-      // handleResult, not this catch). This wrapper catches only the THROWN-
-      // exception case the SDK doesn't cover: stdio breaks, binary crashes,
-      // network timeouts. When such a failure happens BEFORE any assistant
-      // content streamed to the renderer (checked via
-      // activeAdapter.hasEmittedContent()), we recreate the query + adapter
-      // and retry with exponential backoff. The no-content gate is critical
-      // — once text/thinking/tool_use has been emitted, recreating would
-      // orphan the partial output in the message stream.
-      let activeQuery = q;
-      let activeAdapter = adapter;
-      let attempt = 0;
-      try {
-        while (true) {
-          try {
-            for await (const m of activeQuery) {
-              await activeAdapter.dispatch(m);
-            }
-            await activeAdapter.flushFinal();
-            return;
-          } catch (err) {
-            // A user stop (ac.abort()) makes the iterator throw AbortError.
-            // That's not an error — finalize (marks running subagents killed
-            // reflecting the user's stop intent) and exit with interrupted.
-            if (ac.signal.aborted) {
-              await activeAdapter.flushFinal();
-              return;
-            }
-            // Retryable transport error before any content streamed → retry.
-            if (
-              !activeAdapter.hasEmittedContent() &&
-              attempt < CLAUDE_MAX_TRANSPORT_RETRIES &&
-              isRetryableTransportError(err)
-            ) {
-              attempt += 1;
-              const delayMs = Math.min(1000 * 2 ** (attempt - 1), 8000);
-              ctx.log.warn(
-                `claude: transport error, retry ${attempt}/${CLAUDE_MAX_TRANSPORT_RETRIES} in ${delayMs}ms: ${(err as Error).message}`,
-              );
-              // Abortable backoff: a user stop during the sleep must NOT
-              // turn into another retry attempt.
-              try {
-                await abortableSleep(delayMs, ac.signal);
-              } catch {
-                // Aborted during backoff — treat as a user interrupt.
-                await activeAdapter.flushFinal();
-                return;
-              }
-              // Fresh query + adapter for the retry. options.abortController
-              // (ac) is shared, so a user stop still cancels the retried
-              // attempt. options.resume re-attaches to the same SDK session
-              // so the conversation context carries over. The retry gets a
-              // FRESH settle gate (the abandoned attempt's iterable/gate died
-              // with its query).
-              retryGate = makeSettleGate();
-              settleTimers.push(
-                setTimeout(() => retryGate?.release(), PROMPT_SETTLE_FALLBACK_MS),
-              );
-              activeQuery = (await loadQuery())({ prompt: buildPromptInput(req, retryGate, ac.signal), options });
-              liveQuery = activeQuery;
-              activeAdapter = new SdkMessageAdapter(
-                ctx,
-                req.sessionId,
-                this.capabilities.supportsAskUserQuestion,
-                req.cwd,
-                snapshot,
-                ac.signal,
-                activeQuery,
-                req.initialTodos ?? [],
-                configured,
-                !req.apiConfig,
-              );
-              activeAdapter.setSettleGate(retryGate.release);
-              continue;
-            }
-            // Non-retryable, content already started, or retries exhausted.
-            ctx.log.error(`claude SDK error: ${(err as Error).message}`);
-            ctx.emit({
-              type: "error",
-              sessionId: req.sessionId,
-              message: (err as Error).message,
-              code: "SDK_ERROR",
-            });
-            // Finalize through flushFinal (NOT a bare turn.done emit): the
-            // turn may have already written files before the stream broke,
-            // and the user still needs the "本轮修改" card to see (and
-            // rewind) what landed on disk. flushFinal also runs the plan
-            // collapse + subagent cleanup safety nets, and emits the closing
-            // turn.done{reason:"error"} exactly once via its own guard.
-            await activeAdapter.flushFinal("error");
+  /** Background drain for one transport: consumes the CLI's message stream
+   *  until the process exits (feed closed at idle, user abort, crash),
+   *  dispatching to the CURRENT logical turn's adapter. This used to BE the
+   *  turn — turn.done waited for it — which is exactly what pinned sessions
+   *  in "running" forever when a background service kept the process alive.
+   *  Now the turn ends at the adapter's logical end; this loop only shepherds
+   *  the stream and finalizes whatever turn is current when the process dies.
+   *
+   *  Transport-level retry loop: the SDK already retries API-level transient
+   *  errors (429 / overloaded / 5xx) internally — surfaced via `api_retry`
+   *  system messages the adapter logs — and those close the iterator cleanly
+   *  with a `result{subtype:"error"}` (handled by handleResult, not this
+   *  catch). This wrapper catches only the THROWN-exception case the SDK
+   *  doesn't cover: stdio breaks, binary crashes, network timeouts — and
+   *  only retries when NO assistant content has streamed yet (recreating
+   *  later would orphan the partial output). */
+  private async runDrain(
+    req: StartTurnRequest,
+    ctx: ProviderContext,
+    transport: LiveTransport,
+    options: Options,
+    turn: TurnTracker,
+    configured: ClaudeContextWindowTag | undefined,
+    snapshot: FileSnapshot,
+  ): Promise<void> {
+    let activeQuery = transport.query;
+    let attempt = 0;
+    try {
+      while (true) {
+        try {
+          for await (const m of activeQuery) {
+            await transport.adapter.dispatch(m);
+          }
+          // Generator closed — the CLI process is exiting (feed closed at
+          // idle, abort, or crash). Finalize the current turn with the full
+          // flush (kill-nets included: anything still "running" dies with
+          // the process, and that's the honest verdict here).
+          await transport.adapter.flushFinal();
+          return;
+        } catch (err) {
+          // A user stop (ac.abort()) makes the iterator throw AbortError.
+          // That's not an error — finalize (marks running rosters killed,
+          // reflecting the user's stop intent) and exit with interrupted.
+          if (transport.ac.signal.aborted) {
+            await transport.adapter.flushFinal();
             return;
           }
+          // Retryable transport error before any content streamed → retry.
+          if (
+            !transport.adapter.hasEmittedContent() &&
+            attempt < CLAUDE_MAX_TRANSPORT_RETRIES &&
+            isRetryableTransportError(err)
+          ) {
+            attempt += 1;
+            const delayMs = Math.min(1000 * 2 ** (attempt - 1), 8000);
+            ctx.log.warn(
+              `claude: transport error, retry ${attempt}/${CLAUDE_MAX_TRANSPORT_RETRIES} in ${delayMs}ms: ${(err as Error).message}`,
+            );
+            // Abortable backoff: a user stop during the sleep must NOT
+            // turn into another retry attempt.
+            try {
+              await abortableSleep(delayMs, transport.ac.signal);
+            } catch {
+              // Aborted during backoff — treat as a user interrupt.
+              await transport.adapter.flushFinal();
+              return;
+            }
+            // Fresh feed + query + adapter for the retry.
+            // options.abortController (the transport's ac) is shared, so a
+            // user stop still cancels the retried attempt. options.resume
+            // re-attaches to the same SDK session so the conversation context
+            // carries over. The retry re-sends the user message (the
+            // abandoned process never answered) and inherits the roster.
+            transport.feed.close();
+            const retryFeed = makePromptFeed();
+            activeQuery = (await loadQuery())({ prompt: retryFeed.iterable, options });
+            transport.feed = retryFeed;
+            transport.feedClosed = false;
+            transport.query = activeQuery;
+            transport.adapter = this.createTurnAdapter(req, ctx, transport, turn, configured, snapshot, transport.adapter.exportCarryover());
+            retryFeed.push(buildTurnUserMessage(req));
+            continue;
+          }
+          // Non-retryable, content already started, or retries exhausted.
+          ctx.log.error(`claude SDK error: ${(err as Error).message}`);
+          ctx.emit({
+            type: "error",
+            sessionId: req.sessionId,
+            message: (err as Error).message,
+            code: "SDK_ERROR",
+          });
+          // Finalize through flushFinal (NOT a bare turn.done emit): the
+          // turn may have already written files before the stream broke,
+          // and the user still needs the "本轮修改" card to see (and
+          // rewind) what landed on disk. flushFinal also runs the plan
+          // collapse + roster cleanup safety nets, and emits the closing
+          // turn.done{reason:"error"} exactly once via its own guard.
+          await transport.adapter.flushFinal("error");
+          return;
         }
-      } finally {
-        finished = true;
-        // Defensive release: if the CLI process already exited (error path,
-        // clean close) while the prompt iterable was still holding, unblock
-        // the SDK's streamInput so it can finish its own teardown.
-        gate.release();
-        retryGate?.release();
-        for (const t of settleTimers) clearTimeout(t);
       }
-    })();
+    } finally {
+      transport.done = true;
+      // Backstop: never leave a handle pending (the adapter's logical end
+      // normally resolved it already; crash paths land here instead).
+      turn.resolve();
+      if (this.transports.get(req.sessionId) === transport) {
+        this.transports.delete(req.sessionId);
+      }
+      ctx.log.info(`claude transport closed: session=${req.sessionId}`);
+    }
+  }
 
+  /** Follow-up turn on a LIVE transport: push the user message into the
+   *  running CLI's stdin (streaming-input multi-turn — the SDK treats each
+   *  yielded message as the next user turn of the same process) and swap in
+   *  a fresh per-turn adapter. No spawn, no --resume, no second writer on
+   *  the session file. */
+  private startFollowupTurn(
+    req: StartTurnRequest,
+    ctx: ProviderContext,
+    transport: LiveTransport,
+    configured: ClaudeContextWindowTag | undefined,
+  ): TurnHandle {
+    const turn = makeTurnTracker();
+    const snapshot = getFileSnapshot(req.sessionId);
+    transport.adapter = this.createTurnAdapter(
+      req,
+      ctx,
+      transport,
+      turn,
+      configured,
+      snapshot,
+      transport.adapter.exportCarryover(),
+    );
+    transport.turnNumberBox.n = req.turnNumber;
+    transport.feed.push(buildTurnUserMessage(req));
+    ctx.log.info(
+      `claude turn start: session=${req.sessionId} uiMode=${req.permissionMode} transport=follow-up(live CLI)`,
+    );
     return {
-      done,
-      interrupt: () => ac.abort(),
-      isRunning: () => !finished && !ac.signal.aborted,
-      // Per-task stop (SDK `stop_task` control request): kills ONE running
-      // CLI task — a long-running bash command the agent started — without
-      // aborting the turn. The command's tool_result comes back to the model
-      // as a stop, and the turn continues. Only valid while this turn's CLI
-      // process is alive (the settle gate holds stdin open precisely so
-      // backgrounded work outlives the stream). NOTE we deliberately do NOT
-      // declare `perTaskStopAffordance` — without the declaration an
-      // interrupt kills background tasks too (the CLI's fail-closed rule),
-      // which keeps Mcode's stop button meaning "stop everything".
+      done: turn.promise,
+      interrupt: () => transport.ac.abort(),
+      isRunning: () => !turn.isEnded() && !transport.ac.signal.aborted,
       stopTask: async (taskId: string) => {
-        if (finished) {
+        if (transport.done || transport.ac.signal.aborted) {
           throw new Error("回合已结束,无法停止任务(turn already finished)");
         }
-        await liveQuery.stopTask(taskId);
+        await transport.query.stopTask(taskId);
       },
     };
+  }
+
+  /** Tear a live transport down: abort the CLI (graceful — it kills its
+   *  background tasks on the way out, same as a user stop), wait briefly
+   *  for the drain to finish, and unregister. Used when the fingerprint
+   *  changed, the conversation was revised, or the entry is stale. */
+  private async reapTransport(t: LiveTransport, reason: string, log: ProviderContext["log"]): Promise<void> {
+    log.info(`claude transport: reaping live CLI (${reason}) — background tasks stop with the process`);
+    t.ac.abort();
+    await Promise.race([t.drain.catch(() => {}), new Promise((r) => setTimeout(r, 3_000))]);
+    if (this.transports.get(t.sessionId) === t) {
+      this.transports.delete(t.sessionId);
+    }
+  }
+
+  /** Close the prompt feed (adapter's idle signal: turn over, nothing left
+   *  to babysit). The SDK ends stdin; the CLI process exits and the drain's
+   *  flushFinal runs the exit-path safety nets. Idempotent. */
+  private closeTransportFeed(t: LiveTransport, log: ProviderContext["log"]): void {
+    if (t.feedClosed || t.done || t.ac.signal.aborted) return;
+    t.feedClosed = true;
+    log.info("claude transport: feed closed (turn over, process idle) — CLI can exit");
+    t.feed.close();
   }
 
   async healthCheck(): Promise<{ ok: boolean; version?: string; error?: string }> {

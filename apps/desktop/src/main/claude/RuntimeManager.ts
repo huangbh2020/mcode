@@ -700,11 +700,18 @@ class RuntimeManager {
    *  otherwise (e.g. unknown task id, turn just finished). */
   async stopTask(sessionId: string, taskId: string): Promise<boolean> {
     const rt = this.sessions.get(sessionId);
-    if (!rt?.handle?.isRunning()) return false;
-    const stop = rt.handle.stopTask;
+    const stop = rt?.handle?.stopTask;
     if (!stop) return false;
-    await stop.call(rt.handle, taskId);
-    return true;
+    // No isRunning() gate here on purpose: a turn whose background service
+    // keeps the CLI process alive is already "done" (turn.done fired), yet
+    // the 运行命令 panel must still be able to stop that service. The
+    // provider throws when the process is really gone; that maps to false.
+    try {
+      await stop.call(rt.handle, taskId);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   dispose(sessionId: string): void {

@@ -15,7 +15,6 @@ import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { ToolbarGitCommit } from "@renderer/components/layout/ToolbarGitCommit.js";
 import { WorktreeMergeToolbarButton } from "@renderer/components/chat/WorktreeMergeBack.js";
-import { LeftTitlebarPeekZone } from "@renderer/components/layout/LeftPanelPeek.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -32,12 +31,6 @@ interface Props {
   onToggleRight?: () => void;
   /** Fullscreen-overlay modes: returns to the workspace view. */
   onBack?: () => void;
-  /** Opens the left-panel hover-peek drawer. When provided, an invisible
-   *  hotzone is mounted right of the pin button (while the sidebar is
-   *  closed): a top-left landing pad for the peek on multi-monitor setups,
-   *  where the cursor entering from the left often crosses onto the other
-   *  screen before the thin edge strip can catch it. */
-  onPeekLeft?: () => void;
 }
 
 /** Custom toolbar — sits at the top of the right (main) column, behind the
@@ -70,7 +63,6 @@ export function Titlebar({
   onToggleLeft,
   onToggleRight,
   onBack,
-  onPeekLeft,
 }: Props) {
   const { t } = useI18n();
   const isSettings = mode === "settings";
@@ -195,11 +187,6 @@ export function Titlebar({
                       className="shrink-0 scale-x-[-1]"
                     />
                   </button>
-                  {/* Peek hotzone: invisible landing pad right of the pin
-                      button (see LeftTitlebarPeekZone). A flex sibling, so it
-                      never covers the button — hovering opens the drawer,
-                      clicking the button still pins the panel open. */}
-                  {onPeekLeft && <LeftTitlebarPeekZone onActivate={onPeekLeft} />}
                 </>
               )
             )}

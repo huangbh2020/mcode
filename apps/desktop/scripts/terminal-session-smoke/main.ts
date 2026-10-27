@@ -1033,6 +1033,32 @@ console.log("[M] terminal busy detector");
     screenIndicatesActivity(["esc to interrupt"]) === true && !("esc to interrupt".includes("esc interrupt")),
     "claude's 'esc to interrupt' hint and opencode's marker stay distinct strings",
   );
+  // agy (Antigravity CLI): the turn footer reads "esc to cancel" (+ model
+  // name) and swaps to "? for shortcuts" when the turn ends — while the
+  // spinner caption ("⢿  Running command...") renders ~8 rows above the
+  // buffer end (input box + footer + trailing blank rows), OUTSIDE the six
+  // rows the host scans. Slice below is the exact last-six from a real
+  // mid-turn session: the footer alone must hold busy through silent
+  // read/think stretches (they produce no caption output at all).
+  ok(
+    screenIndicatesActivity([
+      "──────────────────────────────────────────────────────────────────────────",
+      ">",
+      "──────────────────────────────────────────────────────────────────────────",
+      "esc to cancelGemini 3.8 Flash · high",
+      "",
+      "",
+    ]) === true,
+    "agy's turn footer 'esc to cancel' sustains busy in the real last-six slice (spinner caption sits above the window)",
+  );
+  ok(
+    screenIndicatesActivity(["Antigravity CLI 1.4.7", "? for shortcutsGemini 3.8 Flash · high", ""]) === false,
+    "agy idle chrome ('? for shortcuts') does not sustain",
+  );
+  ok(
+    !("esc to cancel".includes("esc interrupt") || "esc to cancel".includes("esc to interrupt")),
+    "agy's marker stays distinct from the claude/opencode pill strings",
+  );
 }
 
 /* ── N. terminalCliCatalog: management-side catalog & probe ── */
