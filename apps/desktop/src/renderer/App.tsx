@@ -411,6 +411,10 @@ export function App() {
           onBack={() => (settingsOpen ? setSettingsOpen(false) : setSchedPageOpen(false))}
           onToggleLeft={() => setLeftOpen(!leftOpen)}
           onToggleRight={() => setRightOpen(!rightOpen)}
+          // Titlebar peek hotzone — the zone only renders in the workspace
+          // branch with the sidebar closed (i.e. drawer mode), so no extra
+          // gating needed here.
+          onPeekLeft={openLeftPeek}
         />
         {/* Main panel row — bg-surface-muted as the contrasting track so the
             center pane's rounded left-edge corners (in ThreePaneLayout)
