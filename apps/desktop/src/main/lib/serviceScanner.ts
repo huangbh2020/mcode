@@ -51,6 +51,9 @@ import { killProcessTree } from "@main/lib/procTree.js";
 import { log } from "@main/lib/logger.js";
 
 const TICK_MS = 5_000;
+/** When idle (no running session turns, no bash windows), liveness checks
+ *  use netstat only and back off to 15s to save CPU / battery. */
+const IDLE_LIVENESS_TICK_MS = 15_000;
 /** Truncation for the command line carried on the snapshot (display-only). */
 const CMDLINE_MAX = 200;
 
@@ -282,6 +285,9 @@ class ServiceScanner {
    *  (a fast-binding service can beat the baseline's netstat roundtrip). */
   private scanHistory: Array<{ at: number; keys: Set<string> }> = [];
 
+  /** Last liveness check timestamp to rate-limit idle checks to IDLE_LIVENESS_TICK_MS. */
+  private lastLivenessAt = 0;
+
   start(): void {
     if (this.timer || this.disposed) return;
     this.timer = setInterval(() => void this.tick(), TICK_MS);
@@ -304,6 +310,33 @@ class ServiceScanner {
   private tick(): void {
     if (this.scanning || this.disposed) return;
     if (!this.shouldScan()) return;
+
+    // Fast-path: when no session is actively executing a turn, no bash command
+    // window is open, and no unadopted claims exist, NO NEW SERVICES CAN POSSIBLY
+    // APPEAR. Running a full process scan (which spawns powershell.exe on Windows)
+    // is entirely wasted CPU. We perform a lightweight netstat-only liveness check
+    // on known tracked services with idle backoff (IDLE_LIVENESS_TICK_MS).
+    const isIdleLivenessOnly =
+      runtimeManager.runningSessionIds().length === 0 &&
+      this.bashWindows.size === 0 &&
+      this.claimed.size === 0;
+
+    const now = Date.now();
+    if (isIdleLivenessOnly) {
+      if (now - this.lastLivenessAt < IDLE_LIVENESS_TICK_MS) return;
+      this.lastLivenessAt = now;
+      this.scanning = true;
+      this.checkLivenessOnly()
+        .catch((err) => {
+          log.warn(`service scanner: liveness check failed: ${err instanceof Error ? err.message : String(err)}`);
+        })
+        .finally(() => {
+          this.scanning = false;
+        });
+      return;
+    }
+
+    this.lastLivenessAt = now;
     this.scanning = true;
     this.scanOnce()
       .catch((err) => {
@@ -314,6 +347,50 @@ class ServiceScanner {
       });
   }
 
+  /** Lightweight liveness check for tracked services: runs netstat/ss only,
+   *  completely skipping the expensive listProcesses() / PowerShell calls. */
+  private async checkLivenessOnly(): Promise<void> {
+    if (this.tracked.size === 0) return;
+    const listening = await listListening();
+    const listenKeys = new Set<string>();
+    for (const l of listening) listenKeys.add(socketKey(l.pid, l.port));
+
+    let changed = false;
+    const next = new Map<string, TrackedService>();
+    for (const [key, svc] of this.tracked) {
+      if (listenKeys.has(key)) {
+        next.set(key, svc);
+      } else {
+        changed = true;
+        log.info(`service scanner: tracked service stopped listening: ${key} (${svc.name})`);
+      }
+    }
+    if (changed || next.size !== this.tracked.size) {
+      this.tracked = next;
+    }
+    this.emitRoster();
+  }
+
+  /** Emit per-session rosters to renderer. Unchanged non-empty lists are re-sent
+   *  periodically; an empty list is sent once, on the transition. */
+  private emitRoster(): void {
+    const bySession = new Map<string, ServiceSnapshot[]>();
+    for (const s of this.tracked.values()) {
+      const list = bySession.get(s.sessionId);
+      if (list) list.push(s);
+      else bySession.set(s.sessionId, [s]);
+    }
+    const sessions = new Set<string>([...bySession.keys(), ...this.lastSigBySession.keys()]);
+    for (const sid of sessions) {
+      const list = bySession.get(sid) ?? [];
+      const sig = list.map((s) => s.key).join(",");
+      const prev = this.lastSigBySession.get(sid);
+      if (sig === prev && sig === "") continue; // was empty, still empty
+      if (sig !== prev) this.lastSigBySession.set(sid, sig);
+      emitServices(sid, list);
+    }
+  }
+
   /** Scan only while something relevant can exist: a CLI process is alive
    *  (turn running or background-task hold), or a tracked service still
    *  needs liveness checks. Otherwise the tick is a no-op. */
@@ -321,6 +398,8 @@ class ServiceScanner {
     return (
       this.liveCliPids.size > 0 ||
       this.tracked.size > 0 ||
+      this.claimed.size > 0 ||
+      this.bashWindows.size > 0 ||
       runtimeManager.runningSessionIds().length > 0
     );
   }
@@ -434,24 +513,8 @@ class ServiceScanner {
     this.scanHistory.push({ at: now, keys: listenKeys });
     if (this.scanHistory.length > 13) this.scanHistory.shift();
 
-    // 5. Emit per-session rosters. Unchanged non-empty lists are re-sent
-    //    every pass (cheap, and it self-heals a renderer that reloaded its
-    //    buckets); an empty list is sent once, on the transition.
-    const bySession = new Map<string, ServiceSnapshot[]>();
-    for (const s of this.tracked.values()) {
-      const list = bySession.get(s.sessionId);
-      if (list) list.push(s);
-      else bySession.set(s.sessionId, [s]);
-    }
-    const sessions = new Set<string>([...bySession.keys(), ...this.lastSigBySession.keys()]);
-    for (const sid of sessions) {
-      const list = bySession.get(sid) ?? [];
-      const sig = list.map((s) => s.key).join(",");
-      const prev = this.lastSigBySession.get(sid);
-      if (sig === prev && sig === "") continue; // was empty, still empty
-      if (sig !== prev) this.lastSigBySession.set(sid, sig);
-      emitServices(sid, list);
-    }
+    // 5. Emit per-session rosters.
+    this.emitRoster();
   }
 
   /** Kill the process tree owning a tracked service. Guards on the sticky

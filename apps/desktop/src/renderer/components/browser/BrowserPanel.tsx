@@ -202,16 +202,17 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  overlay is active while `browserPanelOpen`; the sidebar is active while
    *  mounted AND the overlay is NOT open (overlay takes precedence so the two
    *  containers never fight over the same view). BOTH deactivate while the
-   *  settings overlay is open: the browser's WebContentsView is an OS-level
-   *  surface that floats ABOVE the renderer DOM, so no CSS z-index can stack
-   *  the settings page on top of it — the only way to keep the settings panel
-   *  clickable is to hide the view (hide() parks it offscreen, the session
-   *  survives and re-shows on return). */
+   *  settings overlay OR the read-only sched overlay is open: the browser's
+   *  WebContentsView is an OS-level surface that floats ABOVE the renderer
+   *  DOM, so no CSS z-index can stack those full-bleed pages on top of it —
+   *  the only way to keep them clickable is to hide the view (hide() parks it
+   *  offscreen, the session survives and re-shows on return). */
   const settingsOpen = useSessionStore((s) => s.settingsOpen);
+  const schedPageOpen = useSessionStore((s) => s.schedPageOpen);
   const rightOpen = useSessionStore((s) => s.rightOpen);
   const rightPanelTab = useSessionStore((s) => s.rightPanelTab);
   const isSidebarVisible = !open && rightOpen && rightPanelTab === "browser";
-  const isActive = settingsOpen ? false : mode === "overlay" ? open : isSidebarVisible;
+  const isActive = settingsOpen || schedPageOpen ? false : mode === "overlay" ? open : isSidebarVisible;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
@@ -402,6 +403,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       }
     }
     void api.browser.hide({ browserId: tab.browserId });
+    void api.browser.setSuppressed({ suppressed: true });
   }, []);
 
   /** Reverse of freezeViewForMenu: bring the live view back FIRST (the native
@@ -412,6 +414,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  (fast close→reopen). */
   const unfreezeViewForMenu = useCallback(() => {
     lastBoundsRef.current = null;
+    void api.browser.setSuppressed({ suppressed: false });
     showActiveView();
     const seq = ++freezeSeqRef.current;
     window.setTimeout(() => {
@@ -574,8 +577,12 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   useEffect(() => {
     if (!isActive) {
       // Container deactivating: hide the active tab's view + drop the stage
-      // rect (no active browser surface for the occlusion decision).
+      // rect (no active browser surface for the occlusion decision). Clear
+      // the suppression flag too — a stale `true` would keep agent clicks on
+      // their offscreen fallbacks even after the user left the browser tab
+      // (where force-showing is the wanted behavior).
       setBrowserStageRect(null);
+      void api.browser.setSuppressed({ suppressed: false });
       const tab = activeTabIdRef.current
         ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
         : null;
@@ -593,6 +600,21 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     showActiveView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, showActiveView]);
+
+  // Agent-opened views are adopted straight into the store by App.tsx's global
+  // agentOpened handler (adoptAgentBrowserTab) — they never pass through
+  // createTab / adoptWindowOpenTab, whose showActiveView calls are the only
+  // thing that surfaces a view. When this container is ALREADY active (the
+  // browser tab is open), no isActive flip fires, so the freshly created view
+  // stays parked offscreen and the stage reads blank until the user manually
+  // switches tabs away and back. Re-show on every active-tab change: redundant
+  // for the internal paths (show() is idempotent in main), load-bearing for
+  // agent adoptions and background-tab reuse.
+  useEffect(() => {
+    if (!isActive) return;
+    if (!tabsRef.current.some((t) => t.id === activeTabId)) return;
+    showActiveView();
+  }, [activeTabId, isActive, showActiveView]);
 
   // React to the suppression counter: while > 0, a renderer-DOM overlay may
   // need to cover the OS-level WebContentsView (which always floats above the
@@ -620,6 +642,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       // Steady idle state — nothing to reconcile (bounds sync owns visibility).
       // Only the release transition (last popup closed) re-shows the view.
       if (prev > 0) {
+        void api.browser.setSuppressed({ suppressed: false });
         lastBoundsRef.current = null;
         showActiveView();
       }
@@ -627,9 +650,13 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     }
     if (shouldSuppressBrowserView()) {
       void api.browser.hide({ browserId: tab.browserId });
+      // Tell main the overlay owns the screen — agent clicks/screenshots then
+      // use their offscreen fallbacks instead of force-showing over the popup.
+      void api.browser.setSuppressed({ suppressed: true });
     } else {
       // Popups are open but none reaches the browser's rect — keep the view
       // up (this also re-shows after an overlapping popup moved away).
+      void api.browser.setSuppressed({ suppressed: false });
       lastBoundsRef.current = null;
       showActiveView();
     }
@@ -647,6 +674,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   useEffect(() => {
     return () => {
       setBrowserStageRect(null);
+      void api.browser.setSuppressed({ suppressed: false });
       const tab = activeTabIdRef.current
         ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
         : null;

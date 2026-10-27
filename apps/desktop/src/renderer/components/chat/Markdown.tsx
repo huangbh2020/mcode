@@ -79,6 +79,10 @@ const LANG_ALIAS: Record<string, string> = {
   containerfile: "dockerfile",
 };
 
+/** Module-level static remark/rehype plugin lists to avoid re-instantiating the unified pipeline on every render. */
+const DEFAULT_REMARK_PLUGINS = [remarkGfm, remarkMath];
+const DEFAULT_REHYPE_PLUGINS = [rehypeKatex];
+
 /** Resolve a markdown code-fence language tag to a Shiki language id.
  *  Falls back to "text" when the language is unknown, effectively disabling
  *  highlighting for that block. */
@@ -830,6 +834,8 @@ function buildComponents(): Components {
   };
 }
 
+const STATIC_MARKDOWN_COMPONENTS: Components = buildComponents();
+
 export const Markdown = memo(function Markdown({
   children,
   projectPath,
@@ -881,21 +887,20 @@ export const Markdown = memo(function Markdown({
     for (const f of inlineFiles) titleByMarker.set(`@${f.name}`, f.filePath);
     return { re, titleByMarker };
   }, [inlineFiles]);
-  const components = useMemo(() => buildComponents(), []);
   // rehype-katex is always active; the skill-inline and file-mention plugins
   // are added only when there is something to highlight. Recreated when the
   // underlying regex/map changes, so react-markdown re-parses. The path
   // plugin needs a project root to resolve against — contexts without one
   // (GitHub panel, unopened views) keep plain text.
-  const rehypePlugins = useMemo(
-    () => [
+  const rehypePlugins = useMemo(() => {
+    if (!skillRe && !fileMention && !projectPath) return DEFAULT_REHYPE_PLUGINS;
+    return [
       rehypeKatex,
       ...(skillRe ? [rehypeSkillInline(skillRe)] : []),
       ...(fileMention ? [rehypeFileInline(fileMention.re, fileMention.titleByMarker)] : []),
       ...(projectPath ? [rehypePathInline()] : []),
-    ],
-    [skillRe, fileMention, projectPath],
-  );
+    ];
+  }, [skillRe, fileMention, projectPath]);
   // Block margins + line-height here are density-driven (--chat-md-gap-* /
   // --chat-md-leading, see the chat-density section in styles.css) so the
   // 对话紧凑度 setting shapes the reply body itself, not just the gaps
@@ -915,10 +920,10 @@ export const Markdown = memo(function Markdown({
       <MarkdownProjectContext.Provider value={projectPath ?? null}>
         <MarkdownBaseDirContext.Provider value={baseDir ?? null}>
           <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath]}
+            remarkPlugins={DEFAULT_REMARK_PLUGINS}
             rehypePlugins={rehypePlugins}
             urlTransform={urlTransform}
-            components={components}
+            components={STATIC_MARKDOWN_COMPONENTS}
           >
             {children}
           </ReactMarkdown>

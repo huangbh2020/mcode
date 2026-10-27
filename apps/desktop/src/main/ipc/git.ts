@@ -71,6 +71,7 @@ import { resolveProtocol } from "@contracts/customModel";
 import type { ApiConfig } from "@contracts/customModel";
 import { broadcastGitChanged } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
+import { stripCommitAttributionTrailers } from "@main/lib/commitTrailers.js";
 
 // Lazy-load simple-git so the CJS module stays out of the main-process startup
 // path. Git operations only happen when the user opens the git panel - well
@@ -446,6 +447,10 @@ export async function generateCommitMessageForRepo(input: {
       }
       // Clean up: strip markdown code fences if the model wrapped the message.
       message = message.trim().replace(/^```\w*\n?/, "").replace(/\n?```$/, "").trim();
+      // Strip attribution trailers (prompt rule 6 forbids them; this is the
+      // deterministic backstop — the model's signing habit survives prompt
+      // replacement). See lib/commitTrailers.ts.
+      message = stripCommitAttributionTrailers(message);
       log.info(`git.generateCommitMessage succeeded for ${input.repoPath} (${message.length} chars)`);
       return { ok: true, message };
     } finally {
@@ -718,7 +723,35 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
         // upstream" — the create-PR flow needs the branch on the remote first.
         await git.push(["--set-upstream", "origin", input.branch]);
       } else {
-        await git.push();
+        try {
+          await git.push();
+        } catch (pushErr) {
+          const errMsg = (pushErr as Error).message || "";
+          // If plain push fails because the current branch has no upstream branch (e.g. initial commit),
+          // automatically detect the remote and retry with --set-upstream.
+          if (
+            errMsg.includes("has no upstream branch") ||
+            errMsg.includes("no upstream") ||
+            errMsg.includes("set-upstream")
+          ) {
+            const remotes = await git.getRemotes();
+            if (remotes.length > 0) {
+              const remoteName = remotes.find((r) => r.name === "origin")?.name || remotes[0].name;
+              const currentBranch =
+                input.branch || (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
+              if (currentBranch && currentBranch !== "HEAD") {
+                log.info(`git.push: no upstream, retrying with --set-upstream ${remoteName} ${currentBranch}`);
+                await git.push(["--set-upstream", remoteName, currentBranch]);
+              } else {
+                throw pushErr;
+              }
+            } else {
+              throw pushErr;
+            }
+          } else {
+            throw pushErr;
+          }
+        }
       }
       log.info(`git.push succeeded in ${input.repoPath}`);
       broadcastGitChanged(input.repoPath);
@@ -1173,6 +1206,7 @@ const COMMIT_GEN_SYSTEM_PROMPT = [
   "3. 完全基于 diff 的实际内容生成;diff 中没有的改动不得臆造或补充。",
   "4. 第一行是简短摘要(不超过 50 字符,祈使语气);若改动较复杂,空一行后再写详细说明正文。",
   "5. 下方的「格式与语言偏好」仅影响提交信息的语言、措辞风格与规范格式(如 Conventional Commits、是否加 emoji 等),不得改变上述输出约束,也不得改变基于 diff 生成内容这一核心行为。",
+  "6. 不得添加任何署名、尾注或归属信息——「Co-Authored-By: …」「Generated with …」「🤖 …」等一律禁止;提交信息只描述本次改动本身。",
 ].join("\n");
 
 /**

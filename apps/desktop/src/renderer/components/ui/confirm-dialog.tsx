@@ -30,6 +30,12 @@ export interface ConfirmDialogProps {
   cancelText?: string;
   /** Render the confirm button with the destructive (danger) variant. */
   danger?: boolean;
+  /** Optional third action rendered between cancel and confirm (e.g. the
+   *  "don't save" escape hatch of a close-unsaved-file dialog). */
+  altText?: string;
+  /** Render the alt button with the destructive (danger) variant. */
+  altDanger?: boolean;
+  onAlt?: () => void;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 }
@@ -41,6 +47,9 @@ export function ConfirmDialog({
   confirmText,
   cancelText,
   danger = false,
+  altText,
+  altDanger = false,
+  onAlt,
   onOpenChange,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -73,6 +82,18 @@ export function ConfirmDialog({
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
               {cancelLabel}
             </Button>
+            {altText && onAlt && (
+              <Button
+                variant={altDanger ? "danger" : "secondary"}
+                size="sm"
+                onClick={() => {
+                  onAlt();
+                  onOpenChange(false);
+                }}
+              >
+                {altText}
+              </Button>
+            )}
             <Button
               variant={danger ? "danger" : "primary"}
               size="sm"

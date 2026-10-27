@@ -148,6 +148,12 @@ export interface ApprovalRequest {
   toolName: string;
   input: unknown;
   description?: string;
+  /** For browser-navigation domain approvals: the host the agent wants to
+   *  visit (e.g. "example.com"). When present, the approval card renders
+   *  domain-scoped "always allow" wording, and an always-grant records the
+   *  DOMAIN (not the tool name) into the trusted-domain store — see
+   *  main/browser/domainGate.ts. */
+  domain?: string;
 }
 
 /** The host's answer to an approval request. */

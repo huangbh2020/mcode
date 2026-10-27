@@ -125,6 +125,41 @@ export const en = {
   "settings.toolApproval.hint":
     "Safety boundaries are unaffected: out-of-project writes, out-of-project reads, and out-of-project bash write targets are still denied; plan mode still approves every write.",
 
+  // ── Trusted domains (per-domain approval for agent browser navigation) ──
+  "settings.trustedDomains.title": "Trusted domains",
+  "settings.trustedDomains.desc":
+    "Domains the agent's browser tools may visit without a first-visit approval prompt; localhost and local files are always allowed.",
+  "settings.trustedDomains.rowTitle": "Trusted domains",
+  "settings.trustedDomains.rowDesc":
+    "Trusting a parent domain covers its subdomains (github.com also allows api.github.com). Choosing an always-trust scope on an approval card writes here too.",
+  "settings.trustedDomains.loading": "Loading…",
+  "settings.trustedDomains.empty": "No trusted domains yet",
+  "settings.trustedDomains.placeholder": "Enter a domain, e.g. example.com",
+  "settings.trustedDomains.add": "Add",
+  "settings.trustedDomains.removeTitle": "Remove this domain",
+  "settings.trustedDomains.removeAria": "Remove trusted domain {domain}",
+  "settings.trustedDomains.invalid": "Invalid domain format — expected something like example.com.",
+  "settings.trustedDomains.hint":
+    "This list only gates agent-initiated navigation; your own browsing in the browser panel never consults it.",
+  // ── Real Chrome (mcode-connector extension relay) ──
+  "settings.chromeRelay.title": "Real Chrome",
+  "settings.chromeRelay.desc":
+    "Connect the agent's browser tools to this machine's Chrome via the mcode-connector extension — your real logged-in profile (read-only: navigate/snapshot/screenshot).",
+  "settings.chromeRelay.enableTitle": "Enable real-Chrome access",
+  "settings.chromeRelay.enableDesc":
+    "Starts the loopback relay service; pair it with the mcode-connector Chrome extension.",
+  "settings.chromeRelay.statusTitle": "Connection",
+  "settings.chromeRelay.howTo":
+    "In Chrome open chrome://extensions, enable Developer mode, Load unpacked, pick the mcode-connector folder from the app's install; enter the server address and pairing token below in the extension popup.",
+  "settings.chromeRelay.connected": "Connected (Chrome {version})",
+  "settings.chromeRelay.listening": "Relay listening, waiting for the extension…",
+  "settings.chromeRelay.starting": "Starting…",
+  "settings.chromeRelay.urlPending": "ws://127.0.0.1:…",
+  "settings.chromeRelay.resetToken": "Reset pairing token",
+  "settings.chromeRelay.tokenHint":
+    "The pairing token is hidden by default (stored encrypted). Resetting generates and shows a new token and disconnects the current extension.",
+
+
   // ── shared across settings panels ──
   "settings.on": "On",
   "settings.off": "Off",

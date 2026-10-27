@@ -37,6 +37,7 @@ import { Combobox } from "@base-ui/react/combobox";
 import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import {
   collectCommands,
   commandMatches,
@@ -132,6 +133,12 @@ export function CommandPalette() {
   const { t } = useI18n();
   const open = useSessionStore((s) => s.commandPaletteOpen);
   const setOpen = useSessionStore((s) => s.setCommandPaletteOpen);
+  // The palette is a full modal with its own backdrop, but its popup element
+  // renders role="dialog" — the global portal watcher classifies that role as
+  // trigger-anchored (geometry-aware, popover semantics). Suppress fully
+  // here: a modal's contract is that nothing underneath stays clickable, and
+  // the OS-level browser view would otherwise float above the backdrop.
+  useSuppressBrowserView(open);
   // Subscribe to overrides so <kbd> hints update live when the user rebinds.
   const overrides = useSessionStore((s) => s.shortcutOverrides);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);

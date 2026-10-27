@@ -30,6 +30,8 @@ import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { TabBarChevronButton, TabBarOverflowMenu } from "../layout/TabBarChrome.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
+import { ConfirmDialog } from "@renderer/components/ui/index.js";
+import { useToastStore } from "@renderer/stores/toastStore.js";
 
 /** Stable empty array so the selector never returns a fresh [] (Zustand
  *  Object.is rule — a new [] every render causes an infinite loop). */
@@ -66,8 +68,10 @@ const MENU_ITEM_CLASS =
  *     scrollbar is hidden (`no-scrollbar`); edge fades hint at more content.
  *   - A `⋯` menu on the right lists every tab for quick jumping when the
  *     strip overflows.
- *   - Middle-click on a tab closes it (except unsaved files — same rule as
- *     the × button, which is hidden while dirty).
+ *   - Middle-click on a tab closes it (browser tab-bar convention). Closing
+ *     a file with unsaved edits — via ×, middle-click, or the context menu —
+ *     opens a save/discard/cancel confirm instead of proceeding (see
+ *     `useIdeCloseGuard`).
  *
  * Dirty state (unsaved edits) is tracked inside FileEditor and surfaced here
  * via a per-file dirty map kept in a module-level store subscription. To keep
@@ -88,13 +92,13 @@ export function OpenTabsBar({ trailing }: { trailing?: React.ReactNode } = {}) {
     pid ? s.ideActiveFileByProject[pid] ?? null : null,
   );
   const setActive = useSessionStore((s) => s.setIdeActiveFile);
-  const close = useSessionStore((s) => s.closeFileInIde);
-  const closeOthers = useSessionStore((s) => s.closeOtherFilesInIde);
-  const closeAll = useSessionStore((s) => s.closeAllFilesInIde);
   const reorderFile = useSessionStore((s) => s.reorderIdeFile);
   const clearIdeActiveFile = useSessionStore((s) => s.clearIdeActiveFile);
   const enqueueChatFile = useSessionStore((s) => s.enqueueChatFile);
   const dirtySet = useDirtyFiles();
+  // Every close entry (×, middle-click, context menu) funnels through the
+  // guard so dirty files get the save/discard confirm instead of closing raw.
+  const closeGuard = useIdeCloseGuard();
   // Multi-row wrapping (toggled from the ⋯ overflow menu) vs the classic
   // single horizontally-scrolling row.
   const multiRow = useSessionStore((s) => s.tabBarMultiRow);
@@ -314,7 +318,7 @@ export function OpenTabsBar({ trailing }: { trailing?: React.ReactNode } = {}) {
                       setPlanTabActive(activeSessionId, false);
                     }
                   }}
-                  onClose={() => close(path)}
+                  onClose={() => closeGuard.requestClose({ kind: "one", path })}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setCtxMenu({ path, x: e.clientX, y: e.clientY });
@@ -446,13 +450,16 @@ export function OpenTabsBar({ trailing }: { trailing?: React.ReactNode } = {}) {
         ctxMenu={ctxMenu}
         onClose={() => setCtxMenu(null)}
         actions={{
-          close: (p) => close(p),
-          closeOthers: (p) => closeOthers(p),
-          closeAll: () => closeAll(),
+          close: (p) => closeGuard.requestClose({ kind: "one", path: p }),
+          closeOthers: (p) => closeGuard.requestClose({ kind: "others", keep: p }),
+          closeAll: () => closeGuard.requestClose({ kind: "all" }),
           activate: (p) => setActive(p),
           addToChat: (p) => enqueueChatFile(p),
         }}
       />
+
+      {/* Unsaved-changes confirm for close requests that touch dirty files. */}
+      {closeGuard.dialog}
     </div>
   );
 }
@@ -515,16 +522,16 @@ export function SortableFileTab({
     [onClose],
   );
 
-  // Middle-click closes (browser tab-bar convention) — except unsaved files,
-  // mirroring the × button which is hidden while dirty.
+  // Middle-click closes (browser tab-bar convention). Dirty files go through
+  // the same confirm as the × button — onClose is the parent's guarded close.
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (e.button === 1 && !dirty) {
+      if (e.button === 1) {
         e.preventDefault();
         onClose();
       }
     },
-    [dirty, onClose],
+    [onClose],
   );
 
   return (
@@ -558,16 +565,30 @@ export function SortableFileTab({
           space is tight. The tab's own max-w governs the overall cap. */}
       <FileTypeIcon path={path} size={13} className="shrink-0 text-content-subtle" />
       <span className="min-w-0 flex-1 truncate font-mono">{basename(path)}</span>
-      {/* Dirty dot (unsaved) OR close button. The close button occupies
-          layout space ONLY when visible: always on the active tab, on hover
-          otherwise — on inactive tabs it's removed from the flow (`hidden`)
-          so the flex-1 name fills the whole chip. Same rule as before: an
-          unsaved file can't be closed from the bar (would lose edits). */}
+      {/* Dirty (unsaved) marker OR close button — same layout slot. The
+          marker is the "edited" icon: it holds the slot on both active and
+          inactive tabs; hovering the tab swaps it for the × (VS Code-style).
+          Closing a dirty file goes through the parent's save/discard confirm
+          (useIdeCloseGuard), so the button can stay reachable. On clean tabs
+          the × occupies the slot only when visible: always on the active tab,
+          on hover otherwise (`hidden` keeps the flex-1 name filling the chip). */}
       {dirty ? (
-        <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-pulse"
-          title={t("ide.editor.unsaved")}
-        />
+        <span className="relative ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center">
+          <span
+            className="absolute h-1.5 w-1.5 rounded-full bg-accent animate-pulse group-hover:hidden"
+            title={t("ide.editor.unsaved")}
+          />
+          <button
+            type="button"
+            aria-label={t("ide.editor.closeTabAria")}
+            onClick={handleClose}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="absolute inset-0 hidden items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/10 dark:hover:bg-white/15 hover:text-content group-hover:flex"
+            title={t("common.close")}
+          >
+            <IconX size={10} />
+          </button>
+        </span>
       ) : (
         <button
           type="button"
@@ -719,4 +740,113 @@ export function useDirtyFiles(): Set<string> {
     () => dirtyFiles,
     () => dirtyFiles,
   );
+}
+
+/* ───────────────────── unsaved-changes close guard ─────────────────────
+ *
+ * Every tab-bar close entry funnels through this guard. A close that touches
+ * dirty (unsaved) files opens a three-way confirm (save & close / discard /
+ * cancel) instead of proceeding raw — the old behavior refused to close dirty
+ * files at all (× hidden, middle-click blocked), which stranded unsaved work
+ * behind a full save first. */
+
+/** A close request: one path, every file except `keep`, or all files. */
+export type IdeCloseTarget =
+  | { kind: "one"; path: string }
+  | { kind: "others"; keep: string }
+  | { kind: "all" };
+
+export function useIdeCloseGuard() {
+  const { t } = useI18n();
+  const [pending, setPending] = useState<IdeCloseTarget | null>(null);
+
+  const resolvePaths = useCallback((target: IdeCloseTarget): string[] => {
+    const s = useSessionStore.getState();
+    const pid = s.activeProjectId;
+    const open = (pid ? s.ideOpenFilesByProject[pid] : null) ?? [];
+    if (target.kind === "one") return [target.path];
+    if (target.kind === "others") return open.filter((p) => p !== target.keep);
+    return [...open];
+  }, []);
+
+  const runClose = useCallback((target: IdeCloseTarget) => {
+    const s = useSessionStore.getState();
+    if (target.kind === "one") s.closeFileInIde(target.path);
+    else if (target.kind === "others") s.closeOtherFilesInIde(target.keep);
+    else s.closeAllFilesInIde();
+  }, []);
+
+  const requestClose = useCallback(
+    (target: IdeCloseTarget) => {
+      const dirty = resolvePaths(target).filter((p) => ideDirtyTracker.has(p));
+      if (dirty.length === 0) {
+        runClose(target);
+        return;
+      }
+      setPending(target);
+    },
+    [resolvePaths, runClose],
+  );
+
+  // Save & close: persist every dirty file from its cached Monaco model (the
+  // same content the editor would Ctrl+S), then close. Any failure aborts the
+  // whole close — files stay open and dirty, a toast explains why.
+  const saveAndClose = useCallback(async () => {
+    const target = pending;
+    if (!target) return;
+    const dirty = resolvePaths(target).filter((p) => ideDirtyTracker.has(p));
+    const saved = await useSessionStore.getState().saveIdeFilesFromModels(dirty);
+    if (saved.length < dirty.length) {
+      useToastStore.getState().push({
+        kind: "error",
+        title: t("ide.editor.saveFailed"),
+        body: t("ide.editor.closeSaveFailedBody"),
+      });
+      return;
+    }
+    dirty.forEach((p) => ideDirtyTracker.set(p, false));
+    runClose(target);
+    setPending(null);
+  }, [pending, resolvePaths, runClose, t]);
+
+  // Discard & close: drop the in-memory edits (the close actions dispose the
+  // models) and clear the dirty flags — background tabs get no editor unmount
+  // event, so without this the dot would ghost onto a reopened tab.
+  const discardAndClose = useCallback(() => {
+    const target = pending;
+    if (!target) return;
+    resolvePaths(target).forEach((p) => ideDirtyTracker.set(p, false));
+    runClose(target);
+    setPending(null);
+  }, [pending, resolvePaths, runClose]);
+
+  const dialog = pending ? (
+    <ConfirmDialog
+      open
+      title={t("ide.editor.closeDirtyTitle")}
+      description={
+        pending.kind === "one"
+          ? t("ide.editor.closeDirtyDescOne", { name: basename(pending.path) })
+          : t("ide.editor.closeDirtyDescMany", {
+              n: resolvePaths(pending).filter((p) => ideDirtyTracker.has(p)).length,
+            })
+      }
+      confirmText={
+        pending.kind === "one"
+          ? t("ide.editor.saveAndClose")
+          : t("ide.editor.saveAllAndClose")
+      }
+      altText={t("ide.editor.discardAndClose")}
+      altDanger
+      onAlt={discardAndClose}
+      onOpenChange={(open) => {
+        if (!open) setPending(null);
+      }}
+      onConfirm={() => {
+        void saveAndClose();
+      }}
+    />
+  ) : null;
+
+  return { requestClose, dialog };
 }

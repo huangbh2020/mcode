@@ -22,6 +22,7 @@
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { cn } from "@renderer/lib/cn.js";
 import { IconX } from "@renderer/lib/icons.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 
 /* ───────── Root ───────── */
 
@@ -72,6 +73,14 @@ export interface DialogPopupProps
   extends React.ComponentPropsWithoutRef<typeof BaseDialog.Popup> {}
 
 function DialogPopup({ className, ...props }: DialogPopupProps) {
+  // Dialogs here are modal: the Popup only mounts while open (the Portal
+  // unmounts it on close), so `true` tracks its lifetime exactly. Suppressed
+  // with NO ref = full-window: the modal's backdrop blocks the whole window,
+  // and the OS-level browser view would otherwise float above it. This is
+  // also what the global portal watcher can't infer by itself — base-ui
+  // renders role="dialog" on popover/combobox popups too, so the watcher
+  // treats that role as geometry-aware and true modals must opt in here.
+  useSuppressBrowserView(true);
   return (
     <BaseDialog.Popup
       className={cn(

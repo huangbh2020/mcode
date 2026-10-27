@@ -508,6 +508,10 @@ const claude: Api["claude"] = {
   // still participates in GLOBAL grants through approve's alwaysScope above.
   listGlobalAllowedTools: () => webUnsupported("claude.listGlobalAllowedTools"),
   saveGlobalAllowedTools: () => webUnsupported("claude.saveGlobalAllowedTools"),
+  // Trusted-domain editor is desktop-only (settings panel); the phone still
+  // participates in domain grants through approve's grantDomain.
+  listTrustedBrowserDomains: () => webUnsupported("claude.listTrustedBrowserDomains"),
+  saveTrustedBrowserDomains: () => webUnsupported("claude.saveTrustedBrowserDomains"),
   respondQuestion: (input) => rpc("claude:respondQuestion", input),
   respondPlanApproval: (input) => rpc("claude:respondPlanApproval", input),
   rewindTurn: (input) => rpc("claude:rewindTurn", input),

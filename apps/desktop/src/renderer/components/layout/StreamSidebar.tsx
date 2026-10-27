@@ -189,7 +189,9 @@ function StreamSidebarBase() {
   const renameProject = useSessionStore((s) => s.renameProject);
   const setProjectColor = useSessionStore((s) => s.setProjectColor);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
-  const setLeftOpen = useSessionStore((s) => s.setLeftOpen);
+  // Collapse affordance shared with LeftBar: while the hover-peek drawer is
+  // showing (leftOpen is already false there) "collapse" dismisses the peek.
+  const collapseLeftPanel = useSessionStore((s) => s.collapseLeftPanel);
 
   // ── Data lifecycle. The aggregate refetches whenever the dirty flag is
   // set while this view is mounted (send / remote change / pin / archive…).
@@ -571,7 +573,7 @@ function StreamSidebarBase() {
         >
           <button
             type="button"
-            onClick={() => setLeftOpen(false)}
+            onClick={() => collapseLeftPanel()}
             className={cn(
               "flex h-7 w-7 items-center justify-center rounded text-content-muted transition-colors",
               "hover:bg-surface-hover hover:text-content",
@@ -588,7 +590,7 @@ function StreamSidebarBase() {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setLeftOpen(false)}
+              onClick={() => collapseLeftPanel()}
               className={cn(
                 "group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
                 "hover:bg-surface-hover/60",
@@ -846,7 +848,7 @@ function StreamSidebarBase() {
         </button>
         {!isMac && (
           <button
-            onClick={() => setLeftOpen(false)}
+            onClick={() => collapseLeftPanel()}
             className={cn(
               "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
               "hover:bg-surface-hover hover:text-content",

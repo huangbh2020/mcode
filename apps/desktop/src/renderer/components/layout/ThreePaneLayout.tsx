@@ -104,7 +104,7 @@ export function ThreePaneLayout({
          behind the arc. Non-scrolling overflow-hidden is xterm-safe (see the
          note on the right sidebar).
          Stacks the center content above an optional bottom terminal bar. */}
-      <main className="relative z-10 flex min-w-[800px] shrink-0 flex-1 flex-col overflow-hidden rounded-tl-2xl rounded-bl-2xl border-t border-edge-panel bg-surface">
+      <main className="relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden rounded-tl-2xl rounded-bl-2xl border-t border-edge-panel bg-surface">
 
         <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
         {/* Bottom terminal bar — keep-alive: always rendered, height collapses

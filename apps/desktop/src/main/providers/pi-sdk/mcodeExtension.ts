@@ -93,7 +93,9 @@ import {
   browserToolsUsagePrompt,
   BROWSER_TOOL_SPECS,
   type ToolResult,
+  browserScript,
 } from "@main/browser/agentBrowserTools.js";
+import { gateBrowserNavigation } from "@main/browser/domainGate.js";
 
 /** Pi's write/edit tools carry their target path in the `path` field (unlike
  *  Claude's `file_path`). Both schemas are `{ path, ... }`. */
@@ -420,6 +422,26 @@ function registerToolCallGuard(
       return;
     }
 
+    // ③.6 Browser-navigation domain gate. browser_navigate is approved per
+    //     DOMAIN, not per call (see domainGate.ts): localhost/trusted hosts
+    //     return early here (auto-approved, replacing the per-call prompt at
+    //     ⑥ — no double prompt), a new host raises a domain-kind approval
+    //     card whose always-grant records the DOMAIN, and a denial blocks
+    //     with a reason the model can act on.
+    if (toolName === "browser_navigate") {
+      const url = (event.input as { url?: unknown } | null | undefined)?.url;
+      const requestApproval = ctx.requestApproval;
+      if (typeof url === "string" && url.length > 0 && requestApproval) {
+        const gate = await gateBrowserNavigation(url, {
+          sessionId,
+          mode: ctx.getPermissionMode?.(),
+          requestApproval,
+        });
+        if (gate.allowed) return;
+        return { block: true, reason: gate.reason ?? "Denied by user" };
+      }
+    }
+
     // ④ Plan-mode: write tools allowed but require approval.
     //    Unlike Claude's plan mode (strictly read-only), Pi's plan mode lets the
     //    model write files / run commands to verify hypotheses during planning —
@@ -570,6 +592,7 @@ function registerBrowserTools(
     promptSnippet: BROWSER_TOOL_SPECS.browser_navigate.promptSnippet,
     parameters: Type.Object({
       url: Type.String({ description: "目标 URL,http(s):// 网页或 file:/// 本地文件" }),
+      backend: Type.Optional(Type.String({ description: '"chrome"=在用户真实 Chrome 中打开(需连接 mcode-connector 扩展;仅允许已信任域名/localhost)' })),
       browserId: Type.Optional(
         Type.String({ description: "目标浏览器视图 id;省略则自动复用当前目标视图或新建" }),
       ),
@@ -592,7 +615,7 @@ function registerBrowserTools(
         device?: "desktop" | "iphone" | "android";
         newTab?: boolean;
       };
-      return toPiResult(await browserNavigate({ url, browserId, device, newTab }, projectPath));
+      return toPiResult(await browserNavigate({ url, browserId, device, newTab, backend: (params as { backend?: string }).backend === "chrome" ? "chrome" : undefined }, projectPath, { sessionId }));
     },
   });
 
@@ -603,10 +626,11 @@ function registerBrowserTools(
     promptSnippet: BROWSER_TOOL_SPECS.browser_snapshot.promptSnippet,
     parameters: Type.Object({
       browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用当前目标视图" })),
+      backend: Type.Optional(Type.String({ description: '"chrome"=读取用户真实 Chrome 的当前标签页' })),
     }),
     async execute(_toolCallId, params) {
       const { browserId } = params as { browserId?: string };
-      return toPiResult(await browserSnapshot({ browserId }));
+      return toPiResult(await browserSnapshot({ browserId, backend: (params as { backend?: string }).backend === "chrome" ? "chrome" : undefined }));
     },
   });
 
@@ -901,6 +925,51 @@ function registerBrowserTools(
   });
 
   pi.registerTool({
+    name: "browser_script",
+    label: "Browser Script",
+    description: BROWSER_TOOL_SPECS.browser_script.description,
+    promptSnippet: BROWSER_TOOL_SPECS.browser_script.promptSnippet,
+    parameters: Type.Object({
+      steps: Type.Array(
+        Type.Object(
+          { op: Type.String({ description: "操作类型:navigate/click/type/keys/scroll/select/wait/find/evaluate/snapshot" }) },
+          { additionalProperties: true, description: "顺序执行的操作数组,其余字段与同名工具的参数一致" },
+        ),
+        { minItems: 1, maxItems: 40, description: "顺序执行的操作数组(一步失败即中止)" },
+      ),
+      browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用当前目标视图" })),
+      finalScreenshot: Type.Optional(Type.Boolean({ description: "true=末尾追加整页截图" })),
+    }),
+    async execute(toolCallId, params) {
+      const { steps, browserId, finalScreenshot } = params as {
+        steps: unknown[];
+        browserId?: string;
+        finalScreenshot?: boolean;
+      };
+      return toPiResult(
+        await browserScript(
+          { steps: steps ?? [], browserId, finalScreenshot: finalScreenshot === true },
+          projectPath,
+          {
+            toolCallId,
+            sessionId,
+            turnNumber,
+            onImage: (info) => {
+              ctx.emit({
+                type: "browser.image",
+                sessionId,
+                toolCallId: info.toolCallId,
+                data: info.data,
+                mimeType: info.mimeType,
+              });
+            },
+          },
+        ),
+      );
+    },
+  });
+
+  pi.registerTool({
     name: "browser_evaluate",
     label: "Browser Evaluate",
     description: BROWSER_TOOL_SPECS.browser_evaluate.description,
@@ -923,10 +992,11 @@ function registerBrowserTools(
     parameters: Type.Object({
       browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用当前目标视图" })),
       fullPage: Type.Optional(Type.Boolean({ description: "true=截整页(含滚动外内容)" })),
+      backend: Type.Optional(Type.String({ description: '"chrome"=截用户真实 Chrome 的当前标签页' })),
     }),
     async execute(toolCallId, params) {
       const { browserId, fullPage } = params as { browserId?: string; fullPage?: boolean };
-      const r = await browserScreenshot({ browserId, fullPage }, {
+      const r = await browserScreenshot({ browserId, fullPage, backend: (params as { backend?: string }).backend === "chrome" ? "chrome" : undefined }, {
         toolCallId,
         sessionId,
         turnNumber,

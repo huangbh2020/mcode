@@ -1153,6 +1153,12 @@ export const ApproveSchema = z.object({
    * session (this one included, across restarts) auto-allows the tool —
    * except in plan mode, where nothing is auto-allowed. */
   alwaysScope: z.enum(["session", "global"]).optional(),
+  /* For browser-navigation DOMAIN approvals: the host being granted. When
+   * present (together with granted+always), the always-grant records the
+   * DOMAIN into the trusted-domain store instead of the tool name into the
+   * tool allowlists — approving github.com once must not blanket-approve
+   * every other site. */
+  grantDomain: z.string().min(1).max(253).optional(),
 });
 export type ApproveInput = z.infer<typeof ApproveSchema>;
 
@@ -1164,6 +1170,22 @@ export type ApproveInput = z.infer<typeof ApproveSchema>;
  * boundaries still run first: out-of-project writes / bash write targets /
  * isolated-mode out-of-project reads are denied regardless of this list. */
 export const GLOBAL_ALLOWED_TOOLS_SETTING_KEY = "approval.globalAllowedTools";
+
+/* Setting key for the browser-navigation trusted-domain list
+ * (`browser.trustedDomains`, JSON string[]). Domains listed here are
+ * navigable by the agent's browser tools without a per-site approval prompt;
+ * localhost/file origins are always allowed and never need an entry. Managed
+ * by main/browser/domainGate.ts (same lazy-load/persist pattern as
+ * ApprovalBridge's global allowlist). */
+export const BROWSER_TRUSTED_DOMAINS_SETTING_KEY = "browser.trustedDomains";
+
+/* Replace the persisted trusted-domain list (whole-list semantics — the
+ * settings editor「浏览器 → 受信任域名」is the single writer; approval-card
+ * "global" grants add one entry on top). */
+export const SaveTrustedBrowserDomainsSchema = z.object({
+  domains: z.array(z.string().min(1).max(253)).max(256),
+});
+export type SaveTrustedBrowserDomainsInput = z.infer<typeof SaveTrustedBrowserDomainsSchema>;
 
 /* Replace the persisted global always-allow tool list (whole-list semantics —
  * the settings editor is the single writer; approval-card "global" grants
@@ -1647,63 +1669,32 @@ export interface VoiceModelInfo {
   /** Subdirectory under the voice model dir that this model's files live in. */
   dir: string;
   files: { rel: string; url: string }[];
+  /** Model architecture. Defaults to "transducer" (Zipformer) when omitted. */
+  architecture?: "transducer" | "sense-voice";
 }
 
 /**
  * The set of models the app can download. All are free / open (Apache-2.0)
- * and run fully on-device. Streaming Zipformer models give live interim
- * results (the "文字边听边出" UX). Hosted on HuggingFace under `csukuangfj`;
+ * and run fully on-device. Hosted on HuggingFace under `csukuangfj`;
  * per-file URLs may move — keep them in sync with the sherpa-onnx model zoo.
  * @see https://k2-fsa.github.io/sherpa/onnx/
  */
 export const VOICE_MODEL_CATALOG: VoiceModelInfo[] = [
   {
-    id: "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23",
-    name: "Streaming Zipformer 中文",
-    langLabel: "中文 (zh-CN)",
-    sizeLabel: "~67 MB",
-    dir: "streaming-zipformer-zh",
+    id: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+    name: "SenseVoice 中文高精度",
+    langLabel: "中/英/粤/日/韩 (高精度+标点+数字规范)",
+    sizeLabel: "~228 MB",
+    dir: "sense-voice-zh-en-ja-ko-yue",
+    architecture: "sense-voice",
     files: [
       {
         rel: "tokens.txt",
-        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/tokens.txt",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt",
       },
       {
-        rel: "encoder-epoch-99-avg-1.int8.onnx",
-        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/encoder-epoch-99-avg-1.int8.onnx",
-      },
-      {
-        rel: "decoder-epoch-99-avg-1.int8.onnx",
-        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/decoder-epoch-99-avg-1.int8.onnx",
-      },
-      {
-        rel: "joiner-epoch-99-avg-1.int8.onnx",
-        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/joiner-epoch-99-avg-1.int8.onnx",
-      },
-    ],
-  },
-  {
-    id: "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
-    name: "Streaming Zipformer 中英",
-    langLabel: "中英双语 (zh + en)",
-    sizeLabel: "~81 MB",
-    dir: "streaming-zipformer-zh-en",
-    files: [
-      {
-        rel: "tokens.txt",
-        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/tokens.txt",
-      },
-      {
-        rel: "encoder-epoch-99-avg-1.int8.onnx",
-        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/encoder-epoch-99-avg-1.int8.onnx",
-      },
-      {
-        rel: "decoder-epoch-99-avg-1.int8.onnx",
-        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/decoder-epoch-99-avg-1.int8.onnx",
-      },
-      {
-        rel: "joiner-epoch-99-avg-1.int8.onnx",
-        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/joiner-epoch-99-avg-1.int8.onnx",
+        rel: "model.int8.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx",
       },
     ],
   },
@@ -3897,8 +3888,26 @@ export interface BrowserEventMessage {
     | "agentOpened"
     | "tabOpened"
     | "authRequest"
-    | "download";
+    | "download"
+    | "chromeRelay";
   payload: unknown;
+}
+
+/** Payload of the "chromeRelay" push event: lifecycle/connection state of the
+ *  real-Chrome relay (see main/browser/chromeRelay.ts). Pushed on every
+ *  change — server up/down, extension connect/disconnect — so the settings
+ *  page and any future status chip stay live. */
+export interface ChromeRelayStatusPayload {
+  /** Feature switch state (browser.chromeBackend setting). */
+  enabled: boolean;
+  /** True while the loopback WS server is listening. */
+  listening: boolean;
+  /** Port the server listens on (null while stopped). */
+  port: number | null;
+  /** True while a paired extension is connected. */
+  connected: boolean;
+  /** Chrome version the extension reported (null until connected). */
+  chromeVersion: string | null;
 }
 
 /** Payload of the "download" browser push event. Emitted when a download
@@ -4229,6 +4238,14 @@ export const BROWSER_COOKIE_VAULT_SETTING_KEY = "browser.cookieVault";
  *  supports encryption (DPAPI on Windows, Keychain on macOS, kwallet/gnome-
  *  keyring on Linux — with automatic plaintext fallback where it doesn't). */
 export const BROWSER_COOKIE_VAULT_ENC_SETTING_KEY = "browser.cookieVault.enc";
+
+/* ── Real-Chrome relay (WS relay to the mcode-connector extension) ── */
+/** Feature switch ("1" on / "0" off, default off). */
+export const BROWSER_CHROME_BACKEND_SETTING_KEY = "browser.chromeBackend";
+/** Pairing token, safeStorage-encrypted base64 (plaintext fallback key below
+ *  mirrors the cookie-vault pattern for OSes without a credential store). */
+export const BROWSER_CHROME_RELAY_TOKEN_ENC_SETTING_KEY = "browser.chromeRelayToken.enc";
+export const BROWSER_CHROME_RELAY_TOKEN_SETTING_KEY = "browser.chromeRelayToken";
 
 /** Setting key for the address-bar history (JSON array of
  *  `BrowserHistoryEntry`, most-recent first, capped at 50). Written only by
@@ -4598,6 +4615,16 @@ export const BrowserHideSchema = z.object({
 });
 export type BrowserHideInput = z.infer<typeof BrowserHideSchema>;
 
+/** Renderer-driven suppression flag: true while the renderer has parked the
+ *  browser view because an overlay (popup/dialog/freeze-frame) owns the
+ *  screen. Main-side agent paths (real-input click, capturePage screenshot)
+ *  would otherwise force the view back onscreen and fight the open overlay —
+ *  while suppressed they use their offscreen-capable fallbacks instead. */
+export const BrowserSetSuppressedSchema = z.object({
+  suppressed: z.boolean(),
+});
+export type BrowserSetSuppressedInput = z.infer<typeof BrowserSetSuppressedSchema>;
+
 export const BrowserCloseSchema = z.object({
   browserId: z.string().min(1),
 });
@@ -4894,6 +4921,11 @@ export const RevokeMobileDeviceSchema = z.object({ deviceId: z.string().min(1) }
 
 /** A typed map of all renderer→main RPC invocations. The preload exposes a
  * typed `window.api` matching this shape; the renderer imports it for safety. */
+export const BrowserChromeRelaySetEnabledSchema = z.object({
+  enabled: z.boolean(),
+});
+export type BrowserChromeRelaySetEnabledInput = z.infer<typeof BrowserChromeRelaySetEnabledSchema>;
+
 export interface RpcMap {
   // Claude
   "claude.startSession": (input: StartSessionInput) => Promise<{ session: Session }>;
@@ -4915,6 +4947,11 @@ export interface RpcMap {
   "claude.listGlobalAllowedTools": () => Promise<{ tools: string[] }>;
   /** Replace the persisted global always-allow tool list (whole-list). */
   "claude.saveGlobalAllowedTools": (input: SaveGlobalAllowedToolsInput) => Promise<void>;
+  /** Read the persisted browser trusted-domain list (sorted). See
+   *  main/browser/domainGate.ts. */
+  "claude.listTrustedBrowserDomains": () => Promise<{ domains: string[] }>;
+  /** Replace the persisted browser trusted-domain list (whole-list). */
+  "claude.saveTrustedBrowserDomains": (input: SaveTrustedBrowserDomainsInput) => Promise<void>;
   /** Submit the user's answers to a pending AskUserQuestion. */
   "claude.respondQuestion": (input: RespondQuestionInput) => Promise<void>;
   /** Submit the user's approve/reject decision on a pending ExitPlanMode plan. */
@@ -5265,6 +5302,10 @@ export interface RpcMap {
   "browser.show": (input: BrowserShowInput) => Promise<BrowserOpResult>;
   /** Hide the view (move offscreen without destroying the session). */
   "browser.hide": (input: BrowserHideInput) => Promise<BrowserOpResult>;
+  /** Tell main whether the renderer parked the view for an open overlay —
+   *  agent paths consult this to prefer offscreen-capable fallbacks over
+   *  force-showing the view over the user's dialog. */
+  "browser.setSuppressed": (input: BrowserSetSuppressedInput) => Promise<BrowserOpResult>;
   /** Destroy the view and drop it from the manager. */
   "browser.close": (input: BrowserCloseInput) => Promise<BrowserOpResult>;
   /** Capture one frame of the current page (visibility untouched) for the
@@ -5295,6 +5336,17 @@ export interface RpcMap {
    *  folder ("reveal"). The path is resolved main-side from the download
    *  registry — see BrowserDownloadActionSchema. */
   "browser.downloadAction": (input: BrowserDownloadActionInput) => Promise<BrowserOpResult>;
+  /** Live relay status for the settings page (also pushed as the
+   *  "chromeRelay" browser event on every change). */
+  "browser.chromeRelayStatus": () => Promise<ChromeRelayStatusPayload>;
+  /** Enable/disable the relay (also flips the browser.chromeBackend setting —
+   *  the dedicated RPC owns the server lifecycle, plain setting writes only
+   *  seed the next app start). */
+  "browser.chromeRelaySetEnabled": (input: { enabled: boolean }) => Promise<ChromeRelayStatusPayload>;
+  /** Regenerate the pairing token (disconnects the current extension). The
+   *  new token is returned ONCE for display — afterwards it is only stored
+   *  encrypted. */
+  "browser.chromeRelayResetToken": () => Promise<{ token: string }>;
   /** App version + runtime info for the About panel. */
   "app.info": () => Promise<AppInfoResult>;
   /** Check for updates on the GitHub Releases channel. Returns the current
@@ -5596,6 +5648,9 @@ export const IPC = {
   CLAUDE_APPROVE: "claude:approve",
   CLAUDE_LIST_GLOBAL_ALLOWED_TOOLS: "claude:listGlobalAllowedTools",
   CLAUDE_SAVE_GLOBAL_ALLOWED_TOOLS: "claude:saveGlobalAllowedTools",
+  // Browser trusted-domain list (settings editor「浏览器 → 受信任域名」)
+  CLAUDE_LIST_TRUSTED_BROWSER_DOMAINS: "claude:listTrustedBrowserDomains",
+  CLAUDE_SAVE_TRUSTED_BROWSER_DOMAINS: "claude:saveTrustedBrowserDomains",
   CLAUDE_RESPOND_QUESTION: "claude:respondQuestion",
   CLAUDE_RESPOND_PLAN_APPROVAL: "claude:respondPlanApproval",
   CLAUDE_REWIND_TURN: "claude:rewindTurn",
@@ -5785,6 +5840,7 @@ export const IPC = {
   BROWSER_SET_PICK_MODE: "browser:setPickMode",
   BROWSER_SHOW: "browser:show",
   BROWSER_HIDE: "browser:hide",
+  BROWSER_SET_SUPPRESSED: "browser:setSuppressed",
   BROWSER_CLOSE: "browser:close",
   BROWSER_CAPTURE_FRAME: "browser:captureFrame",
   BROWSER_BOOKMARK_ADD: "browser:bookmarkAdd",
@@ -5800,6 +5856,10 @@ export const IPC = {
   BROWSER_AUTH_RESPOND: "browser:authRespond",
   // Download bar (embedded browser): open file / reveal in folder
   BROWSER_DOWNLOAD_ACTION: "browser:downloadAction",
+  // Real-Chrome relay (mcode-connector extension over loopback WebSocket)
+  BROWSER_CHROME_RELAY_STATUS: "browser:chromeRelayStatus",
+  BROWSER_CHROME_RELAY_SET_ENABLED: "browser:chromeRelaySetEnabled",
+  BROWSER_CHROME_RELAY_RESET_TOKEN: "browser:chromeRelayResetToken",
   // App / runtime info (About panel)
   APP_INFO: "app:info",
   // Auto-update (electron-updater)

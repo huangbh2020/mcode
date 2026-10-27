@@ -53,6 +53,7 @@ export function ApprovalPrompt({
   toolName,
   input,
   description,
+  domain,
   queuePosition,
   queueTotal,
   onDecide,
@@ -60,6 +61,11 @@ export function ApprovalPrompt({
   toolName: string;
   input: unknown;
   description?: string;
+  /** Present on browser-navigation domain approvals: the host the agent
+   *  wants to visit. Switches the card to domain wording (localized
+   *  description composed here, since main stays dictionary-free) and the
+   *  scope select to trust-domain labels. */
+  domain?: string;
   /** 1-based index of this card in the queue. */
   queuePosition: number;
   /** Total cards in the queue; 1 means "no queue" (chip stays quiet). */
@@ -161,7 +167,13 @@ export function ApprovalPrompt({
             <span className="line-clamp-2 break-all text-content-muted">{summary}</span>
           )}
         </div>
-        {description && <div className="mt-1 text-[11px] text-content-muted">{description}</div>}
+        {domain ? (
+          <div className="mt-1 text-[11px] text-content-muted">
+            {t("chat.approval.domainDesc", { domain })}
+          </div>
+        ) : (
+          description && <div className="mt-1 text-[11px] text-content-muted">{description}</div>
+        )}
       </div>
 
       {/* Expandable input */}
@@ -190,8 +202,16 @@ export function ApprovalPrompt({
             )}
           >
             <option value="once">{t("chat.approval.scopeOnce")}</option>
-            <option value="session">{t("chat.approval.scopeSession")}</option>
-            <option value="global">{t("chat.approval.scopeGlobal")}</option>
+            <option value="session">
+              {domain
+                ? t("chat.approval.scopeSessionDomain", { domain })
+                : t("chat.approval.scopeSession")}
+            </option>
+            <option value="global">
+              {domain
+                ? t("chat.approval.scopeGlobalDomain", { domain })
+                : t("chat.approval.scopeGlobal")}
+            </option>
           </select>
         </label>
         <div className="flex items-center gap-1.5">

@@ -18,6 +18,7 @@ import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
 import { initAutomationScheduler, disposeAutomationScheduler } from "@main/automation/AutomationScheduler.js";
 import { initServiceScanner, disposeServiceScanner } from "@main/lib/serviceScanner.js";
 import { initPiSessionImport } from "@main/lib/piSessionImport.js";
+import { initChromeRelayFromSettings } from "@main/browser/chromeRelay.js";
 import { registerAppResourceScheme, initAppResourceProtocol } from "@main/lib/appResourceProtocol.js";
 import { is } from "@main/utils.js";
 import { preloadClaudeSdk } from "@main/providers/claude-sdk/ClaudeAgentSdkProvider.js";
@@ -128,6 +129,9 @@ app.whenReady().then(async () => {
     if (SettingRepo.get("browser.credentials")) {
       SettingRepo.set("browser.credentials", "{}");
     }
+    // Real-Chrome relay: seed the enabled flag from the persisted setting and
+    // bring the loopback WS server up when on (needs the DB for the token).
+    initChromeRelayFromSettings();
   });
 
   // CSP only in production - in dev, Vite injects inline HMR scripts that a

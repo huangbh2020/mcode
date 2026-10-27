@@ -498,7 +498,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
       prependLog({ op: "commit", status: "success" });
       setCommitMsg("");
       if (mode === "push") {
-        const pushRes = await api.git.push({ repoPath: repo.path });
+        const pushRes = await api.git.push({ repoPath: repo.path, branch: status?.branch ?? undefined });
         if (!pushRes.ok) {
           setError(pushRes.error ?? t("ide.git.pushFailed"));
           prependLog({ op: "push", status: "failure", message: pushRes.error });
@@ -512,7 +512,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
           prependLog({ op: "sync", status: "failure", message: pullRes.error });
           return; // don't push if pull failed
         }
-        const pushRes = await api.git.push({ repoPath: repo.path });
+        const pushRes = await api.git.push({ repoPath: repo.path, branch: status?.branch ?? undefined });
         if (!pushRes.ok) {
           setError(pushRes.error ?? t("ide.git.pushFailed"));
           prependLog({ op: "push", status: "failure", message: pushRes.error });
@@ -534,7 +534,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     setBusy("push");
     setError(null);
     try {
-      const res = await api.git.push({ repoPath: repo.path });
+      const res = await api.git.push({ repoPath: repo.path, branch: status?.branch ?? undefined });
       if (!res.ok) {
         setError(res.error ?? t("ide.git.pushFailed"));
         prependLog({ op: "push", status: "failure", message: res.error });
@@ -1115,6 +1115,21 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
   );
 }
 
+const GIT_LAST_COMMIT_MODE_KEY = "mcode.git.lastCommitMode";
+type CommitMode = "commit" | "push" | "sync";
+
+function getInitialCommitMode(): CommitMode {
+  try {
+    const saved = localStorage.getItem(GIT_LAST_COMMIT_MODE_KEY);
+    if (saved === "commit" || saved === "push" || saved === "sync") {
+      return saved;
+    }
+  } catch {
+    /* ignore localStorage error */
+  }
+  return "commit";
+}
+
 function CommitBox({
   repoPath,
   value,
@@ -1133,6 +1148,7 @@ function CommitBox({
   const { t } = useI18n();
   const commitGenModel = useSessionStore((s) => s.commitGenModel);
   const commitGenPrompt = useSessionStore((s) => s.commitGenPrompt);
+  const [commitMode, setCommitMode] = useState<CommitMode>(getInitialCommitMode);
   const [generating, setGenerating] = useState(false);
   // Set when the user stops an in-flight generation: the aborted call's
   // result/error must NOT overwrite the commit message box.
@@ -1143,6 +1159,16 @@ function CommitBox({
   // Maximize/preview panel - opened when the commit message overflows the
   // 3-row cap, so the user can edit the full text comfortably.
   const [previewOpen, setPreviewOpen] = useState(false);
+
+  const handleSelectModeAndCommit = (mode: CommitMode) => {
+    setCommitMode(mode);
+    try {
+      localStorage.setItem(GIT_LAST_COMMIT_MODE_KEY, mode);
+    } catch {
+      /* ignore */
+    }
+    onCommit(mode);
+  };
 
   // ── Auto-grow textarea: 1 row by default, up to MAX_ROWS, then cap and
   //    surface a "maximize" affordance. Measured from scrollHeight so soft-
@@ -1218,7 +1244,7 @@ function CommitBox({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && value.trim() && !disabled) {
       e.preventDefault();
-      onCommit("commit");
+      onCommit(commitMode);
     }
   };
 
@@ -1274,19 +1300,30 @@ function CommitBox({
         </div>
       </div>
 
-      {/* Commit split button - main "提交" fills the row, with the dropdown
+      {/* Commit split button - main action fills the row, with the dropdown
           trigger spliced on the right (shared rounded corners). Main action
-          stays a raw button so the two pieces visually fuse; the Menu
-          interaction is unchanged. */}
+          defaults to user's last selected mode ("commit" | "push" | "sync"). */}
       <div className="flex overflow-hidden rounded-md">
         <button
           type="button"
-          onClick={() => onCommit("commit")}
+          onClick={() => onCommit(commitMode)}
           disabled={!value.trim() || disabled}
           className="flex flex-1 items-center justify-center gap-1 bg-accent px-2 py-1 [font-size:var(--right-panel-font-size)] text-surface transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-content-subtle"
         >
-          {busy ? <IconLoader2 size={11} className="animate-spin" /> : <IconGitCommit size={11} />}
-          {t("ide.git.commit")}
+          {busy ? (
+            <IconLoader2 size={11} className="animate-spin" />
+          ) : commitMode === "push" ? (
+            <IconArrowUp size={11} />
+          ) : commitMode === "sync" ? (
+            <IconRefresh size={11} />
+          ) : (
+            <IconGitCommit size={11} />
+          )}
+          {commitMode === "push"
+            ? t("ide.git.commitAndPush")
+            : commitMode === "sync"
+              ? t("ide.git.commitAndSync")
+              : t("ide.git.commit")}
         </button>
         <Menu.Root>
           <Menu.Trigger
@@ -1306,22 +1343,43 @@ function CommitBox({
                   )}
                 >
                   <Menu.Item
-                    onClick={() => onCommit("commit")}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
+                    onClick={() => handleSelectModeAndCommit("commit")}
+                    className={cn(
+                      "flex w-full items-center justify-between px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] outline-none select-none data-[highlighted]:bg-surface-muted",
+                      commitMode === "commit" ? "text-accent font-medium" : "text-content-muted",
+                    )}
                   >
-                    {t("ide.git.commit")}
+                    <span className="flex items-center gap-2">
+                      <IconGitCommit size={12} />
+                      {t("ide.git.commit")}
+                    </span>
+                    {commitMode === "commit" && <IconCheck size={12} className="shrink-0" />}
                   </Menu.Item>
                   <Menu.Item
-                    onClick={() => onCommit("push")}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
+                    onClick={() => handleSelectModeAndCommit("push")}
+                    className={cn(
+                      "flex w-full items-center justify-between px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] outline-none select-none data-[highlighted]:bg-surface-muted",
+                      commitMode === "push" ? "text-accent font-medium" : "text-content-muted",
+                    )}
                   >
-                    {t("ide.git.commitAndPush")}
+                    <span className="flex items-center gap-2">
+                      <IconArrowUp size={12} />
+                      {t("ide.git.commitAndPush")}
+                    </span>
+                    {commitMode === "push" && <IconCheck size={12} className="shrink-0" />}
                   </Menu.Item>
                   <Menu.Item
-                    onClick={() => onCommit("sync")}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
+                    onClick={() => handleSelectModeAndCommit("sync")}
+                    className={cn(
+                      "flex w-full items-center justify-between px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] outline-none select-none data-[highlighted]:bg-surface-muted",
+                      commitMode === "sync" ? "text-accent font-medium" : "text-content-muted",
+                    )}
                   >
-                    {t("ide.git.commitAndSync")}
+                    <span className="flex items-center gap-2">
+                      <IconRefresh size={12} />
+                      {t("ide.git.commitAndSync")}
+                    </span>
+                    {commitMode === "sync" && <IconCheck size={12} className="shrink-0" />}
                   </Menu.Item>
                 </Menu.Popup>
               </Menu.Positioner>
@@ -1358,11 +1416,21 @@ function CommitBox({
                 disabled={!value.trim() || disabled}
                 onClick={() => {
                   setPreviewOpen(false);
-                  onCommit("commit");
+                  onCommit(commitMode);
                 }}
               >
-                <IconGitCommit size={12} />
-                {t("ide.git.commit")}
+                {commitMode === "push" ? (
+                  <IconArrowUp size={12} />
+                ) : commitMode === "sync" ? (
+                  <IconRefresh size={12} />
+                ) : (
+                  <IconGitCommit size={12} />
+                )}
+                {commitMode === "push"
+                  ? t("ide.git.commitAndPush")
+                  : commitMode === "sync"
+                    ? t("ide.git.commitAndSync")
+                    : t("ide.git.commit")}
               </Button>
             </div>
             <Dialog.Close />

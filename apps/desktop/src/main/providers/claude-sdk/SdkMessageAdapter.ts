@@ -1650,19 +1650,25 @@ export class SdkMessageAdapter {
           }
         } else if (b.name === "TaskCreate") {
           // TaskCreate's input field name varies by model: MiniMax-M3 uses
-          // { subject, description, activeForm }, but other models may use a
-          // different primary field. Accept any of them (first non-empty
-          // wins) so the task actually enters the list - otherwise a later
-          // TaskUpdate(taskId=N) has nothing to index into and the activity
-          // capsule never reflects the status change.
+          // { subject, description, activeForm }, Claude uses { subject, description },
+          // other models may use title or content. Accept any of them
+          // so the task actually enters the list and can be updated by subsequent TaskUpdate.
           const inp = (b.input ?? {}) as Record<string, unknown>;
           const subject =
             readStr(inp.subject) ||
+            readStr(inp.title) ||
+            readStr(inp.content) ||
             readStr(inp.description) ||
-            readStr(inp.activeForm) ||
-            readStr(inp.content);
+            readStr(inp.activeForm);
           if (subject) {
-            this.state.tasks.push({ content: subject, status: "pending", priority: "medium" });
+            const rawStatus = readStr(inp.status);
+            const status: TodoUpdateEvent["todos"][number]["status"] =
+              rawStatus === "completed"
+                ? "completed"
+                : rawStatus === "in_progress"
+                  ? "in_progress"
+                  : "pending";
+            this.state.tasks.push({ content: subject, status, priority: "medium" });
             this.ctx.emit({
               type: "todo.update",
               sessionId: this.sessionId,
@@ -1670,16 +1676,22 @@ export class SdkMessageAdapter {
             });
           }
         } else if (b.name === "TaskUpdate") {
-          const taskId = Number((b.input as Record<string, unknown> | undefined)?.taskId);
-          const status = readStr((b.input as Record<string, unknown> | undefined)?.status);
+          const inp = (b.input ?? {}) as Record<string, unknown>;
+          const rawId = inp.taskId ?? inp.id;
+          let taskId = typeof rawId === "number" ? rawId : NaN;
+          if (Number.isNaN(taskId) && typeof rawId === "string") {
+            const match = rawId.match(/\d+/);
+            if (match) taskId = Number(match[0]);
+          }
+          const statusStr = readStr(inp.status);
+          const newSubject =
+            readStr(inp.subject) ||
+            readStr(inp.title) ||
+            readStr(inp.content) ||
+            readStr(inp.description);
+
           if (Number.isInteger(taskId) && taskId >= 1) {
-            const norm = status === "completed" ? "completed" : status === "in_progress" ? "in_progress" : "pending";
             // Pad with placeholder items if taskId exceeds the current list.
-            // This happens when TaskCreate used a field name we don't read
-            // (see the TaskCreate branch below), or when the seeded list
-            // doesn't cover this id. Better to surface a completed
-            // placeholder than to silently drop the update and leave the
-            // activity capsule stuck on a stale status.
             while (this.state.tasks.length < taskId) {
               this.state.tasks.push({
                 content: `Task #${this.state.tasks.length + 1}`,
@@ -1687,7 +1699,21 @@ export class SdkMessageAdapter {
                 priority: "medium",
               });
             }
-            this.state.tasks[taskId - 1] = { ...this.state.tasks[taskId - 1], status: norm };
+            const prev = this.state.tasks[taskId - 1];
+            const normStatus: TodoUpdateEvent["todos"][number]["status"] =
+              statusStr === "completed"
+                ? "completed"
+                : statusStr === "in_progress"
+                  ? "in_progress"
+                  : statusStr === "pending"
+                    ? "pending"
+                    : prev.status;
+
+            this.state.tasks[taskId - 1] = {
+              ...prev,
+              content: newSubject || prev.content,
+              status: normStatus,
+            };
             this.ctx.emit({
               type: "todo.update",
               sessionId: this.sessionId,
@@ -1828,6 +1854,8 @@ export class SdkMessageAdapter {
         // them here (isBackgrounded may still be false if the
         // backgrounding patch raced past us; the level reconcile corrects
         // a mis-marked entry on its next payload).
+        // 工具已完成并返回结果，重置前置叙述消息锚点，防止后续新周期的独立工具倒挂
+        this.state.lastNarrationMessageId = null;
         this.settleBashTaskByToolResult(b.tool_use_id, !!b.is_error);
         this.ctx.emit({
           type: "tool.result",

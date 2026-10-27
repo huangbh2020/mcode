@@ -54,13 +54,14 @@ import {
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
 import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
-import type { MediaBlock } from "./mediaGallery.js";
+import { MediaLightbox, type MediaBlock, type MediaItem } from "./mediaGallery.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { turnTokenUsage, CUMULATIVE_USAGE_PROVIDER_IDS } from "@renderer/lib/turnTokens.js";
 import type { TurnUsageRecord } from "@contracts/runtime";
 import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
 import { MicButton } from "./MicButton.js";
+import { onVoiceActiveChange, voiceHandleFor } from "@renderer/lib/voiceController.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
 import { WorktreeModeChip } from "./WorktreeModeChip.js";
 import { SessionDirectoryChip } from "./SessionDirectoryChip.js";
@@ -807,6 +808,10 @@ function groupMessagesForRender(
               openOps.leading = curBlocks;
               curMsg = null;
               curBlocks = [];
+            } else if (curMsg) {
+              // 前置的展示消息来自不同 message，必须先于当前 opsGroup 发射，
+              // 保证时序（先到达的普通文字在上方，后续的工具执行在下方）。
+              flushMsg();
             }
           } else if (curMsg) {
             // A display message was buffered when this run opened without
@@ -889,15 +894,13 @@ function groupMessagesForRender(
     // process/reply boundary. Everything at or before it is "process" —
     // including any text the model wove between tool calls ("let me read
     // this first", "tests passed, now…"). Thinking blocks deliberately do
-    // NOT anchor the boundary: with interleaved thinking the model can emit
-    // text → think → more text as ONE final answer, and anchoring on the
-    // thinking block would fold the earlier segment into the panel, leaving
-    // only the last segment as the visible reply. Thinking (and meta tools)
-    // are instead re-routed into the panel wherever they land, so EVERY
-    // post-tool text segment stays in the reply.
+    // NOT anchor the boundary: the model can emit text → think → more text
+    // as part of its reply, and anchoring on thinking would fold earlier
+    // answer text into the collapsed panel, hiding user-facing output.
     let lastToolIdx = -1;
     for (let j = 0; j < turnBlocks.length; j++) {
-      if (turnBlocks[j].block.kind === "tool_use" && !isMetaToolBlock(turnBlocks[j].block)) {
+      const b = turnBlocks[j].block;
+      if (b.kind === "tool_use" && !isMetaToolBlock(b)) {
         lastToolIdx = j;
       }
     }
@@ -924,25 +927,25 @@ function groupMessagesForRender(
     let panelBlocks: Block[] = [];
     const textMsgs: ChatMessage[] = [];
 
-    // Completed turn (isStreamingTail false): every tool is attached by now,
+    // Completed turn (isStreamingTail false): every real tool is attached by now,
     // so narration text sits before the last tool (inside the panel) and the
-    // true final reply after it (outside). Pure-text turns have no procedural
-    // block at all and render as plain messages.
+    // true final reply after it (outside). Thinking blocks are internal reasoning
+    // and belong in the process panel, never lingering below the final answer text.
     const replyByMsg = new Map<ChatMessage, Block[]>();
     for (let j = 0; j < turnBlocks.length; j++) {
       const { block, msg } = turnBlocks[j];
-      // Process surface: blocks at-or-before the last real tool (procedural +
-      // woven text), plus any thinking / meta-tool blocks wherever they
-      // landed — those never anchor the boundary but must not leak into the
-      // reply, so re-route them here: a mid-answer thinking pause or a
-      // trailing task-list update stays in the panel while the text around
-      // it remains visible. Orchestration-flow turns (orchSplitIdx, see
-      // above) route everything before the canvas / error card here too —
-      // the planner's streamed JSON is process data, not the reply.
-      if (j <= lastToolIdx || isProceduralBlock(block) || (orchSplitIdx >= 0 && j < orchSplitIdx)) {
+      // Process surface:
+      // 1. Thinking blocks are internal cognitive steps that belong in the TurnPanel ledger;
+      // 2. Blocks at or before the last real tool call (tools and woven narration text);
+      // 3. Orchestration-flow pre-canvas blocks.
+      if (
+        block.kind === "thinking" ||
+        j <= lastToolIdx ||
+        (orchSplitIdx >= 0 && j < orchSplitIdx)
+      ) {
         panelBlocks.push(block);
       } else {
-        // Reply surface: blocks after the last real tool, regrouped by source
+        // Reply surface: blocks after the last tool, regrouped by source
         // message so each textMsg renders with its original identity (id, role).
         const arr = replyByMsg.get(msg);
         if (arr) arr.push(block);
@@ -1204,6 +1207,14 @@ function groupMessagesForRender(
   return items;
 }
 
+/** Cache shape for historical settled turn items during streaming. */
+interface SettledPrefixCache {
+  firstMsg: ChatMessage;
+  lastUserMsg: ChatMessage;
+  settledCount: number;
+  items: RenderItem[];
+}
+
 /** Attachment record shape handed to the store's sendPrompt — shared by the
  *  send and enqueue paths so both assemble identical payloads. */
 type SendAttachment = {
@@ -1419,6 +1430,11 @@ function ChatPaneForSession({
     cardRef: composerCardRef,
     tier: composerTier,
   } = useComposerRowFit(chipsMode === "collapsed");
+  const [voiceActive, setVoiceActive] = useState(false);
+  useEffect(() => {
+    return onVoiceActiveChange(setVoiceActive);
+  }, []);
+
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
   );
@@ -1476,10 +1492,78 @@ function ChatPaneForSession({
   // only, no text) into single render clusters so a multi-step turn reads
   // as one compact "思考 + N 个操作" card instead of N stacked cards.
   const runningTurnModel = useSessionStore((s) => s.runningTurnModelBySession[sessionId]);
-  const renderItems = useMemo(
-    () => groupMessagesForRender(messages, isRunning, runningTurnStartedAt, runningTurnModel),
-    [messages, isRunning, runningTurnStartedAt, runningTurnModel],
-  );
+  const prefixCacheRef = useRef<SettledPrefixCache | null>(null);
+  const renderItems = useMemo(() => {
+    if (messages.length === 0) {
+      prefixCacheRef.current = null;
+      return groupMessagesForRender(messages, isRunning, runningTurnStartedAt, runningTurnModel);
+    }
+
+    // 在流式输出期间，如果存在活跃的尾部回合（从最后一个 user 提问之后开始），
+    // 我们可以复用前面所有已经结束的历史回合（settledCount 条消息），
+    // 避免每次 delta 到达都全量重算 O(N) 的历史回合分组与计划/媒体卡抽取。
+    if (isRunning) {
+      let lastUserIdx = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === "user") {
+          lastUserIdx = i;
+          break;
+        }
+      }
+
+      if (lastUserIdx >= 0) {
+        const settledCount = lastUserIdx + 1;
+        const cache = prefixCacheRef.current;
+        let settledItems: RenderItem[];
+
+        if (
+          cache &&
+          cache.settledCount === settledCount &&
+          cache.firstMsg === messages[0] &&
+          cache.lastUserMsg === messages[lastUserIdx]
+        ) {
+          settledItems = cache.items;
+        } else {
+          settledItems = groupMessagesForRender(messages.slice(0, settledCount), false);
+          prefixCacheRef.current = {
+            settledCount,
+            firstMsg: messages[0],
+            lastUserMsg: messages[lastUserIdx],
+            items: settledItems,
+          };
+        }
+
+        const tailMessages = messages.slice(settledCount);
+        const tailItems = groupMessagesForRender(
+          tailMessages,
+          isRunning,
+          runningTurnStartedAt,
+          runningTurnModel,
+        );
+        return [...settledItems, ...tailItems];
+      }
+    }
+
+    const items = groupMessagesForRender(messages, isRunning, runningTurnStartedAt, runningTurnModel);
+    let lastUserIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx >= 0 && lastUserIdx + 1 === messages.length) {
+      prefixCacheRef.current = {
+        settledCount: messages.length,
+        firstMsg: messages[0],
+        lastUserMsg: messages[lastUserIdx],
+        items,
+      };
+    } else {
+      prefixCacheRef.current = null;
+    }
+    return items;
+  }, [messages, isRunning, runningTurnStartedAt, runningTurnModel]);
   const sendPrompt = useSessionStore((s) => s.sendPrompt);
   const openSideChatPanel = useSessionStore((s) => s.openSideChatPanel);
   const interrupt = useSessionStore((s) => s.interrupt);
@@ -3408,9 +3492,15 @@ function ChatPaneForSession({
     reorderPromptQueue(sessionId, next);
   };
 
-  /** Enter handler wired into the editor: sends when idle, enqueues when busy.
+  /** Enter handler wired into the editor: stops dictation when listening,
+   *  sends when idle, enqueues when busy.
    *  Shift+Enter inserts a newline and never reaches here (handled by Tiptap). */
   const handleEnter = () => {
+    const vh = voiceHandleFor(sessionId);
+    if (vh?.isBusy()) {
+      void vh.stopListen();
+      return;
+    }
     if (sessionBusy) handleEnqueue();
     else handleSend();
   };
@@ -3635,6 +3725,30 @@ function ChatPaneForSession({
       if (it.kind === "opsGroup") {
         if (it.turnMeta) turnMeta = it.turnMeta;
         liveLedgerBlocks.push(...it.blocks);
+        let hasFollowingText = false;
+        // 本组之后是否还有正文行/ops 行：没有 → 本组持有回合的收尾块，末块是
+        // 流式中的思考时，其卡片要显示 loading（thinkingActive）。
+        let laterRowExists = false;
+        for (let j = i + 1; j < end; j++) {
+          const nextItem = items[j];
+          if (nextItem.kind === "single" || nextItem.kind === "opsGroup") {
+            laterRowExists = true;
+          }
+          if (
+            nextItem.kind === "single" &&
+            nextItem.msg.blocks.some((b) => b.kind === "text" && b.text.trim().length > 0)
+          ) {
+            hasFollowingText = true;
+          }
+          if (
+            nextItem.kind === "opsGroup" &&
+            nextItem.leading?.some((b) => b.kind === "text" && b.text.trim().length > 0)
+          ) {
+            hasFollowingText = true;
+          }
+        }
+        const tailBlock = it.blocks[it.blocks.length - 1];
+        const thinkingActive = !laterRowExists && tailBlock?.kind === "thinking";
         rows.push({
           key: `ops:${it.liveKey ?? it.anchorId}`,
           node: (
@@ -3662,7 +3776,9 @@ function ChatPaneForSession({
                 <BatchToolGroup
                   blocks={it.blocks}
                   turnActive
+                  hasFollowingText={hasFollowingText}
                   showTicker={false}
+                  thinkingActive={thinkingActive}
                   projectPath={projectPath}
                 />
               </RenderErrorBoundary>
@@ -3867,7 +3983,14 @@ function ChatPaneForSession({
                     (the group whose tool is executing shows it rolling; the
                     rest show their last op dimmed). */}
                 <RenderErrorBoundary>
-                  <BatchToolGroup blocks={item.blocks} turnActive projectPath={projectPath} />
+                  <BatchToolGroup
+                    blocks={item.blocks}
+                    turnActive
+                    thinkingActive={
+                      Boolean(item.isStreamingTail) && item.blocks[item.blocks.length - 1]?.kind === "thinking"
+                    }
+                    projectPath={projectPath}
+                  />
                 </RenderErrorBoundary>
               </div>
               {item.isStreamingTail && (
@@ -4394,6 +4517,7 @@ function ChatPaneForSession({
               toolName={headApproval.toolName}
               input={headApproval.input}
               description={headApproval.description}
+              domain={headApproval.domain}
               queuePosition={
                 pendingApprovals.filter((p) => p.sessionId === sessionId).findIndex(
                   (p) => p.requestId === headApproval.requestId,
@@ -4451,6 +4575,8 @@ function ChatPaneForSession({
               "focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgb(var(--accent)/0.12)]",
               // Highlight the composer while a file-tree drag hovers over it.
               dragOver && "border-accent ring-4 ring-accent/20",
+              // Voice listening active glow + subtle pulse
+              voiceActive && "border-accent ring-2 ring-accent/30 shadow-[0_0_16px_rgb(var(--accent)/0.18)] animate-pulse",
               // Hide the composer card entirely while a bottom prompt (approval /
               // plan approval / question) is visible - the prompt takes its place
               // in the flow. `hidden` (display:none) keeps the component mounted
@@ -4733,9 +4859,11 @@ function ChatPaneForSession({
                 ref={editorRef}
                 editable={!textareaLocked && !orchBlocking}
                 placeholder={
-                  textareaLocked
-                    ? "Claude is working…"
-                    : orchBlocking
+                  voiceActive
+                    ? t("chat.voice.placeholderListening")
+                    : textareaLocked
+                      ? "Claude is working…"
+                      : orchBlocking
                       ? t("orch.canvas.inputLocked")
                       : schedHintVisible
                         ? t("automation.composerSchedHint")
@@ -4979,6 +5107,7 @@ const USER_MSG_VISIBLE_LINES = 5;
 /** Shared empty block list for the user-message media/prose partition — a
  *  fresh `[]` per render would bust MessageBlocks' memo on assistant rows. */
 const EMPTY_BLOCK_LIST: Block[] = [];
+const EMPTY_IMAGE_BLOCK_LIST: Extract<Block, { kind: "image" }>[] = [];
 /** Basename of a file path (handles / and \ separators). Mirrors the
  *  derivation in contentTag's makeFileTag preview, but WITHOUT the preview
  *  truncation — inline @-mention markers (issue #22) always carry the full
@@ -5139,24 +5268,29 @@ const MessageRow = memo(function MessageRow({
     }
     return blocks.length > 0 ? { blocks, files } : EMPTY_INLINED_FILE_MENTIONS;
   }, [renderBlocks, isUser, inlineFileMention]);
-  // Media blocks — paste/file/quote cards AND inline image thumbnails — are
+  // Attachment cards (paste/file/quote) and user image thumbnails are
   // carved out of the 5-line fold: they always render in full above the prose,
   // outside the clamp. A cropped/masked card or thumbnail is unreadable, and
-  // a single image row already consumes the whole line budget, so counting
-  // them collapsed every image-bearing prompt regardless of text length.
-  // User messages are [attachment…, image…, text] (store block order), so the
-  // media container naturally keeps its above-prose position. File cards
-  // already inlined as prose markers (above) are carved out here.
-  const userMediaBlocks = useMemo(
+  // counting them would collapse every image/attachment-bearing prompt regardless of text length.
+  // User messages are [attachment…, image…, text] (store block order), so
+  // attachments and image thumbnails naturally keep their above-prose position.
+  const userAttachmentBlocks = useMemo(
     () =>
       isUser
         ? renderBlocks.filter(
             (b) =>
-              (b.kind === "attachment" || b.kind === "image") &&
+              b.kind === "attachment" &&
               !inlinedFileMentions.blocks.includes(b),
           )
         : EMPTY_BLOCK_LIST,
     [renderBlocks, isUser, inlinedFileMentions],
+  );
+  const userImageBlocks = useMemo(
+    () =>
+      isUser
+        ? renderBlocks.filter((b): b is Extract<Block, { kind: "image" }> => b.kind === "image")
+        : EMPTY_IMAGE_BLOCK_LIST,
+    [renderBlocks, isUser],
   );
   const userProseBlocks = useMemo(
     () =>
@@ -5164,6 +5298,16 @@ const MessageRow = memo(function MessageRow({
         ? renderBlocks.filter((b) => b.kind !== "attachment" && b.kind !== "image")
         : EMPTY_BLOCK_LIST,
     [renderBlocks, isUser],
+  );
+  const [activeImageIdx, setActiveImageIdx] = useState<number | null>(null);
+  const userMediaItems = useMemo<MediaItem[]>(
+    () =>
+      userImageBlocks.map((b) => ({
+        kind: "image",
+        src: `data:${b.mimeType};base64,${b.data}`,
+        alt: t("chatStream.image.userImage"),
+      })),
+    [userImageBlocks, t],
   );
   // Only show the copy button on messages with real text content - i.e. the
   // model's substantive answer to the user. A single turn often produces
@@ -5330,14 +5474,53 @@ const MessageRow = memo(function MessageRow({
               gradient). Assistant rows keep the single unwrapped container. */}
           {isUser ? (
             <>
-              {userMediaBlocks.length > 0 && (
+              {userAttachmentBlocks.length > 0 && (
                 <div
                   className={cn(
                     "relative",
+                    (userImageBlocks.length > 0 || userProseBlocks.length > 0) &&
+                      "mb-[var(--chat-block-gap)]",
+                  )}
+                >
+                  <MessageBlocks
+                    blocks={userAttachmentBlocks}
+                    beforeMap={beforeMap}
+                    isStreamingTail={isStreamingTail}
+                    onOpenPlan={onOpenPlan}
+                    projectPath={projectPath}
+                  />
+                </div>
+              )}
+              {userImageBlocks.length > 0 && (
+                <div
+                  className={cn(
+                    "relative flex flex-wrap gap-1.5",
                     userProseBlocks.length > 0 && "mb-[var(--chat-block-gap)]",
                   )}
                 >
-                  <MessageBlocks blocks={userMediaBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+                  {userImageBlocks.map((img, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setActiveImageIdx(i)}
+                      title={t("chat.imageN", { n: i + 1 })}
+                      className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-edge bg-surface transition-all hover:border-accent/60 hover:shadow-sm"
+                    >
+                      <img
+                        src={`data:${img.mimeType};base64,${img.data}`}
+                        alt={t("chat.imageN", { n: i + 1 })}
+                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                      />
+                    </button>
+                  ))}
+                  {activeImageIdx !== null && (
+                    <MediaLightbox
+                      items={userMediaItems}
+                      index={activeImageIdx}
+                      onNavigate={setActiveImageIdx}
+                      onClose={() => setActiveImageIdx(null)}
+                    />
+                  )}
                 </div>
               )}
               {userProseBlocks.length > 0 && (

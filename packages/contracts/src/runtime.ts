@@ -137,6 +137,9 @@ export interface ApprovalRequestEvent {
   input: unknown;
   /** Human-readable description of what the tool will do. */
   description?: string;
+  /** Present on browser-navigation domain approvals — see
+   *  ApprovalRequest.domain in @contracts/provider. */
+  domain?: string;
 }
 
 /** A todo/task update (claude's TodoWrite tool output). */

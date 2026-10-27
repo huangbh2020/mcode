@@ -44,6 +44,7 @@ import {
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Mention, type MentionNodeAttrs } from "@tiptap/extension-mention";
+import { Selection } from "@tiptap/pm/state";
 import { cn } from "@renderer/lib/cn.js";
 import type { SkillInfo } from "@contracts/ipc";
 
@@ -649,12 +650,12 @@ export const ComposerEditor = forwardRef<
    *  selection to the end of the inserted content. */
   function appendFilePillsAt(ed: NonNullable<typeof editor>, files: FilePillEntry[]) {
     if (files.length === 0) return;
-    // textOffsetToPos(0) on an EMPTY doc resolves to position 0 ("before the
-    // paragraph"), which is not a valid inline insert spot — appending to an
-    // empty doc inserts at doc.content.size (the paragraph's end) instead.
-    const at = ed.isEmpty
-      ? ed.state.doc.content.size
-      : textOffsetToPos(ed, textWithSkills(ed).length);
+    // Selection.atEnd resolves to the deepest valid inline position at the
+    // end of the document (inside the paragraph rather than after its closing
+    // delimiter). Using doc.content.size on an empty doc would place the insert at
+    // root level, which forces ProseMirror to synthesize a new paragraph and
+    // produces an unwanted leading blank line.
+    const at = Selection.atEnd(ed.state.doc).from;
     ed.chain()
       .insertContentAt(at, filePillContent(files), { updateSelection: false })
       .run();

@@ -7,8 +7,6 @@ import {
   IconWorld,
   IconListDetails,
   IconMessages,
-  IconArrowsMaximize,
-  IconArrowsMinimize,
   IconClock,
   IconGitFork,
   IconPlus,
@@ -52,7 +50,7 @@ const EMPTY_SESSION_TABS: SessionRightPanelTabId[] = [];
 
 const SESSION_TAB_META: ReadonlyArray<{
   id: SessionRightPanelTabId;
-  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.schedTasks";
+  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.schedTasks" | "layout.tabGithub";
   /** Tooltip while the tab is showing (= the close affordance). */
   closeTitleKey: "layout.rightPanelCloseTab";
   Icon: typeof IconListDetails;
@@ -62,6 +60,7 @@ const SESSION_TAB_META: ReadonlyArray<{
   { id: "turns", labelKey: "layout.tabTurns", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconListDetails, commandId: null },
   { id: "sidechat", labelKey: "layout.tabSideChat", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconMessages, commandId: "sidechat.open" },
   { id: "sched", labelKey: "layout.schedTasks", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconClock, commandId: null },
+  { id: "github", labelKey: "layout.tabGithub", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconBrandGithub, commandId: null },
 ];
 
 export function RightPanel() {
@@ -78,8 +77,6 @@ export function RightPanel() {
   const terminalPosition = useSessionStore((s) => s.terminalPosition);
   const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
   const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
-  const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
-  const setWidePanelOpen = useSessionStore((s) => s.setWidePanelOpen);
   const orchRuns = useSessionStore((s) => (sessionId ? s.orchRunsBySession[sessionId] : undefined));
   const orchAuto = useSessionStore((s) => (sessionId ? !!s.orchAutoBySession[sessionId] : false));
   const messages = useSessionStore((s) => (sessionId ? s.messagesBySession[sessionId] : undefined));
@@ -96,10 +93,14 @@ export function RightPanel() {
   const tab = sessionTabs?.active ?? globalTab;
   const openSessionTabs = sessionTabs?.open ?? EMPTY_SESSION_TABS;
   const effectiveOpenTabs = useMemo(() => {
-    if (tab === "sched" && !openSessionTabs.includes("sched")) {
-      return [...openSessionTabs, "sched" as const];
+    let res = openSessionTabs;
+    if (tab === "sched" && !res.includes("sched")) {
+      res = [...res, "sched" as const];
     }
-    return openSessionTabs;
+    if (tab === "github" && !res.includes("github")) {
+      res = [...res, "github" as const];
+    }
+    return res;
   }, [openSessionTabs, tab]);
 
   // 保证当前会话的编排运行记录已拉取
@@ -158,13 +159,6 @@ export function RightPanel() {
           title="Git" /* brand name */
         >
           <IconGitBranch size={16} className="shrink-0" />
-        </RailButton>
-        <RailButton
-          active={tab === "github"}
-          onClick={() => setTab("github")}
-          title={t("layout.tabGithub")}
-        >
-          <IconBrandGithub size={16} className="shrink-0" />
         </RailButton>
         {terminalPosition !== "bottom" && (
           <RailButton
@@ -234,9 +228,8 @@ export function RightPanel() {
             </RailButton>
           );
         })}
-        {/* Right end: the "+" menu that opens the session-scoped tabs, then
-            the wide-panel (3:7) toggle. Pushed to the rail's far right with
-            ml-auto. */}
+        {/* Right end: the "+" menu that opens the session-scoped tabs.
+            Pushed to the rail's far right with ml-auto. */}
         <div className="ml-auto flex items-center gap-1">
           <Menu.Root open={addOpen} onOpenChange={setAddOpen}>
             <Menu.Trigger
@@ -309,23 +302,6 @@ export function RightPanel() {
               </Menu.Positioner>
             </Menu.Portal>
           </Menu.Root>
-          <div className="h-5 w-px bg-edge" />
-          <RailButton
-            active={widePanelOpen}
-            onClick={() => setWidePanelOpen(!widePanelOpen)}
-            title={
-              (widePanelOpen ? t("layout.exitWideMode") : t("layout.wideMode")) +
-              hintFor("layout.toggle-wide-panel")
-            }
-          >
-            {/* Maximize when entering, minimize (restore) when already wide —
-                the standard expand/collapse affordance pair. */}
-            {widePanelOpen ? (
-              <IconArrowsMinimize size={16} className="shrink-0" />
-            ) : (
-              <IconArrowsMaximize size={16} className="shrink-0" />
-            )}
-          </RailButton>
         </div>
       </div>
 

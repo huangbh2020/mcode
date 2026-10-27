@@ -9,6 +9,7 @@ import {
   StopServiceSchema,
   ApproveSchema,
   SaveGlobalAllowedToolsSchema,
+  SaveTrustedBrowserDomainsSchema,
   RespondQuestionSchema,
   RespondPlanApprovalSchema,
   RewindTurnSchema,
@@ -31,6 +32,10 @@ import type {
 import type { UserInputAnswers } from "@contracts/provider";
 import { SessionRepo, ProjectRepo, MessageRepo, SettingRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
+import {
+  getTrustedBrowserDomains,
+  setTrustedBrowserDomains,
+} from "@main/browser/domainGate.js";
 import { serviceScanner } from "@main/lib/serviceScanner.js";
 import { providerRegistry } from "@main/providers/registry.js";
 import { updateTitleBarOverlay } from "@main/window.js";
@@ -212,6 +217,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       input.granted ? undefined : "Denied by user",
       input.always,
       input.alwaysScope,
+      input.grantDomain,
     );
     if (!resolved) {
       log.warn(`approval: no pending request for id ${input.requestId}`);
@@ -229,6 +235,18 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.CLAUDE_SAVE_GLOBAL_ALLOWED_TOOLS, async (_evt, raw) => {
     const input = SaveGlobalAllowedToolsSchema.parse(raw);
     runtimeManager.setGlobalAllowedTools(input.tools);
+  });
+
+  // ── Browser trusted-domain list (settings editor「浏览器 → 受信任域名」).
+  //    Same whole-list semantics as the tool allowlist above; the domain
+  //    gate's store (main/browser/domainGate.ts) is the single writer. ──
+  ipcMain.handle(IPC.CLAUDE_LIST_TRUSTED_BROWSER_DOMAINS, async () => {
+    return { domains: getTrustedBrowserDomains() };
+  });
+
+  ipcMain.handle(IPC.CLAUDE_SAVE_TRUSTED_BROWSER_DOMAINS, async (_evt, raw) => {
+    const input = SaveTrustedBrowserDomainsSchema.parse(raw);
+    setTrustedBrowserDomains(input.domains);
   });
 
   // ── AskUserQuestion answer: resolve the provider's pending user-input

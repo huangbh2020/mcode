@@ -28,10 +28,13 @@
  * everywhere as a fallback handle.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { isAbsolute, join, resolve } from "node:path";
 import { app } from "electron";
-import { BrowserManager, type BrowserDownloadEntry } from "./BrowserManager.js";
-import { SNAPSHOT_DISPLAY_CAP } from "./snapshotScript.js";
+import { BrowserManager, type BrowserDownloadEntry } from "@main/browser/BrowserManager.js";
+import { SNAPSHOT_DISPLAY_CAP, SNAPSHOT_SCRIPT } from "./snapshotScript.js";
+import { isBrowserNavigationPreapproved } from "./domainGate.js";
+import { chromeRelayCommand, chromeRelayStatus } from "@main/browser/chromeRelay.js";
 import { log } from "@main/lib/logger.js";
 import { registerImageArtifact } from "@main/lib/imageArtifacts.js";
 import { SettingRepo } from "@main/store/repositories.js";
@@ -298,6 +301,143 @@ export function browserList(): ToolResult {
   return text(`当前浏览器视图(${infos.length} 个):\n\n${lines.join("\n\n")}`);
 }
 
+/* ───────────────── real-Chrome backend (chrome relay) ────────────────── */
+
+/** The tab (chrome tab id as string) the chrome backend last navigated — the
+ *  backend's "active view", mirroring activeBrowserId for embedded views.
+ *  Module state like the rest of the tool surface. */
+let chromeTabId: string | null = null;
+
+/** Live relay status snapshot for tool-result messaging. */
+function chromeBackendConnected(): boolean {
+  return chromeRelayStatus().connected;
+}
+
+/** Ensure a Chrome tab exists for the backend (create one on first use) and
+ *  return its id. */
+async function chromeEnsureTab(): Promise<{ ok: true; targetId: string } | { ok: false; error: string }> {
+  if (chromeTabId) return { ok: true, targetId: chromeTabId };
+  const created = await chromeRelayCommand("Target.createTarget", { url: "about:blank" });
+  if (!created.ok) return { ok: false, error: created.error };
+  const targetId = String((created.result as { targetId?: unknown } | undefined)?.targetId ?? "");
+  if (!targetId) return { ok: false, error: "扩展未返回标签页 id" };
+  chromeTabId = targetId;
+  return { ok: true, targetId };
+}
+
+/** Runtime.evaluate on the chrome tab with returnByValue + awaitPromise —
+ *  the same contract as the embedded executeJavaScript paths. */
+async function chromeEval<T>(
+  expression: string,
+): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  const tab = await chromeEnsureTab();
+  if (!tab.ok) return tab;
+  const res = await chromeRelayCommand(
+    "Runtime.evaluate",
+    { expression, returnByValue: true, awaitPromise: true },
+    { targetId: tab.targetId },
+  );
+  if (!res.ok) return res;
+  const value = (res.result as { result?: { value?: unknown } } | undefined)?.result?.value;
+  if (value === undefined) {
+    return { ok: false, error: "页面脚本未返回值" };
+  }
+  return { ok: true, value: value as T };
+}
+
+/** browser_navigate on the REAL Chrome (backend:"chrome"). Domain gate is
+ *  HARD here — regardless of permission mode — because this is the user's
+ *  logged-in browser: only localhost/file origins and domains already in the
+ *  trusted store are navigable; everything else errors with guidance (the
+ *  user can trust the domain in settings or via an embedded navigate). */
+async function chromeNavigateCore(
+  url: string,
+  sessionId?: string,
+): Promise<ToolResult> {
+  if (!chromeBackendConnected()) {
+    return errorResult(
+      "真实 Chrome 未连接。请在设置 → 浏览器 → 真实 Chrome 打开开关并连接 mcode-connector 扩展；或省略 backend 参数用应用内浏览器。",
+    );
+  }
+  // Hard domain gate: sessionId may be absent (defensive) — treat missing as
+  // untrusted for anything non-local.
+  const preapproved =
+    /^file:/i.test(url) ||
+    (sessionId ? isBrowserNavigationPreapproved(url, sessionId) : false) ||
+    isBrowserNavigationPreapproved(url, "chrome-backend-no-session");
+  if (!preapproved) {
+    return errorResult(
+      `真实 Chrome 后端仅允许 localhost/本地文件/已信任域名(${url} 未信任)。请在设置 → 浏览器 → 受信任域名 中添加该域名，或使用应用内浏览器(省略 backend)。`,
+    );
+  }
+  const tab = await chromeEnsureTab();
+  if (!tab.ok) return errorResult(tab.error);
+  const nav = await chromeRelayCommand("Page.navigate", { url }, { targetId: tab.targetId });
+  if (!nav.ok) return errorResult(nav.error);
+  // Wait for the load to settle (poll document.readyState, cap ~8s) so a
+  // follow-up snapshot sees real content — mirroring waitForLoad's role.
+  const deadline = Date.now() + 8000;
+  for (;;) {
+    const st = await chromeEval<string>("document.readyState");
+    if (!st.ok) break;
+    if (st.value === "complete" || st.value === "interactive") break;
+    if (Date.now() > deadline) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return text(
+    `已在真实 Chrome 中导航到 ${url}(标签页 id=${tab.targetId}，登录态为你的本机 Chrome)。可调用 browser_snapshot(backend:"chrome") 读取内容。`,
+  );
+}
+
+/** browser_snapshot on the real Chrome: inject SNAPSHOT_SCRIPT via
+ *  Runtime.evaluate and render with the shared snapshot formatter. The
+ *  chrome backend is read-only in this iteration — the snapshot text says so
+ *  (click/type/keys must use the embedded backend). */
+async function chromeSnapshotCore(): Promise<ToolResult> {
+  if (!chromeBackendConnected()) {
+    return errorResult("真实 Chrome 未连接(设置 → 浏览器 → 真实 Chrome)。");
+  }
+  const tab = await chromeEnsureTab();
+  if (!tab.ok) return errorResult(tab.error);
+  const ev = await chromeEval<Parameters<typeof renderSnapshotText>[0]>(SNAPSHOT_SCRIPT);
+  if (!ev.ok) return errorResult(ev.error);
+  return text(
+    renderSnapshotText(ev.value, `真实 Chrome 标签页 ${tab.targetId}`) +
+      "\n\n(注:真实 Chrome 后端当前为只读——点击/输入请使用应用内浏览器)",
+  );
+}
+
+/** browser_screenshot on the real Chrome via Page.captureScreenshot. */
+async function chromeScreenshotCore(
+  ctx: BrowserToolContext & { toolCallId: string },
+): Promise<ToolResult> {
+  if (!chromeBackendConnected()) {
+    return errorResult("真实 Chrome 未连接(设置 → 浏览器 → 真实 Chrome)。");
+  }
+  const tab = await chromeEnsureTab();
+  if (!tab.ok) return errorResult(tab.error);
+  const shot = await chromeRelayCommand("Page.captureScreenshot", { format: "png" }, { targetId: tab.targetId });
+  if (!shot.ok) return errorResult(shot.error);
+  const data = String((shot.result as { data?: unknown } | undefined)?.data ?? "");
+  if (!data) return errorResult("截图失败:扩展未返回图像数据");
+  ctx.onImage?.({ toolCallId: ctx.toolCallId, data, mimeType: "image/png" });
+  const savedPath = saveScreenshotToDisk(data, {
+    sessionId: ctx.sessionId,
+    turnNumber: ctx.turnNumber,
+    toolCallId: ctx.toolCallId,
+  });
+  return {
+    content: [
+      {
+        type: "text",
+        text: `已在真实 Chrome 截图(标签页 ${tab.targetId}，可视区域)。${savedPath ? `
+已保存到: ${savedPath}` : ""}`,
+      },
+      { type: "image", data, mimeType: "image/png" },
+    ],
+  };
+}
+
 /** `browser_navigate` — load a URL. When no browserId is given and none is
  *  live, a new view is created (and shown) so the user sees the agent
  *  browsing; `newTab: true` always opens a fresh view (and makes it the
@@ -309,8 +449,15 @@ export function browserList(): ToolResult {
  *  across navigations, so re-applying it would only clobber the user's
  *  choice. */
 export async function browserNavigate(
-  args: { url: string; browserId?: string; device?: AgentDevicePreset; newTab?: boolean },
+  args: {
+    url: string;
+    browserId?: string;
+    device?: AgentDevicePreset;
+    newTab?: boolean;
+    backend?: "chrome";
+  },
   projectPath: string,
+  opts?: { sessionId?: string },
 ): Promise<ToolResult> {
   const raw = (args.url ?? "").trim();
   if (!raw) return errorResult("url 不能为空");
@@ -321,6 +468,10 @@ export async function browserNavigate(
     );
   }
   const device = coerceDevice(args.device);
+
+  if (args.backend === "chrome") {
+    return chromeNavigateCore(url, opts?.sessionId);
+  }
 
   let browserId: string;
   if (args.newTab === true) {
@@ -378,7 +529,10 @@ export async function browserNavigate(
  *  carries a 1-based `index` handle (pass to click/type/select), its form
  *  state (value/checked/disabled/href), an 视口外 marker when it's outside the
  *  viewport, and the fallback CSS selector. */
-export async function browserSnapshot(args: { browserId?: string }): Promise<ToolResult> {
+export async function browserSnapshot(
+  args: { browserId?: string; backend?: "chrome" },
+): Promise<ToolResult> {
+  if (args.backend === "chrome") return chromeSnapshotCore();
   const resolved = resolveBrowserId(args.browserId);
   if (!resolved.ok) {
     return resolved.reason === "no-live-browser" ? noBrowserError() : errorResult(resolved.reason);
@@ -386,12 +540,36 @@ export async function browserSnapshot(args: { browserId?: string }): Promise<Too
   const res = await BrowserManager.snapshot(resolved.browserId);
   if (!res.ok || !res.data) return errorResult(res.error ?? "读取快照失败");
 
-  const d = res.data;
   // Remember the index→selector map for index-addressed click/type/select.
   const map = new Map<number, string>();
-  for (const el of d.interactive) map.set(el.index, el.selector);
+  for (const el of res.data.interactive) map.set(el.index, el.selector);
   snapshotIndexMaps.set(resolved.browserId, map);
 
+  return text(renderSnapshotText(res.data, `browserId=${resolved.browserId}`));
+}
+
+/** Render a snapshot payload (SNAPSHOT_SCRIPT's return shape — identical for
+ *  the embedded view and the real-Chrome backend) into the tool text. Shared
+ *  by browserSnapshot and the chrome backend's snapshot path. */
+function renderSnapshotText(
+  d: {
+    url: string;
+    title: string;
+    readyState: string;
+    bodyText: string;
+    interactive: Array<{
+      index: number;
+      role: string;
+      name: string;
+      tag: string;
+      selector: string;
+      text: string;
+      inView: boolean;
+      state: string[];
+    }>;
+  },
+  idLabel: string,
+): string {
   // Display order: in-viewport elements first (what the user sees right now /
   // what a viewport screenshot covers), then the below-the-fold ones. Indices
   // are the collected (DOM-order) handles and stay stable within this
@@ -408,8 +586,8 @@ export async function browserSnapshot(args: { browserId?: string }): Promise<Too
     return [head, ...body].join("\n");
   });
   const hidden = d.interactive.length - shown.length;
-  const summary = [
-    `页面快照(browserId=${resolved.browserId})`,
+  return [
+    `页面快照(${idLabel})`,
     `URL: ${d.url}`,
     `标题: ${d.title || "(无)"}`,
     `readyState: ${d.readyState}`,
@@ -422,7 +600,6 @@ export async function browserSnapshot(args: { browserId?: string }): Promise<Too
     `页面正文(前 ${d.bodyText.length} 字符):`,
     d.bodyText || "(空)",
   ].join("\n");
-  return text(summary);
 }
 
 /** `browser_click` — click an element by snapshot `index` (preferred) or CSS
@@ -741,7 +918,7 @@ export async function browserEvaluate(args: {
   if (!resolved.ok) {
     return resolved.reason === "no-live-browser" ? noBrowserError() : errorResult(resolved.reason);
   }
-  const res = await BrowserManager.evaluate(resolved.browserId, script);
+  const res = await BrowserManager.evaluateAsync(resolved.browserId, script);
   if (!res.ok) return errorResult(res.error ?? "脚本执行失败");
   return text(
     `已执行脚本(browserId=${resolved.browserId})。执行结果:\n${res.result ?? "(无返回值)"}\n当前 URL: ${
@@ -756,9 +933,10 @@ export async function browserEvaluate(args: {
  *  the screenshot) AND, when `ctx.onImage` is wired (Pi path), emits it for
  *  inline conversation rendering. */
 export async function browserScreenshot(
-  args: { browserId?: string; fullPage?: boolean },
+  args: { browserId?: string; fullPage?: boolean; backend?: "chrome" },
   ctx: BrowserToolContext & { toolCallId: string },
 ): Promise<ToolResult> {
+  if (args.backend === "chrome") return chromeScreenshotCore(ctx);
   const live = BrowserManager.list();
   log.info(`browserScreenshot called: requestedId=${args.browserId ?? "(none)"} fullPage=${args.fullPage === true} liveCount=${live.length} liveIds=${JSON.stringify(live.map((l) => l.browserId))}`);
   const resolved = resolveBrowserId(args.browserId);
@@ -898,6 +1076,177 @@ export function browserDownloads(): ToolResult {
   return text(`最近的浏览器下载(${entries.length} 条,展示前 ${Math.min(entries.length, 20)} 条):\n\n${lines.join("\n")}`);
 }
 
+/* ───────────────────────── browser_script (batch execution) ───────────────────────── */
+
+/** One operation in a browser_script batch. Discriminated by `op`; each
+ *  variant's fields mirror the corresponding browser_* tool's args so the
+ *  dispatcher can forward them verbatim (providers validate only `op` — the
+ *  shared core narrows the rest and errors per-step with the field name). */
+export type BrowserScriptStep =
+  | { op: "navigate"; url: string }
+  | { op: "click"; index?: number; selector?: string; coordinateX?: number; coordinateY?: number }
+  | { op: "type"; index?: number; selector?: string; text: string; clear?: boolean }
+  | { op: "keys"; keys: string }
+  | { op: "scroll"; direction: "up" | "down"; pages?: number; selector?: string }
+  | { op: "select"; index?: number; selector?: string; value: string }
+  | { op: "wait"; selector?: string; text?: string; seconds?: number; timeoutSeconds?: number }
+  | { op: "find"; selector?: string; text?: string; regex?: boolean; caseSensitive?: boolean }
+  | { op: "evaluate"; script: string }
+  | { op: "snapshot" };
+
+const SCRIPT_STEP_OPS = new Set([
+  "navigate", "click", "type", "keys", "scroll", "select", "wait", "find", "evaluate", "snapshot",
+]);
+/** Batch caps: keeps one runaway script from monopolizing the turn. */
+const SCRIPT_MAX_STEPS = 40;
+const SCRIPT_TOTAL_TIMEOUT_MS = 120_000;
+/** Per-step result excerpt in the batch transcript (snapshot/evaluate output
+ *  can be huge; the model re-reads precise state via the dedicated tools). */
+const SCRIPT_STEP_EXCERPT = 400;
+
+/** Narrow one raw step (providers only guarantee `op` is a string). */
+function parseStep(raw: unknown): BrowserScriptStep | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.op !== "string" || !SCRIPT_STEP_OPS.has(obj.op)) return null;
+  return obj as unknown as BrowserScriptStep;
+}
+
+function excerpt(s: string, cap = SCRIPT_STEP_EXCERPT): string {
+  const one = s.replace(/\s+\n/g, "\n").trim();
+  return one.length > cap ? `${one.slice(0, cap)}…(截断)` : one;
+}
+
+/**
+ * `browser_script` — run a SEQUENCE of browser operations in ONE tool call,
+ * stopping at the first failure (code-first batch execution, borrowed from
+ * the playwright-skill playbook: one approval covers a whole flow instead of
+ * one round-trip per click).
+ *
+ * Dispatch: every step forwards to the corresponding browser* function above
+ * — battle-tested semantics (real-input clicks, waitFor polling, index
+ * handles) are reused, not re-implemented. The first navigate step may
+ * auto-create the browser (browserNavigate sets the module's active view, so
+ * later id-less steps resolve to it); navigate steps only visit
+ * pre-approved domains (localhost/file/trusted — see domainGate) because the
+ * batch's single approval must not smuggle a first-visit domain past the
+ * domain gate.
+ *
+ * Result: a transcript line per step (excerpted), `❌` on the failing step
+ * with everything before it preserved, and an optional final screenshot
+ * (finalScreenshot=true) appended as an image block via the same path as
+ * browser_screenshot.
+ */
+export async function browserScript(
+  args: { steps: unknown[]; browserId?: string; finalScreenshot?: boolean },
+  projectPath: string,
+  ctx?: BrowserToolContext & { toolCallId: string },
+): Promise<ToolResult> {
+  const rawSteps = Array.isArray(args.steps) ? args.steps : [];
+  if (rawSteps.length === 0) return errorResult("steps 不能为空(至少一步操作)");
+  if (rawSteps.length > SCRIPT_MAX_STEPS) {
+    return errorResult(`steps 过多(${rawSteps.length} > ${SCRIPT_MAX_STEPS}),请拆成多次 browser_script`);
+  }
+  const steps: BrowserScriptStep[] = [];
+  for (let i = 0; i < rawSteps.length; i++) {
+    const parsed = parseStep(rawSteps[i]);
+    if (!parsed) return errorResult(`第 ${i + 1} 步无法解析:缺少有效的 op 字段(可选:${[...SCRIPT_STEP_OPS].join("/")})`);
+    steps.push(parsed);
+  }
+
+  const startedAt = Date.now();
+  const lines: string[] = [];
+  const browserId = args.browserId;
+
+  const runStep = async (step: BrowserScriptStep): Promise<ToolResult> => {
+    switch (step.op) {
+      case "navigate": {
+        const url = (step.url ?? "").toString().trim();
+        if (!url) return errorResult("navigate 步骤缺少 url");
+        if (ctx?.sessionId && !isBrowserNavigationPreapproved(url, ctx.sessionId)) {
+          return errorResult(
+            `script 内 navigate 仅允许 localhost/本地文件/已信任域名(${url} 未信任)。请单独调用 browser_navigate 获取该域名的首次访问审批,再重跑 script。`,
+          );
+        }
+        return browserNavigate({ url, browserId }, projectPath);
+      }
+      case "click":
+        return browserClick({ ...step, browserId });
+      case "type":
+        return browserType({ ...step, browserId });
+      case "keys":
+        return browserKeys({ keys: step.keys, browserId });
+      case "scroll":
+        return browserScroll({ ...step, browserId });
+      case "select":
+        return browserSelect({ ...step, browserId });
+      case "wait":
+        return browserWait({ ...step, browserId });
+      case "find":
+        return browserFind({ ...step, browserId });
+      case "evaluate":
+        return browserEvaluate({ script: step.script, browserId });
+      case "snapshot":
+        return browserSnapshot({ browserId });
+    }
+  };
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    // Race each step against the REMAINING overall deadline: a hung evaluate
+    // (infinite loop in page code) or a long wait chain can't hold the batch
+    // past the cap. The underlying page operation keeps running (we can't
+    // cancel executeJavaScript) but the tool returns and the turn continues.
+    const remaining = SCRIPT_TOTAL_TIMEOUT_MS - (Date.now() - startedAt);
+    if (remaining <= 0) {
+      return scriptError(lines, i, steps.length, `总超时(${SCRIPT_TOTAL_TIMEOUT_MS / 1000}s)`);
+    }
+    let res: ToolResult;
+    try {
+      res = await Promise.race([
+        runStep(step),
+        new Promise<ToolResult>((resolve) => {
+          setTimeout(
+            () => resolve({ content: [{ type: "text", text: `❌ 步骤超时(总预算 ${SCRIPT_TOTAL_TIMEOUT_MS / 1000}s 已用尽)` }] }),
+            remaining,
+          );
+        }),
+      ]);
+    } catch (err) {
+      return scriptError(lines, i, steps.length, (err as Error).message);
+    }
+    const stepText =
+      res.content.find((b): b is TextBlock => b.type === "text")?.text ?? "";
+    lines.push(`[${i + 1}/${steps.length}] ${step.op}: ${excerpt(stepText)}`);
+    if (stepText.startsWith("❌")) {
+      return errorResult(
+        `第 ${i + 1} 步(${step.op})失败,已中止:\n\n${lines.join("\n\n")}`,
+      );
+    }
+  }
+
+  let image: ImageBlock | undefined;
+  if (args.finalScreenshot) {
+    const shot = await browserScreenshot(
+      { browserId },
+      ctx ?? { toolCallId: randomUUID() },
+    );
+    image = shot.content.find((b): b is ImageBlock => b.type === "image");
+    const shotText = shot.content.find((b): b is TextBlock => b.type === "text")?.text;
+    if (image && shotText) lines.push(shotText);
+  }
+
+  const header = `browser_script 完成(${steps.length} 步,${Math.round(Date.now() - startedAt)}ms):`;
+  return {
+    content: [{ type: "text", text: `${header}\n\n${lines.join("\n\n")}` }, ...(image ? [image] : [])],
+  };
+}
+
+/** Shared failure tail for browserScript: transcript so far + why it stopped. */
+function scriptError(lines: string[], failedIndex: number, total: number, reason: string): ToolResult {
+  return errorResult(`browser_script 在第 ${failedIndex + 1}/${total} 步中止:${reason}\n\n${lines.join("\n\n")}`);
+}
+
 /**
  * Shared per-tool spec: the tool `description` (surfaced by ALL providers —
  * Pi's `pi.registerTool`, Claude's in-process MCP server and Codex's
@@ -928,15 +1277,16 @@ export const BROWSER_TOOL_SPECS: Record<string, BrowserToolSpec> = {
     name: "browser_navigate",
     description:
       "在应用内浏览器中导航到指定 URL(支持 http/https 网页与 file:/// 本地文件,本地文件 Windows 形如 file:///D:/dir/page.html)。若没有打开的浏览器视图会自动创建并显示一个;newTab=true 强制新开一个标签页。" +
-      "device 可选——desktop(桌面全宽,默认)/iphone/android(移动端模拟),测试移动端页面时用后两者(仅新建时生效)。导航后需调用 browser_snapshot 读取页面内容。",
-    promptSnippet: "browser_navigate({url, device?, newTab?}): 打开网页或 file:/// 本地文件;device 可选 desktop/iphone/android",
+      "device 可选——desktop(桌面全宽,默认)/iphone/android(移动端模拟),测试移动端页面时用后两者(仅新建时生效)。导航后需调用 browser_snapshot 读取页面内容。" +
+      'backend:"chrome" 可选——在用户真实 Chrome(本机登录态)中打开:需先在设置里连接 mcode-connector 扩展,且仅允许 localhost/本地文件/已信任域名。',
+    promptSnippet: "browser_navigate({url, device?, newTab?, backend?}): 打开网页或 file:/// 本地文件;backend=chrome 用真实 Chrome",
   },
   browser_snapshot: {
     name: "browser_snapshot",
     description:
       "读取当前页面的结构化快照:URL、标题、正文,以及可交互元素列表(链接/按钮/输入框等)。" +
       "每个元素带数字索引 [n] 与表单状态(当前值/勾选/禁用/href),索引可直接传给 browser_click / browser_type / browser_select 的 index 参数;列表还标注视口外元素(需先滚动)。只读——这是理解页面内容、定位元素的主要方式。",
-    promptSnippet: "browser_snapshot({browserId?}): 读取页面快照,元素带索引与状态(只读)",
+    promptSnippet: "browser_snapshot({browserId?, backend?}): 读取页面快照,元素带索引与状态(只读;backend=chrome 读真实 Chrome)",
   },
   browser_click: {
     name: "browser_click",
@@ -1029,15 +1379,24 @@ export const BROWSER_TOOL_SPECS: Record<string, BrowserToolSpec> = {
     name: "browser_evaluate",
     description:
       "在页面中执行任意 JavaScript(页面主世界,无 Node/Electron 权限),可修改 DOM 文字/样式/属性、触发事件。" +
-      "返回脚本返回值供确认结果。适用于其它 browser_* 工具做不到的页面修改。有副作用,需用户审批。",
-    promptSnippet: "browser_evaluate({script, browserId?}): 在页面执行 JS(改 DOM/文字/样式)",
+      "支持顶层 await(如 fetch);要拿到返回值请用 return 返回。适用于其它 browser_* 工具做不到的页面修改。有副作用,需用户审批。",
+    promptSnippet: "browser_evaluate({script, browserId?}): 在页面执行 JS(改 DOM/文字/样式,支持 await)",
+  },
+  browser_script: {
+    name: "browser_script",
+    description:
+      "按顺序批量执行一组浏览器操作,一步失败即中止并返回到该步为止的全程记录——交互式逐步调用(每步一轮工具往返)的省 token 替代,适合已明确的多步流程(打开页面→等待→点击→填表→提交→截图)。" +
+      "steps 为操作数组,每项 { op: …, …参数 },op 可选:navigate/click/type/keys/scroll/select/wait/find/evaluate/snapshot(参数与同名工具一致,如 click 用 index/selector,type 用 index/selector+text)。" +
+      "navigate 步仅允许 localhost/本地文件/已信任域名——新域名请先单独调用 browser_navigate 获取首次访问审批。finalScreenshot=true 时在末尾追加整页截图。" +
+      "上限 40 步/120 秒。evaluate 步支持顶层 await。有副作用,整批一次审批。",
+    promptSnippet: "browser_script({steps:[{op:click,index:1},…], finalScreenshot?}): 批量执行多步浏览器操作(一步失败即止)",
   },
   browser_screenshot: {
     name: "browser_screenshot",
     description:
       "截取当前页面为 PNG,用于视觉确认布局/样式。默认截可视区域;fullPage=true 截整页(含滚动外内容,走 CDP 渲染)。" +
       "只读,截图同时显示给用户和返回给你。",
-    promptSnippet: "browser_screenshot({browserId?, fullPage?}): 截图(只读)",
+    promptSnippet: "browser_screenshot({browserId?, fullPage?, backend?}): 截图(只读;backend=chrome 截真实 Chrome)",
   },
 };
 
@@ -1046,7 +1405,8 @@ export const BROWSER_TOOL_SPECS: Record<string, BrowserToolSpec> = {
 export const BROWSER_TOOLS_FLOW =
   "browserId 参数全部可选——省略时作用于 agent 当前目标视图(navigate/switch_tab 设置)或第一个已开视图。" +
   "典型流程: navigate → (wait 等内容出现) → snapshot 读内容与元素索引 → 按需 type 填表(接 keys:Enter 提交)/ select 选下拉 / upload_file 传附件 / click 点击 / scroll 翻页 / find 精查 / screenshot 截图 / save_pdf 存档;" +
-  "页面超出快照正文上限时用 scroll+snapshot 或 find 检索,避免整页抓取;触发下载后用 downloads 查看进度与保存路径。";
+  "页面超出快照正文上限时用 scroll+snapshot 或 find 检索,避免整页抓取;触发下载后用 downloads 查看进度与保存路径。" +
+  "已明确的多步流程优先 browser_script 一次跑完(逐步调用每步都有工具往返开销),失败时会带上到该步为止的记录便于续跑。";
 
 /**
  * Build the system-prompt section teaching the browser tools — one promptSnippet

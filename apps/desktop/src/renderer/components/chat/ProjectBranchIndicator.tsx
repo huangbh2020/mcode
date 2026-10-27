@@ -31,6 +31,8 @@ import {
   IconCheck,
   IconLoader2,
   IconTag,
+  IconSearch,
+  IconX,
 } from "@renderer/lib/icons.js";
 
 export interface ProjectBranchIndicatorProps {
@@ -42,23 +44,50 @@ export interface ProjectBranchIndicatorProps {
    *  name). Used in the toolbar where space is tight and the thread title
    *  already identifies the session. Defaults to false (full indicator). */
   compact?: boolean;
+  /** Pre-discovered repo list for this project — when provided, skips the
+   *  internal discoverRepos scan so the caller (toolbar quick-commit) and
+   *  this pill share ONE scan. undefined = self-discover (default). */
+  repos?: GitRepo[];
+  /** Pin the shown repo (the toolbar's user-selected one, switchable in the
+   *  quick-commit popover). undefined = show the primary repo (shallowest
+   *  relative path), the historical behavior. */
+  repoOverride?: GitRepo | null;
+  /** Optional custom trigger class to blend seamlessly into segmented capsule layouts. */
+  triggerClassName?: string;
 }
 
 export function ProjectBranchIndicator({
   projectPath,
   projectName,
   compact = false,
+  repos,
+  repoOverride,
+  triggerClassName,
 }: ProjectBranchIndicatorProps) {
   const { t } = useI18n();
-  // Primary repo (best match for project root). null = not a git project.
-  const [repo, setRepo] = useState<GitRepo | null>(null);
+  // Repos found by our own scan (unused when the caller passes `repos`).
+  const [discoveredRepos, setDiscoveredRepos] = useState<GitRepo[] | null>(null);
   const [status, setStatus] = useState<GitStatusResult | null>(null);
   const [branches, setBranches] = useState<GitBranchListResult | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
   const [checkingOut, setCheckingOut] = useState(false);
 
-  /** Re-fetch the current branch + ahead/behind for the primary repo. */
+  /** Primary repo (best match for project root): shallowest relative path
+   *  wins; tiebreak by name for stability. For a project that IS a repo this
+   *  is the project root itself (rel = ""). null = not a git project. */
+  const primary = useMemo(() => {
+    const list = repos ?? discoveredRepos;
+    if (!list || list.length === 0) return null;
+    return list
+      .map((r) => ({ r, rel: relativePath(r.path, projectPath).length }))
+      .sort((a, b) => (a.rel - b.rel) || a.r.name.localeCompare(b.r.name))[0]?.r ?? null;
+  }, [repos, discoveredRepos, projectPath]);
+
+  // Effective repo: the toolbar's pinned selection when given, else primary.
+  const repo = repoOverride !== undefined ? repoOverride : primary;
+
+  /** Re-fetch the current branch + ahead/behind for the shown repo. */
   const refresh = useCallback(async () => {
     if (!repo) {
       setStatus(null);
@@ -72,36 +101,34 @@ export function ProjectBranchIndicator({
     }
   }, [repo]);
 
-  /** Discover the primary repo for this project, then refresh its status.
-   *  Keyed on projectPath so switching projects re-scans. Picks the repo whose
-   *  root is closest to the project path (shallowest relative path) — for a
-   *  project that IS a repo this is the project root itself (rel = ""). */
+  /** Discover the repos for this project when the caller doesn't own the scan.
+   *  Keyed on projectPath so switching projects re-scans. */
   useEffect(() => {
+    if (repos !== undefined) return; // caller-owned scan; nothing to do
     let cancelled = false;
-    setRepo(null);
-    setStatus(null);
-    setBranches(null);
+    setDiscoveredRepos(null);
     (async () => {
       try {
-        const { repos } = await api.git.discoverRepos({ projectPath });
+        const { repos: found } = await api.git.discoverRepos({ projectPath });
         if (cancelled) return;
-        if (repos.length === 0) return; // not a git project
-        // Shallowest relative path wins; tiebreak by name for stability.
-        const primary = repos
-          .map((r) => ({ r, rel: relativePath(r.path, projectPath).length }))
-          .sort((a, b) => (a.rel - b.rel) || a.r.name.localeCompare(b.r.name))[0]?.r ?? null;
-        if (cancelled) return;
-        setRepo(primary);
+        setDiscoveredRepos(found); // empty = not a git project
       } catch {
         // discoverRepos degrades to empty on refusal; nothing more to do.
+        if (!cancelled) setDiscoveredRepos([]);
       }
     })();
     return () => {
       cancelled = true;
     };
+  }, [projectPath, repos]);
+
+  // Project switches invalidate the fetched status + open branch list.
+  useEffect(() => {
+    setStatus(null);
+    setBranches(null);
   }, [projectPath]);
 
-  // Refresh status whenever the primary repo changes.
+  // Refresh status whenever the shown repo changes.
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -175,55 +202,73 @@ export function ProjectBranchIndicator({
         <Menu.Root onOpenChange={(open) => open && void loadBranches()}>
           <Menu.Trigger
             className={cn(
-              "flex shrink-0 items-center gap-0.5 rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[11px] text-content-muted transition-colors",
-              "hover:bg-surface-hover hover:text-content",
+              "flex shrink-0 items-center gap-1.5 rounded font-mono text-[11px] text-content-muted transition-all select-none cursor-pointer",
+              triggerClassName
+                ? triggerClassName
+                : "bg-surface-muted px-2 py-1 hover:bg-surface-hover hover:text-content",
             )}
             title={t("chat.branch.switchTitle")}
           >
-            <IconGitBranch size={11} className="shrink-0 opacity-80" />
-            <span className="max-w-[140px] truncate">{status?.branch || "HEAD"}</span>
-            <IconChevronDown size={10} className="shrink-0 opacity-60" />
+            <IconGitBranch size={12} className="shrink-0 text-accent" />
+            <span className="max-w-[140px] truncate font-medium text-content">
+              {status?.branch || "HEAD"}
+            </span>
+            <IconChevronDown size={11} className="shrink-0 opacity-60" />
           </Menu.Trigger>
           <Menu.Portal>
             <Menu.Positioner side={compact ? "bottom" : "top"} align="start" sideOffset={6}>
               <Menu.Popup
                 className={cn(
-                  "z-50 flex max-h-[320px] w-[300px] max-w-[320px] min-w-[240px] flex-col rounded-md border border-edge bg-surface py-1 shadow-2xl",
+                  "z-[70] flex max-h-[380px] w-[320px] max-w-[340px] min-w-[260px] flex-col rounded-xl border border-edge/80 bg-surface/95 backdrop-blur-md p-1.5 shadow-2xl ring-1 ring-black/5 dark:ring-white/10",
                   "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
                   "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
                   "transition-[transform,opacity] duration-100",
                 )}
               >
-                {/* Search filter (non-menu-item so it doesn't hijack arrow nav). */}
-                <div className="flex items-center gap-1 px-2 pb-1">
+                {/* Search filter with icon & clear button */}
+                <div className="relative flex items-center px-1 pb-1 pt-0.5">
+                  <IconSearch
+                    size={12}
+                    className="pointer-events-none absolute left-3 text-content-subtle"
+                  />
                   <input
                     value={branchQuery}
                     onChange={(e) => setBranchQuery(e.target.value)}
                     onKeyDown={(e) => {
-                      // Stop the Menu from treating arrows/Home/End as item nav.
                       if (["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
                         e.stopPropagation();
                       }
                     }}
                     placeholder={t("chat.branch.searchPlaceholder")}
-                    className="min-w-0 flex-1 rounded border border-edge bg-surface px-1.5 py-0.5 text-[11px] text-content outline-none placeholder:text-content-subtle focus:border-accent"
+                    className={cn(
+                      "min-w-0 flex-1 rounded-lg border border-edge/60 bg-surface-muted/50 py-1 pl-7 pr-7 text-[11px] text-content outline-none",
+                      "placeholder:text-content-subtle focus:border-accent/80 focus:bg-surface focus:ring-1 focus:ring-accent/20 transition-all",
+                    )}
                   />
+                  {branchQuery && (
+                    <button
+                      onClick={() => setBranchQuery("")}
+                      className="absolute right-2.5 flex h-4 w-4 items-center justify-center rounded-full text-content-subtle hover:bg-surface-hover hover:text-content"
+                    >
+                      <IconX size={10} />
+                    </button>
+                  )}
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-y-auto">
+                <div className="min-h-0 flex-1 overflow-y-auto px-0.5">
                   {branchesLoading ? (
-                    <div className="flex items-center justify-center gap-1.5 px-3 py-4 text-[11px] text-content-subtle">
-                      <IconLoader2 size={12} className="animate-spin" />
+                    <div className="flex items-center justify-center gap-1.5 px-3 py-6 text-[11px] text-content-subtle">
+                      <IconLoader2 size={13} className="animate-spin text-accent" />
                       {t("common.loading")}
                     </div>
                   ) : !filteredBranches ? (
-                    <div className="px-3 py-4 text-center text-[11px] text-content-subtle">
+                    <div className="px-3 py-6 text-center text-[11px] text-content-subtle">
                       {t("chat.branch.loadFailed")}
                     </div>
                   ) : (
                     <>
                       {checkingOut && (
-                        <div className="flex items-center justify-center gap-1.5 border-b border-edge px-3 py-1 text-[11px] text-content-subtle">
+                        <div className="flex items-center justify-center gap-1.5 rounded-md bg-accent/10 px-3 py-1.5 text-[11px] font-medium text-accent">
                           <IconLoader2 size={12} className="animate-spin" />
                           {t("chat.branch.switching")}
                         </div>
@@ -231,7 +276,7 @@ export function ProjectBranchIndicator({
                       {filteredBranches.local.length === 0 &&
                         filteredBranches.remote.length === 0 &&
                         filteredBranches.tags.length === 0 && (
-                          <div className="px-3 py-3 text-center text-[11px] text-content-subtle">
+                          <div className="px-3 py-4 text-center text-[11px] text-content-subtle">
                             {branchQuery ? t("chat.branch.noMatch") : t("chat.branch.none")}
                           </div>
                         )}
@@ -307,33 +352,41 @@ function BranchGroup({
     }
   };
   return (
-    <div className="py-0.5">
-      <div className="px-2 py-0.5 text-[10px] uppercase tracking-wide text-content-subtle">
-        {label}
+    <div className="py-1">
+      <div className="flex items-center justify-between px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-content-subtle">
+        <span>{label}</span>
+        <span className="rounded-full bg-surface-muted px-1.5 py-0.2 text-[9px] font-normal tabular-nums text-content-muted">
+          {items.length}
+        </span>
       </div>
-      {items.map((b) => (
-        <Menu.Item
-          key={`${b.type}/${b.name}`}
-          onClick={() => handleClick(b)}
-          className={cn(
-            "flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] outline-none select-none",
-            "data-[highlighted]:bg-surface-muted",
-            b.current ? "text-accent" : "text-content-muted",
-          )}
-        >
-          <span className="shrink-0 opacity-80">{icon ?? <IconGitBranch size={11} />}</span>
-          <span className="min-w-0 flex-1 truncate font-mono">{b.name}</span>
-          {b.label && (
-            <span
-              className="min-w-0 max-w-[120px] truncate text-[10px] text-content-subtle"
-              title={b.label}
-            >
-              {b.label}
+      <div className="mt-0.5 space-y-0.5">
+        {items.map((b) => (
+          <Menu.Item
+            key={`${b.type}/${b.name}`}
+            onClick={() => handleClick(b)}
+            className={cn(
+              "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] outline-none select-none transition-colors",
+              b.current
+                ? "bg-accent/10 font-medium text-accent"
+                : "text-content-muted data-[highlighted]:bg-surface-hover/80 data-[highlighted]:text-content",
+            )}
+          >
+            <span className={cn("shrink-0", b.current ? "text-accent" : "opacity-70")}>
+              {icon ?? <IconGitBranch size={12} />}
             </span>
-          )}
-          {b.current && <IconCheck size={11} className="shrink-0" />}
-        </Menu.Item>
-      ))}
+            <span className="min-w-0 flex-1 truncate font-mono">{b.name}</span>
+            {b.label && (
+              <span
+                className="min-w-0 max-w-[120px] truncate text-[10px] text-content-subtle opacity-75"
+                title={b.label}
+              >
+                {b.label}
+              </span>
+            )}
+            {b.current && <IconCheck size={12} className="shrink-0 text-accent" />}
+          </Menu.Item>
+        ))}
+      </div>
     </div>
   );
 }
