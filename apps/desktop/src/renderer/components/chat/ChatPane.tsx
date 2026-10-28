@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useLayoutEffect, useMemo, memo, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useMemo, memo, useCallback, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
 import { Menu } from "@base-ui/react/menu";
 import {
@@ -1256,6 +1257,7 @@ export const ChatPane = memo(
     isActive = true,
     chipsMode = "auto",
     hideComposer = false,
+    composerPortalTarget = null,
     targetMessageId = null,
   }: {
     sessionId: string | null;
@@ -1271,6 +1273,13 @@ export const ChatPane = memo(
      *  question / plan prompts — those are decisions, not free input, and an
      *  unattended task may legitimately wait on them. */
     hideComposer?: boolean;
+    /** Split-view bottom strip: when provided (the focused pane only), the
+     *  whole composer column — pending prompts, chips row, input card and
+     *  its anchored pickers — renders through a portal into this element so
+     *  the ONE shared input box spans the full width under the grid. Draft
+     *  state survives the pane switches: composerDraftBySession restores
+     *  text/html/tags on the remount that a portal-target change causes. */
+    composerPortalTarget?: HTMLElement | null;
     /** Target message ID to scroll and align to on mount or change. */
     targetMessageId?: string | null;
   }) {
@@ -1291,6 +1300,7 @@ export const ChatPane = memo(
         isActive={isActive}
         chipsMode={chipsMode}
         hideComposer={hideComposer}
+        composerPortalTarget={composerPortalTarget}
         targetMessageId={targetMessageId}
       />
     );
@@ -1300,6 +1310,7 @@ export const ChatPane = memo(
     prev.isActive === next.isActive &&
     prev.chipsMode === next.chipsMode &&
     prev.hideComposer === next.hideComposer &&
+    prev.composerPortalTarget === next.composerPortalTarget &&
     prev.targetMessageId === next.targetMessageId,
 );
 
@@ -1403,17 +1414,31 @@ function UpstreamRetryHint({
   );
 }
 
+/** Renders children in place — or through a React portal into `target` when
+ *  provided. Split-view bottom strip: the focused pane's whole composer
+ *  column (pending prompts + chips row + input card + anchored pickers)
+ *  relocates below the grid so the ONE shared input box spans the full
+ *  width. A portal-target change remounts the subtree; the composer draft
+ *  survives via composerDraftBySession's restore effect (text/html/tags —
+ *  Tiptap undo history and open picker state do not). */
+function ComposerPortal({ target, children }: { target: HTMLElement | null; children: ReactNode }) {
+  if (target) return createPortal(children, target);
+  return <>{children}</>;
+}
+
 function ChatPaneForSession({
   sessionId,
   isActive,
   chipsMode = "auto",
   hideComposer = false,
+  composerPortalTarget = null,
   targetMessageId = null,
 }: {
   sessionId: string;
   isActive: boolean;
   chipsMode?: ComposerChipsMode;
   hideComposer?: boolean;
+  composerPortalTarget?: HTMLElement | null;
   targetMessageId?: string | null;
 }) {
   const { t, locale } = useI18n();
@@ -4462,10 +4487,20 @@ function ChatPaneForSession({
       )}
       </div>
 
+      {/* Split-view portal mode: with no composer column left in the pane,
+          the empty-thread welcome centers over the pane's stream area
+          instead of riding along into the bottom strip. */}
+      {empty && composerPortalTarget && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <EmptyThreadWelcome projectName={projectName} />
+        </div>
+      )}
+
       {/* Input box — fixed at the bottom (outside the scroll container) so
           the user always has access to the composer. No border-t divider:
           the box sits flush against the message area. When the session is
           empty the wrapper takes flex-1 and centers the box vertically. */}
+      <ComposerPortal target={composerPortalTarget}>
       <div className={cn(
         "relative px-[var(--chat-gutter)]",
         empty
@@ -4473,7 +4508,7 @@ function ChatPaneForSession({
           : "shrink-0 pb-3",
       )}>
         <div className={cn("relative w-full", empty ? "max-w-4xl" : "mx-auto max-w-5xl pt-5")}>
-          {empty && (
+          {empty && !composerPortalTarget && (
             <EmptyThreadWelcome projectName={projectName} />
           )}
           {/* Plan-approval card (ExitPlanMode) - the model drafted a plan in
@@ -5067,6 +5102,7 @@ function ChatPaneForSession({
           </Menu.Root>
         </div>
       </div>
+      </ComposerPortal>
 
       {/* Retract (撤回) confirmation — two-step guard for a destructive,
           context-rewriting operation: the message AND every later turn are

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type RefObject } from "react";
+import { lazy, Suspense, useCallback, useEffect, useReducer, useRef, useState, type RefObject } from "react";
 import Editor, { DiffEditor, useMonaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { api } from "@renderer/lib/api.js";
@@ -53,6 +53,8 @@ import {
 // Side-effect import: configures Monaco's worker environment + local instance
 // (no CDN). Must run before any <Editor> mounts. See monacoSetup.ts.
 import "@renderer/lib/monacoSetup.js";
+// PDF preview — lazy so the pdf.js main library only loads when a PDF opens.
+const PdfPreviewPane = lazy(() => import("./PdfPreviewPane.js"));
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import type { MessageId } from "@renderer/lib/i18n/core.js";
 import { setLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
@@ -97,6 +99,7 @@ export function FileEditor({
 }) {
   // View mode is scoped to the active project's bucket.
   const pid = useSessionStore((s) => s.activeProjectId);
+  const { t } = useI18n();
   const viewMode = useSessionStore((s) =>
     pid ? s.ideFileViewModeByProject[pid]?.[filePath] ?? "edit" : "edit",
   );
@@ -147,6 +150,7 @@ export function FileEditor({
   const markdown = isMarkdown(filePath);
   const image = isImage(filePath);
   const video = isVideo(filePath);
+  const pdf = isPdf(filePath);
   const unsupported = isUnsupported(filePath);
 
   return (
@@ -160,6 +164,7 @@ export function FileEditor({
         isMarkdown={markdown}
         isImage={image}
         isVideo={video}
+        isPdf={pdf}
         isUnsupported={unsupported}
         onSelectViewMode={(m) => setViewMode(filePath, m)}
         diffStats={diffStats}
@@ -181,6 +186,17 @@ export function FileEditor({
             <ImagePreviewPane filePath={filePath} projectPath={projectPath} />
           ) : video ? (
             <VideoPreviewPane filePath={filePath} />
+          ) : pdf ? (
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
+                  <IconLoader2 size={12} className="animate-spin" />
+                  {t("ide.editor.readingPdf")}
+                </div>
+              }
+            >
+              <PdfPreviewPane filePath={filePath} />
+            </Suspense>
           ) : unsupported ? (
             <UnsupportedPane filePath={filePath} />
           ) : (
@@ -208,6 +224,7 @@ function EditorToolbar({
   isMarkdown,
   isImage,
   isVideo,
+  isPdf,
   isUnsupported,
   onSelectViewMode,
   diffStats,
@@ -223,6 +240,7 @@ function EditorToolbar({
   isMarkdown: boolean;
   isImage: boolean;
   isVideo: boolean;
+  isPdf: boolean;
   isUnsupported: boolean;
   onSelectViewMode: (mode: "edit" | "preview") => void;
   /** Diff-hunk position + total, reported live by DiffPane (null until the
@@ -298,10 +316,10 @@ function EditorToolbar({
   const navBackTitle = withChord("editor.nav-back", t("ide.editor.navBack"));
   const navForwardTitle = withChord("editor.nav-forward", t("ide.editor.navForward"));
   // Files that default to a read-only preview pane (markdown rendered, image
-  // displayed, video played, or an unsupported-type notice). These get a
-  // Preview/Edit toggle so the user can still drop into the raw Monaco
-  // editor if they want.
-  const hasPreviewToggle = isMarkdown || isImage || isVideo || isUnsupported;
+  // displayed, video played, PDF rendered, or an unsupported-type notice).
+  // These get a Preview/Edit toggle so the user can still drop into the raw
+  // Monaco editor if they want.
+  const hasPreviewToggle = isMarkdown || isImage || isVideo || isPdf || isUnsupported;
   // Show the path relative to the project root when possible (cleaner in the
   // narrow toolbar); fall back to the full path. Case-insensitive on Windows/
   // macOS so a lowercased drive letter from LSP (`d:\foo`) still matches a
@@ -1685,7 +1703,7 @@ function VideoPreviewPane({ filePath }: { filePath: string }) {
 /* ───────────────────────── Unsupported-file pane ───────────────────────── */
 
 /** Friendly "can't preview" pane for binary file types the editor can't handle
- *  (Office docs, archives, binaries, audio/video, fonts, PDF). Shows the file
+ *  (Office docs, archives, binaries, audio, fonts). Shows the file
  *  type, a short explanation, and an "open externally" hint. Read-only, no
  *  Monaco - loading these as utf-8 would show garbled bytes. */
 function UnsupportedPane({ filePath }: { filePath: string }) {
@@ -2281,6 +2299,13 @@ function isVideo(filePath: string): boolean {
   }
 }
 
+/** True for PDF files the editor renders with pdf.js (PdfPreviewPane, lazy
+ *  chunk). Mirrors `isPdfPath` in sessionStore.ts (first-open preview
+ *  default) — keep the lists in sync. */
+function isPdf(filePath: string): boolean {
+  return extname(filePath) === ".pdf";
+}
+
 /** True for binary file types the editor can neither edit (Monaco is text-only)
  *  nor meaningfully preview (no built-in renderer). These get a friendly
  *  "can't preview" pane instead of garbled Monaco content. Covers Office docs,
@@ -2332,8 +2357,6 @@ function isUnsupported(filePath: string): boolean {
     case ".ttf":
     case ".otf":
     case ".eot":
-    // PDF (no built-in viewer; could add one later)
-    case ".pdf":
       return true;
     default:
       return false;

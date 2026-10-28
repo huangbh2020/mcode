@@ -172,20 +172,22 @@ export function Titlebar({
               // footer button is inside the hidden sidebar, so this is the
               // only mouse path back (beyond the toggle-left shortcut).
               !leftOpen && (
-                <button
-                  onClick={onToggleLeft}
-                  className={cn(
-                    "flex items-center justify-center rounded p-1.5 transition-colors",
-                    "text-content-muted hover:bg-surface-hover hover:text-content",
-                  )}
-                  title={t("layout.showLeftPanel") + hintFor("layout.toggle-left")}
-                  style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-                >
-                  <IconLayoutSidebarLeftExpand
-                    size={18}
-                    className="shrink-0 scale-x-[-1]"
-                  />
-                </button>
+                <>
+                  <button
+                    onClick={onToggleLeft}
+                    className={cn(
+                      "flex items-center justify-center rounded p-1.5 transition-colors",
+                      "text-content-muted hover:bg-surface-hover hover:text-content",
+                    )}
+                    title={t("layout.showLeftPanel") + hintFor("layout.toggle-left")}
+                    style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                  >
+                    <IconLayoutSidebarLeftExpand
+                      size={18}
+                      className="shrink-0 scale-x-[-1]"
+                    />
+                  </button>
+                </>
               )
             )}
             <ActiveThreadTitle />

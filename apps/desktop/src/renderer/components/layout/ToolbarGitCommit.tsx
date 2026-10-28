@@ -595,18 +595,18 @@ export function ToolbarGitCommit() {
                 </div>
               </div>
 
-              {/* Footer actions: note + commit buttons */}
-              <div className="flex items-center gap-1.5 pt-0.5">
+              {/* Footer actions: note on its own line + commit buttons row */}
+              <div className="flex flex-col gap-1.5 pt-0.5">
                 <span className="text-[10px] leading-tight text-content-subtle">
                   {t("layout.gitCommit.stageNote")}
                 </span>
-                <div className="flex-1" />
 
+                <div className="flex items-center justify-end gap-1.5">
                 <button
                   onClick={() => void handleCommit(false)}
                   disabled={!canCommit}
                   className={cn(
-                    "flex items-center gap-1 rounded-md border border-edge/80 bg-surface px-2.5 py-1 text-xs font-medium text-content transition-all",
+                    "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-edge/80 bg-surface px-2.5 py-1 text-xs font-medium text-content transition-all",
                     "hover:bg-surface-hover active:scale-95",
                     "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-surface",
                   )}
@@ -624,7 +624,7 @@ export function ToolbarGitCommit() {
                   disabled={!canCommit}
                   title={t("layout.gitCommit.commitPush")}
                   className={cn(
-                    "flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white shadow-xs transition-all",
+                    "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white shadow-xs transition-all",
                     "hover:bg-accent/90 active:scale-95",
                     "disabled:cursor-not-allowed disabled:opacity-40",
                   )}
@@ -636,6 +636,7 @@ export function ToolbarGitCommit() {
                   )}
                   <span>{t("layout.gitCommit.commitPush")}</span>
                 </button>
+                </div>
               </div>
 
               {/* Inline error feedback */}

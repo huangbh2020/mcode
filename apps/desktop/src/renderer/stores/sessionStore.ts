@@ -43,6 +43,7 @@ import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeCh
 import { sanitizeFontFamily } from "@renderer/lib/theme.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
+  SPLIT_SESSIONS_SETTING_KEY,
   TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
   INLINE_FILE_MENTION_SETTING_KEY,
@@ -233,8 +234,14 @@ function isVideoPath(filePath: string): boolean {
   ].some((ext) => lower.endsWith(ext));
 }
 
+/** True for PDF files the editor renders with pdf.js (PdfPreviewPane).
+ *  Mirrors `isPdf()` in FileEditor.tsx — keep in sync. */
+function isPdfPath(filePath: string): boolean {
+  return filePath.toLowerCase().endsWith(".pdf");
+}
+
 /** True for binary file types the editor can neither edit nor preview (Office
- *  docs, archives, binaries, audio, fonts, PDF). Mirrors `isUnsupported()`
+ *  docs, archives, binaries, audio, fonts). Mirrors `isUnsupported()`
  *  in FileEditor.tsx. These default to preview mode so the user sees the
  *  "can't preview" notice instead of garbled Monaco content. */
 function isUnsupportedPath(filePath: string): boolean {
@@ -247,7 +254,6 @@ function isUnsupportedPath(filePath: string): boolean {
     ".mp3", ".ogg", ".flac", ".wav", ".m4a",
     ".db", ".sqlite", ".sqlite3",
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
-    ".pdf",
   ].some((ext) => lower.endsWith(ext));
 }
 
@@ -298,11 +304,20 @@ function currentNavEntryFor(get: () => SessionState): NavEntry | null {
  *  wide-panel mode where ChatColumn still shows the chat) has handed the
  *  center to the editor, hiding the active session's pane behind it. In
  *  that state noteworthy events (turn done / approval needed) must badge
- *  and toast again, or they'd be silently missed. */
+ *  and toast again, or they'd be silently missed. Split-view members are
+ *  ALL visibly mounted while their grid shows: always in `single`
+ *  (membership ≥2 renders the grid), in `tabs` while their per-tab group
+ *  owns the center (the active tab's group) — a group of an INACTIVE tab
+ *  is not visible and its members still badge/toast. */
 function isSessionChatOnScreen(
   sid: string,
-  s: Pick<SessionState, "activeSessionId" | "displayMode" | "tabsFilePreviewPlacement" | "centerTabFocus" | "widePanelOpen">,
+  s: Pick<SessionState, "activeSessionId" | "displayMode" | "tabsFilePreviewPlacement" | "centerTabFocus" | "widePanelOpen" | "splitSessionIds" | "splitGroupsBySession">,
 ): boolean {
+  if (s.displayMode === "single" && s.splitSessionIds.includes(sid)) return true;
+  if (s.displayMode === "tabs" && s.activeSessionId) {
+    const group = activeTabsModeSplitGroup(s);
+    if (group) return group.includes(sid);
+  }
   if (sid !== s.activeSessionId) return false;
   return !(
     s.displayMode === "tabs" &&
@@ -310,6 +325,35 @@ function isSessionChatOnScreen(
     s.centerTabFocus === "editor" &&
     !s.widePanelOpen
   );
+}
+
+/** The split group currently owning the tabs-mode center: the group of the
+ *  focused session — either it IS a tab with a group, or it's a member pane
+ *  of some tab's group. Undefined when nothing is split or the focused
+ *  session has no group (plain tab view). */
+function activeTabsModeSplitGroup(s: Pick<SessionState, "activeSessionId" | "splitGroupsBySession">): string[] | undefined {
+  const a = s.activeSessionId;
+  if (!a) return undefined;
+  const own = s.splitGroupsBySession[a];
+  if (own) return own;
+  for (const members of Object.values(s.splitGroupsBySession)) {
+    if (members.includes(a)) return members;
+  }
+  return undefined;
+}
+
+/** The tab (root session id) whose content a tabs-mode split gesture
+ *  targets: the focused session's own tab, or the tab whose group holds the
+ *  focused pane. Null when the focused session is neither an open tab nor a
+ *  group member (nothing to split). */
+function activeTabsModeSplitRoot(s: Pick<SessionState, "activeSessionId" | "openTabs" | "splitGroupsBySession">): string | null {
+  const a = s.activeSessionId;
+  if (!a) return null;
+  if (s.openTabs.includes(a)) return a;
+  for (const [root, members] of Object.entries(s.splitGroupsBySession)) {
+    if (members.includes(a)) return root;
+  }
+  return null;
 }
 
 /** True when `sid` belongs to a loaded side chat (any parent's bucket in
@@ -828,6 +872,28 @@ export interface SessionState {
   openTabs: string[];
   /** How the center pane renders. Persisted in the `settings` table. */
   displayMode: DisplayMode;
+  /** Split-view membership in `single` displayMode: the ordered sessionIds
+   *  rendered simultaneously in the center 2×2 grid (2 = side-by-side, 3 =
+   *  top row + bottom-left, 4 = full grid). Invariant: length is 0 or ≥ 2 —
+   *  collapsing below 2 clears the grid entirely. Persisted under
+   *  `ui.splitSessions` (dead ids dropped at hydration). Focus inside the
+   *  grid IS `activeSessionId`: clicking a pane runs the normal activation
+   *  chain, so the composer slots / title bar / git toolbar / right panel
+   *  all follow the focused pane with zero extra wiring. */
+  splitSessionIds: string[];
+  /** Per-tab split groups in `tabs` displayMode: a session TAB can itself
+   *  host a 2×2 grid — dragging a sidebar session onto the open tab splits
+   *  THAT tab in place (single-mode style) WITHOUT opening the dragged
+   *  session as a tab. Keyed by the tab's own (root) session id; the value
+   *  is the ordered grid members INCLUDING the root. Invariant: an entry
+   *  exists only while it has ≥ 2 members (collapsing dissolves it, the
+   *  tab reverts to its plain pane). In-memory only — openTabs is
+   *  in-memory too, so groups naturally die with the tab strip across
+   *  restarts. Focus inside the group is still plain `activeSessionId`
+   *  (it can be a non-tab member pane — the tab whose group contains the
+   *  focused session is the "active tab" for strip highlighting and
+   *  center rendering; see activeTabsModeSplitRoot). */
+  splitGroupsBySession: Record<string, string[]>;
   /** In `tabs` displayMode: whether file previews open in the center unified
    *  tab bar ("center", default) or in the right sidebar's dual-column preview ("sidebar").
    *  Persisted in the `settings` table under `ui.tabsFilePreviewPlacement`. */
@@ -1105,6 +1171,13 @@ export interface SessionState {
    *  left-edge trigger strip in App.tsx; dismissed by mouse-leave grace,
    *  scrim click, or collapseLeftPanel. */
   leftPeekOpen: boolean;
+  /** Right-panel hover-peek drawer is slid in. Only meaningful while
+   *  rightOpen=false and the workspace is visible: the mounted aside presents
+   *  as a fixed floating overlay (no layout space) instead of the pinned
+   *  in-flow panel. NOT persisted (pure interaction state). Set by the
+   *  right-edge trigger strip in App.tsx; dismissed by mouse-leave grace,
+   *  scrim click, or pinning the panel. Mirror of leftPeekOpen. */
+  rightPeekOpen: boolean;
   /** Right (IDE) panel visibility. Lifted from App.tsx local state. NOT persisted.
    *  `ideFocusNonce` bumps still drive this to `true` (the App effect now
    *  calls setRightOpen(true) instead of touching local state). */
@@ -1762,6 +1835,20 @@ export interface SessionState {
    *  entry point in both display modes — the difference is purely
    *  cosmetic (single mode hides the tab strip, tabs mode shows it). */
   openTab: (sessionId: string) => Promise<void>;
+  /** Split-open gesture, mode-aware — see `splitSessionIds` (single) and
+   *  `splitGroupsBySession` (tabs) for the two membership models. Guards
+   *  shared by both: unknown session → no-op; a 4-pane grid → silent
+   *  reject; dropping a session already in the target grid → focus its
+   *  pane. Tabs mode NEVER opens the dragged session as a tab — the split
+   *  happens inside the currently open tab. */
+  addToSplit: (sessionId: string) => Promise<void>;
+  removeFromSplit: (sessionId: string) => Promise<void>;
+  /** Sidebar / palette session click. In split view (single displayMode,
+   *  ≥ 2 members) a click on a session NOT on the grid REPLACES the focused
+   *  pane's slot (VS Code active-editor-group semantics: the center shows
+   *  what you last clicked, and the arrangement stays a grid); a member
+   *  click just focuses its pane. Outside split view it's a plain openTab. */
+  openSessionFromSidebar: (sessionId: string) => Promise<void>;
   /** Load a session's first page of persisted messages WITHOUT activating
    *  it. Used for hover-prefetch from the sidebar so that by the time the
    *  click lands the bucket is already warm (or in flight) and the center
@@ -1944,6 +2031,9 @@ export interface SessionState {
   collapseLeftPanel: () => void;
   /** Toggle the right IDE panel open/closed (direct set). NOT persisted. */
   setRightOpen: (open: boolean) => void;
+  /** Slide the right-panel hover-peek drawer in/out (only visible while
+   *  rightOpen=false). NOT persisted. Mirror of setLeftPeekOpen. */
+  setRightPeekOpen: (open: boolean) => void;
   /** Toggle the bottom terminal bar open/closed (direct set). NOT persisted. */
   setBottomTerminalOpen: (open: boolean) => void;
   /** Toggle the browser panel open/closed (direct set). NOT persisted. */
@@ -3195,15 +3285,98 @@ const MESSAGE_PAGE_SIZE = 200;
 
 /** Web transport (phone) page sizes. Every page crosses the network — often
  *  an off-LAN tunnel at a few Mbps — and long sessions carry heavy tool_use
- *  blocks, so a heavy page is still multi-MB even gzipped. The FIRST page is
- *  deliberately tiny: the user lands at the bottom and wants the recent
- *  tail visible fast; older pages are fetched as they scroll up (ChatPane's
+ *  blocks, so even a single page can run to megabytes. The FIRST page is
+ *  deliberately tiny: the user lands at the bottom and wants the recent tail
+ *  visible fast; older pages are fetched as they scroll up (ChatPane's
  *  near-top trigger) at a larger size to amortize round trips during active
- *  reading. Desktop keeps the IPC-sized 200 for both. */
-const MOBILE_FIRST_MESSAGE_PAGE_SIZE = 40;
-const MOBILE_OLDER_MESSAGE_PAGE_SIZE = 100;
+ *  reading. 2026-10-28: halved 40/100 → 20/40 — real-world relay reports had
+ *  40-row first pages stalling past the RPC deadline on slow links, which
+ *  left a running thread showing ONLY its live SSE tail and an idle one the
+ *  empty welcome screen (see prefetchSessionMessages's bounded retry and
+ *  webApi's dedicated session:messages deadline). Desktop keeps the
+ *  IPC-sized 200 for both. */
+const MOBILE_FIRST_MESSAGE_PAGE_SIZE = 20;
+const MOBILE_OLDER_MESSAGE_PAGE_SIZE = 40;
 const FIRST_MESSAGE_PAGE_SIZE = isWebTransport ? MOBILE_FIRST_MESSAGE_PAGE_SIZE : MESSAGE_PAGE_SIZE;
 const OLDER_MESSAGE_PAGE_SIZE = isWebTransport ? MOBILE_OLDER_MESSAGE_PAGE_SIZE : MESSAGE_PAGE_SIZE;
+
+/** Bounded auto-retry bookkeeping for `prefetchSessionMessages` (module-level:
+ * transient bookkeeping, deliberately not store state). On flaky phone links
+ * the first-page fetch dies at the transport level often enough that a silent
+ * one-shot attempt strands the thread — and a retry STORM after a hard
+ * outage (PC asleep) is just as bad, hence the burst window: failures older
+ * than the window reset the budget, so a later manual reopen retries fresh. */
+interface PrefetchRetryState {
+  count: number;
+  lastAt: number;
+}
+const prefetchRetries: Record<string, PrefetchRetryState> = {};
+const PREFETCH_RETRY_DELAY_MS = 2_000;
+const PREFETCH_MAX_RETRIES = 2;
+const PREFETCH_RETRY_WINDOW_MS = 60_000;
+
+/** SSE (re)connect tail catch-up (mobile only). The mobile event bus is
+ *  UNBUFFERED: turns that started AND finished while this client was
+ *  disconnected (a backgrounded phone, a tunnel flap) exist only in the DB —
+ *  their events are never replayed, `turn.done` included. Threads already
+ *  hydrated here never re-fetch (historyLoadedBySession gates the first-page
+ *  prefetch), so their buckets silently go stale. The server pushes
+ *  `session.runningSnapshot` as the FIRST frame of every (re)connect — the
+ *  perfect hook to union-merge a fresh first page into every loaded thread
+ *  (same merge semantics as prefetchSessionMessages: live copy wins on id
+ *  conflicts, additions append, (createdAt,id) order). Throttled + in-flight
+ *  guarded: EventSource auto-reconnects on every network blip and the
+ *  catch-up must not become a fetch storm. */
+let sseTailRefreshInFlight = false;
+let sseTailRefreshAt = 0;
+const SSE_TAIL_REFRESH_MIN_INTERVAL_MS = 10_000;
+
+async function refreshLoadedTailsOnReconnect(
+  set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  get: () => SessionState,
+): Promise<void> {
+  if (!isWebTransport) return; // defensive: the snapshot only rides SSE anyway
+  const now = Date.now();
+  if (sseTailRefreshInFlight) return;
+  if (now - sseTailRefreshAt < SSE_TAIL_REFRESH_MIN_INTERVAL_MS) return;
+  sseTailRefreshInFlight = true;
+  sseTailRefreshAt = now;
+  try {
+    const ids = Object.keys(get().historyLoadedBySession).filter(
+      (id) => get().historyLoadedBySession[id] === true,
+    );
+    await Promise.all(
+      ids.map(async (sessionId) => {
+        try {
+          const { messages } = await api.session.messages({
+            sessionId,
+            limit: FIRST_MESSAGE_PAGE_SIZE,
+          });
+          const live = get().messagesBySession[sessionId];
+          if (!live || live.length === 0) return; // empty local thread — nothing to catch up
+          const fetched = fromRecords(messages);
+          const byId = new Map(fetched.map((m) => [m.id, m]));
+          const extras: ChatMessage[] = [];
+          for (const m of live) {
+            if (byId.has(m.id)) byId.set(m.id, m);
+            else extras.push(m);
+          }
+          const merged = [...byId.values(), ...extras].sort(
+            (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+          );
+          if (merged.length === live.length && merged.every((m, i) => m === live[i])) return;
+          set((s) => ({
+            messagesBySession: { ...s.messagesBySession, [sessionId]: merged },
+          }));
+        } catch {
+          // Per-session failure is fine — the next reconnect retries.
+        }
+      }),
+    );
+  } finally {
+    sseTailRefreshInFlight = false;
+  }
+}
 
 /** Find a session across the active per-project caches, the archived bin,
  *  the global pinned bucket, and the stream sidebar's cross-project
@@ -3266,6 +3439,34 @@ function findSession(
   // detail) live in no list cache by design — their dedicated map is the
   // final fallback so tabs/titles/config-sync resolve.
   return workersById?.[id];
+}
+
+/** Fire-and-forget persistence of the split-view membership. Same policy as
+ *  the other UI-pref setters: a failed write keeps the in-memory state and
+ *  logs; the next mutation retries. */
+function persistSplitSessions(ids: string[]) {
+  api.setting
+    .set({ key: SPLIT_SESSIONS_SETTING_KEY, value: JSON.stringify(ids) })
+    .catch((err) => console.error("setting.set(splitSessions) failed:", err));
+}
+
+/** Parse + validate a persisted `ui.splitSessions` blob (JSON string array)
+ *  against a session-lookup predicate. Dead ids drop silently; a remainder
+ *  below 2 collapses to [] (the store's 0-or-≥2 invariant — one pane is not
+ *  a split). Exported for the split-view smoke. */
+export function parseSplitSessionIds(
+  raw: string | null | undefined,
+  exists: (id: string) => boolean,
+): string[] {
+  let parsed: unknown;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const valid = parsed.filter((x): x is string => typeof x === "string").filter(exists);
+  return valid.length >= 2 ? valid : [];
 }
 
 /** Look up a session's kind across every list cache (project windows, pinned,
@@ -3777,6 +3978,39 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   const idx = s.openTabs.indexOf(id);
   const openTabs = idx === -1 ? s.openTabs : s.openTabs.filter((sid) => sid !== id);
   const wasActive = s.activeSessionId === id;
+  // Split-view membership cleanup, both modes:
+  //  - single: a deleted pane leaves the global grid; a remainder below 2
+  //    collapses to no grid at all (removeFromSplit's invariant).
+  //  - tabs: the pane leaves its per-tab group; a group losing its root or
+  //    dropping below 2 members dissolves entirely (the tab reverts to its
+  //    plain pane).
+  const splitIdx = s.splitSessionIds.indexOf(id);
+  const nextSplit =
+    splitIdx === -1 ? s.splitSessionIds : s.splitSessionIds.filter((sid) => sid !== id);
+  const collapsedSplit = nextSplit.length < 2 ? [] : nextSplit;
+  const splitPatch =
+    collapsedSplit === s.splitSessionIds ? {} : { splitSessionIds: collapsedSplit };
+  let nextGroups: Record<string, string[]> | null = null;
+  let deletedGroupSuccessor: string | null = null;
+  for (const [root, members] of Object.entries(s.splitGroupsBySession)) {
+    if (!members.includes(id)) continue;
+    if (!nextGroups) nextGroups = { ...s.splitGroupsBySession };
+    const idx = members.indexOf(id);
+    const next = members.filter((m) => m !== id);
+    if (next.length < 2 || !next.includes(root)) {
+      delete nextGroups[root];
+      // A dissolved group hands focus to a surviving member (else the root).
+      if (s.activeSessionId === id) {
+        deletedGroupSuccessor = next[idx] ?? next[idx - 1] ?? root;
+      }
+    } else {
+      nextGroups[root] = next;
+      if (s.activeSessionId === id) {
+        deletedGroupSuccessor = next[idx] ?? next[idx - 1] ?? root;
+      }
+    }
+  }
+  const groupsPatch = nextGroups ? { splitGroupsBySession: nextGroups } : {};
   if (!wasActive) {
     return {
       sessionsByProject,
@@ -3790,12 +4024,23 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
       ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
       openTabs,
       streamDirty: true,
+      ...splitPatch,
+      ...groupsPatch,
     };
   }
   // Was the active tab. Land on the previous tab if any, otherwise the
   // new tail, otherwise null (empty-state placeholder).
   let nextActive: string | null = null;
-  if (openTabs.length > 0) {
+  if (collapsedSplit.length >= 2) {
+    // The single-mode grid survives the delete: focus a neighboring pane so
+    // the activation (slots / title bar / right panel) stays on a VISIBLE
+    // session instead of a background tab.
+    nextActive = nextSplit[splitIdx] ?? nextSplit[splitIdx - 1] ?? nextSplit[0] ?? null;
+  } else if (deletedGroupSuccessor) {
+    // The tabs-mode group survives (or dissolved onto its root): focus a
+    // neighboring pane / the root instead of a background tab.
+    nextActive = deletedGroupSuccessor;
+  } else if (openTabs.length > 0) {
     nextActive = idx > 0 ? openTabs[idx - 1] : openTabs[0];
   }
   const isActiveProject = projectId === s.activeProjectId;
@@ -3825,6 +4070,8 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     ...(hadSideChats ? { sideChatsByParent } : {}),
     ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
     openTabs,
+    ...splitPatch,
+    ...groupsPatch,
     // `sessions` aliases the ACTIVE PROJECT's list — never assign a bucket
     // the row was removed from (stream aggregate / pinned) into it; those
     // rows weren't part of the project window, which stays untouched.
@@ -4039,6 +4286,47 @@ function resolveSendModel(
   const builtins = provider.capabilities.builtinModels ?? [];
   const first = builtins.find((b) => b.id !== "default") ?? builtins[0];
   return first ? { model: first.id, customModelId: null } : null;
+}
+
+/** Split-view correctness helper: for a send whose explicit target is a
+ *  session OTHER than the active one (queued-prompt drain, edit-and-resend
+ *  from a background pane), return that session's row — the send must carry
+ *  the ROW's own model/effort/permission/provider binding, because the
+ *  global composer slots describe the FOCUSED session and the chips can
+ *  only ever edit the active one. Undefined (= use the global slots) for
+ *  the active session, for default-target sends, and for unknown ids. */
+function findNonActiveSendRow(
+  s: Pick<SessionState, "activeSessionId" | "sessionsByProject" | "archivedSessionsByProject" | "pinnedSessions" | "streamSessions" | "orchWorkersById">,
+  sessionIdArg: string | null | undefined,
+): Session | undefined {
+  if (!sessionIdArg || sessionIdArg === s.activeSessionId) return undefined;
+  return findSession(
+    s.sessionsByProject,
+    s.archivedSessionsByProject,
+    s.pinnedSessions,
+    s.streamSessions,
+    sessionIdArg,
+    s.orchWorkersById,
+  );
+}
+
+/** Row-scoped `resolveSendModel` variant: resolves the binding a NON-active
+ *  target session would send with, by projecting its row fields onto the
+ *  resolver's slot shape. Pure reuse of resolveSendModel's branch table. */
+function resolveSendModelForRow(
+  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels">,
+  row: Session,
+): { model: string; customModelId: string | null } | null {
+  return resolveSendModel({
+    model: row.model,
+    customModelId: row.customModelId,
+    providerId: row.providerId,
+    providers: s.providers,
+    customModels: s.customModels,
+    piAvailableModels: s.piAvailableModels,
+    codexAvailableModels: s.codexAvailableModels,
+    opencodeAvailableModels: s.opencodeAvailableModels,
+  });
 }
 
 /** Whether the active provider has ANY selectable model (regardless of
@@ -5526,6 +5814,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // `tabs` (unified tab bar) — new users land on the tabbed center pane;
   // anyone who explicitly picked a mode keeps their stored choice.
   displayMode: "tabs",
+  // Split-view grid membership (both display modes — see the field docs).
+  // [] until init validates the persisted `ui.splitSessions` blob against
+  // the loaded session lists; invariant: 0 or ≥ 2 members.
+  splitSessionIds: [],
+  // Per-tab split groups (tabs displayMode) — see the field docs. Empty
+  // until the user drags a session onto an open tab; in-memory only.
+  splitGroupsBySession: {},
   tabsFilePreviewPlacement: "center",
   // Tab strips wrap onto multiple rows instead of horizontal scrolling.
   // Persisted under `ui.tabBarMultiRow`; init() overwrites from the DB.
@@ -5633,6 +5928,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   leftOpen: true,
   // Hover-peek drawer starts parked (the aside is either in-flow or hidden).
   leftPeekOpen: false,
+  rightPeekOpen: false,
   rightOpen: false,
   bottomTerminalOpen: false,
   terminalPosition: "right",
@@ -5803,6 +6099,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       .getMany({
         keys: [
           DISPLAY_MODE_SETTING_KEY,
+          SPLIT_SESSIONS_SETTING_KEY,
           TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
           TAB_BAR_MULTI_ROW_SETTING_KEY,
           INLINE_FILE_MENTION_SETTING_KEY,
@@ -6251,6 +6548,49 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // empty project list. Re-dirty so the scope-aware fetch supersedes it.
       streamDirty: true,
     });
+
+    // Split-view restore (single displayMode only — the persisted blob backs
+    // the GLOBAL single-mode grid; tabs mode's per-tab groups are in-memory
+    // and die with the tab strip across restarts): validate the persisted
+    // membership against the NOW-loaded session lists — dead ids drop
+    // silently, a remainder below 2 collapses to no grid (the 0-or-≥2
+    // invariant). When a split survives, the landing session must be one of
+    // its panes: ui.lastSessionId normally is (it's rewritten on every
+    // activation = focus), but a stale/invalid fallback would otherwise
+    // focus a session with no pane — pin the landing to the first surviving
+    // member instead.
+    if (get().displayMode === "single") {
+      const splitExists = (id: string) =>
+        findSession(
+          byProject,
+          archivedByProject,
+          pinnedRes.status === "fulfilled" ? pinnedRes.value.sessions : [],
+          get().streamSessions,
+          id,
+          get().orchWorkersById,
+        ) != null;
+      const valid = parseSplitSessionIds(fp[SPLIT_SESSIONS_SETTING_KEY], splitExists);
+      if (valid.length >= 2) {
+        set((st) => ({
+          splitSessionIds: valid,
+          // Members join openTabs (the "always write the list" rule) so
+          // a later displayMode flip keeps them reachable as tabs.
+          openTabs: [...new Set([...st.openTabs, ...valid])],
+        }));
+        if (!landingSession || !valid.includes(landingSession.id)) {
+          const member =
+            byProject[landingProject.id]?.find((s) => valid.includes(s.id) && !s.archived) ??
+            Object.values(byProject)
+              .flat()
+              .find((s) => valid.includes(s.id) && !s.archived) ??
+            (pinnedRes.status === "fulfilled"
+              ? pinnedRes.value.sessions.find((s) => valid.includes(s.id) && !s.archived)
+              : undefined);
+          if (member) landingSession = member;
+        }
+      }
+    }
+
     if (landingSession) {
       try {
         await get().selectSession(landingSession.id);
@@ -7397,14 +7737,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return { activeSessionId: sessionId, unreadBySession, centerTabFocus: "chat" as const };
     });
     // Web transport: list rows are slim — pull the full row (heavy payloads)
-    // for the hydrates below. Messages DON'T depend on the session row, so
-    // their first-page fetch runs CONCURRENTLY with the detail round trip
-    // instead of behind it (one RTT less to first paint on a slow link; the
-    // fetch is deduped and merges with any live bucket either way). If the
-    // user switched away while in flight, bail before the payload hydrates:
-    // hydrating the stale target's capsule would clobber the new session's.
+    // for the hydrates below. Messages DON'T depend on the session row, and
+    // on web the two fetches are SEQUENCED (messages first): they are the
+    // heaviest payloads of an open, and in parallel on a constrained tunnel
+    // the detail row (turnFiles / transcripts) starves the chat page the user
+    // is staring at. If the user switched away while in flight, bail before
+    // the payload hydrates: hydrating the stale target's capsule would
+    // clobber the new session's.
     if (!get().historyLoadedBySession[sessionId]) {
-      void get().prefetchSessionMessages(sessionId);
+      if (isWebTransport) await get().prefetchSessionMessages(sessionId);
+      else void get().prefetchSessionMessages(sessionId);
     }
     await get().ensureSessionDetail(sessionId);
     if (get().activeSessionId !== sessionId) return;
@@ -7442,10 +7784,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     });
     // Same split as selectSession: light-field config sync before the flip,
-    // then the message first page CONCURRENTLY with the full-row fetch, then
-    // (guarded against a switch-away) the payload hydrates.
+    // then the message first page and the full-row fetch (sequenced on web —
+    // see selectSession), then (guarded against a switch-away) the payload
+    // hydrates.
     if (!get().historyLoadedBySession[sessionId]) {
-      void get().prefetchSessionMessages(sessionId);
+      if (isWebTransport) await get().prefetchSessionMessages(sessionId);
+      else void get().prefetchSessionMessages(sessionId);
     }
     await get().ensureSessionDetail(sessionId);
     if (get().activeSessionId !== sessionId) return;
@@ -7455,6 +7799,150 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateUsageHistory(set, get, sessionId);
     hydrateBookmarks(set, get, sessionId);
     hydrateSubagentTranscripts(set, get, sessionId);
+  },
+
+  addToSplit: async (sessionId) => {
+    const s = get();
+    const row = findSession(
+      s.sessionsByProject,
+      s.archivedSessionsByProject,
+      s.pinnedSessions,
+      s.streamSessions,
+      sessionId,
+      s.orchWorkersById,
+    );
+    // Unknown session: silent no-op.
+    if (!row) return;
+
+    // ── tabs displayMode: split the CURRENTLY OPEN TAB in place ──
+    // The dragged session joins the active tab's per-tab group; it never
+    // becomes a tab itself (that's the whole point of the gesture).
+    if (s.displayMode === "tabs") {
+      const root = activeTabsModeSplitRoot(s);
+      if (!root) {
+        // Nothing open to split — the drag degrades to opening the session.
+        await get().openTab(sessionId);
+        return;
+      }
+      const group = s.splitGroupsBySession[root] ?? [root];
+      if (group.includes(sessionId)) {
+        // Already a pane of this tab's grid: plain focus.
+        await get().selectSession(sessionId);
+        return;
+      }
+      if (group.length >= 4) return; // full grid: silent reject
+      const next = [...group, sessionId];
+      set({
+        splitGroupsBySession: { ...s.splitGroupsBySession, [root]: next },
+      });
+      // Focus the NEW pane (activeSessionId = the member, NOT a tab flip —
+      // the strip stays exactly as it was).
+      await get().selectSession(sessionId);
+      return;
+    }
+
+    // ── single displayMode: the global persisted grid ──
+    if (s.splitSessionIds.length >= 4) return;
+    // A split needs a partner: dropping the FOCUSED session itself (or any
+    // drop while nothing is open) onto an empty grid can't form one —
+    // degrade to a plain focus and keep the 0-or-≥2 invariant.
+    if (
+      s.splitSessionIds.length === 0 &&
+      (s.activeSessionId == null || s.activeSessionId === sessionId)
+    ) {
+      await get().openTab(sessionId);
+      return;
+    }
+    if (s.splitSessionIds.includes(sessionId)) {
+      // Already on the grid: plain focus of its pane.
+      await get().openTab(sessionId);
+      return;
+    }
+    // First pane joins implicitly: the currently active session becomes
+    // pane 1 so the grid materializes around what the user is looking at.
+    const next =
+      s.splitSessionIds.length === 0 && s.activeSessionId != null && s.activeSessionId !== sessionId
+        ? [s.activeSessionId, sessionId]
+        : [...s.splitSessionIds, sessionId];
+    set({ splitSessionIds: next });
+    persistSplitSessions(next);
+    await get().openTab(sessionId);
+  },
+
+  removeFromSplit: async (sessionId) => {
+    const s = get();
+    // ── tabs displayMode: shrink the owning tab's group ──
+    if (s.displayMode === "tabs") {
+      const entry = Object.entries(s.splitGroupsBySession).find(([, members]) =>
+        members.includes(sessionId),
+      );
+      if (!entry) return;
+      const [root, members] = entry;
+      const idx = members.indexOf(sessionId);
+      const next = members.filter((id) => id !== sessionId);
+      const nextGroups = { ...s.splitGroupsBySession };
+      // Below 2 members the group dissolves — the tab reverts to its plain
+      // root pane.
+      if (next.length < 2 || !next.includes(root)) delete nextGroups[root];
+      else nextGroups[root] = next;
+      set({ splitGroupsBySession: nextGroups });
+      if (s.activeSessionId === sessionId) {
+        // Focus a neighboring survivor; a dissolved group lands on its root.
+        const successor = next[idx] ?? next[idx - 1] ?? root;
+        await get().selectSession(successor);
+      }
+      return;
+    }
+    // ── single displayMode: the global persisted grid ──
+    const idx = s.splitSessionIds.indexOf(sessionId);
+    if (idx === -1) return;
+    // `next` still holds the survivor(s); the STORED list collapses to []
+    // below 2 members (grid gone) but the focus handoff reads the
+    // survivors, not the collapsed list.
+    const next = s.splitSessionIds.filter((id) => id !== sessionId);
+    const collapsed = next.length < 2 ? [] : next;
+    set({ splitSessionIds: collapsed });
+    persistSplitSessions(collapsed);
+    if (s.activeSessionId === sessionId) {
+      const successor = next[idx] ?? next[idx - 1] ?? null;
+      if (successor) await get().selectSession(successor);
+    }
+  },
+
+  openSessionFromSidebar: async (sessionId) => {
+    const s = get();
+    if (s.displayMode === "single" && s.splitSessionIds.length >= 2) {
+      // Member click: plain focus.
+      if (s.splitSessionIds.includes(sessionId)) {
+        await get().openTab(sessionId);
+        return;
+      }
+      // Non-member click: take over the FOCUSED pane's slot. The session
+      // leaving the grid keeps its buckets (grace window / running guard
+      // own the eventual prune).
+      const focusedIdx =
+        s.activeSessionId != null ? s.splitSessionIds.indexOf(s.activeSessionId) : -1;
+      if (focusedIdx !== -1) {
+        const next = [...s.splitSessionIds];
+        next[focusedIdx] = sessionId;
+        set({ splitSessionIds: next });
+        persistSplitSessions(next);
+      }
+    }
+    // tabs mode LOCATE: a session already visible inside some tab's split
+    // group counts as open — activate its host tab and focus that pane
+    // (selectSession flips activeSessionId without touching the strip) so
+    // the click lands where the session already lives instead of appending
+    // a duplicate tab.
+    if (s.displayMode === "tabs") {
+      for (const members of Object.values(s.splitGroupsBySession)) {
+        if (members.includes(sessionId)) {
+          await get().selectSession(sessionId);
+          return;
+        }
+      }
+    }
+    await get().openTab(sessionId);
   },
 
   /** Shared first-page history fetch behind selectSession / openTab / hover
@@ -7503,13 +7991,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         historyLoadedBySession: { ...s.historyLoadedBySession, [sessionId]: true },
         loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: false },
       }));
-    } catch {
+      delete prefetchRetries[sessionId];
+    } catch (err) {
       // Never leave the skeleton stuck up on a failed fetch — fall back to
       // the regular (empty) view so the composer stays usable. The hydration
       // flag stays unset so a later open retries the fetch.
+      console.error("prefetchSessionMessages failed:", err);
       set((s) => ({
         loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: false },
       }));
+      // Bounded auto-retry (mobile is the motivated case — a dropped/slow
+      // first page strands the thread on its live-only view): without it, a
+      // session opened while RUNNING keeps showing just the SSE tail (the
+      // history that would complete it never landed), and an idle one the
+      // empty welcome, until the user reopens it. Re-entry gates make the
+      // retry a no-op when history arrived via another path meanwhile.
+      const now = Date.now();
+      const prev = prefetchRetries[sessionId];
+      const count =
+        prev && now - prev.lastAt < PREFETCH_RETRY_WINDOW_MS ? prev.count : 0;
+      if (count < PREFETCH_MAX_RETRIES) {
+        prefetchRetries[sessionId] = { count: count + 1, lastAt: now };
+        setTimeout(() => {
+          void get().prefetchSessionMessages(sessionId);
+        }, PREFETCH_RETRY_DELAY_MS);
+      }
     }
   },
 
@@ -7584,6 +8090,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           nextActive = nextTabs[0];
         }
       }
+      // The closed tab's per-tab split group dies with it (groups are
+      // in-memory, keyed by the tab's root session).
+      const splitGroupsBySession = { ...s.splitGroupsBySession };
+      delete splitGroupsBySession[sessionId];
+      const hadGroup = splitGroupsBySession !== s.splitGroupsBySession;
       // Unified center bar focus: only the ACTIVE tab's closure moves it —
       // closing a background session tab must not yank the editor away.
       // Closing the active tab lands on the successor session's chat; when
@@ -7617,9 +8128,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           customModelId: sess?.customModelId ?? s.customModelId,
           unreadBySession,
           centerTabFocus,
+          ...(hadGroup ? { splitGroupsBySession } : {}),
         };
       }
-      return { openTabs: nextTabs, activeSessionId: nextActive, centerTabFocus };
+      return {
+        openTabs: nextTabs,
+        activeSessionId: nextActive,
+        centerTabFocus,
+        ...(hadGroup ? { splitGroupsBySession } : {}),
+      };
     });
     // Immediately free memory (large prose blocks, base64 images) for the closed
     // tab if it has no active background turn or pending decision dialog.
@@ -7805,7 +8322,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Shared cleanup — a remote `session.deleted` event runs the same state
     // surgery (see applySessionDeletedState) so phone-side deletes behave
     // identically to local ones.
+    const splitBefore = get().splitSessionIds;
     set((s) => applySessionDeletedState(s, id));
+    // applySessionDeletedState may have dropped a split pane above — persist
+    // the survivor list. (Remote `session.deleted` events skip this; the
+    // next boot's parseSplitSessionIds validation drops the dead id anyway.)
+    if (get().splitSessionIds !== splitBefore) persistSplitSessions(get().splitSessionIds);
   },
 
   /** Set a session's archived flag (soft-delete; restorable). The session
@@ -8136,9 +8658,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // NO default model — an unselected model ("default") blocks the send, as
     // does a provider with nothing configured at all. Aborting here leaves
     // the composer untouched.
-    const resolvedModel = resolveSendModel(get());
+    //
+    // Split-view correctness: for a NON-active target the session ROW is the
+    // binding authority (see findNonActiveSendRow) — the global slots belong
+    // to the focused session and must not leak into another thread.
+    const nonActiveRow = findNonActiveSendRow(get(), sessionIdArg);
+    const resolvedModel = nonActiveRow
+      ? resolveSendModelForRow(get(), nonActiveRow)
+      : resolveSendModel(get());
     if (!resolvedModel) {
-      raiseModelGuard();
+      // Row-scoped misses raise no model guard: the guard nudges about the
+      // FOCUSED session's chips, which are irrelevant to this target. The
+      // queued prompt simply stays queued.
+      if (!nonActiveRow) raiseModelGuard();
       return false;
     }
 
@@ -8270,7 +8802,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 	    //    RuntimeManager always sees the latest UI state. The model pair
 	    //    comes from `resolvedModel` above (auto → first configured model).
 	    void (async () => {
-      const { effort, permissionMode, providerId } = get();
+      // Row-scoped for non-active targets (see findNonActiveSendRow);
+      // global slots otherwise.
+      const g = get();
+      const { effort, permissionMode, providerId } = nonActiveRow
+        ? {
+            effort: nonActiveRow.effort,
+            permissionMode: nonActiveRow.permissionMode,
+            providerId: nonActiveRow.providerId,
+          }
+        : { effort: g.effort, permissionMode: g.permissionMode, providerId: g.providerId };
       let updated;
       try {
         ({ session: updated } = await api.claude.sendTurn({
@@ -8361,10 +8902,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (get().runningBySession[sessionId]) return;
 
     // Same send-model guard as sendPrompt: no default model — an unpicked
-    // model or an empty provider blocks the resend.
-    const resolvedModel = resolveSendModel(get());
+    // model or an empty provider blocks the resend. Row-scoped when the
+    // edited thread is not the active one (split pane) — same rationale as
+    // findNonActiveSendRow.
+    const nonActiveRow = findNonActiveSendRow(get(), sessionId);
+    const resolvedModel = nonActiveRow
+      ? resolveSendModelForRow(get(), nonActiveRow)
+      : resolveSendModel(get());
     if (!resolvedModel) {
-      raiseModelGuard();
+      if (!nonActiveRow) raiseModelGuard();
       return;
     }
 
@@ -8500,7 +9046,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     //    are already on screen, so don't block this action's completion on the
     //    main process's provider.startTurn round-trip.
     void (async () => {
-      const { effort, permissionMode, providerId } = get();
+      // Row-scoped for non-active targets (see findNonActiveSendRow);
+      // global slots otherwise.
+      const g = get();
+      const { effort, permissionMode, providerId } = nonActiveRow
+        ? {
+            effort: nonActiveRow.effort,
+            permissionMode: nonActiveRow.permissionMode,
+            providerId: nonActiveRow.providerId,
+          }
+        : { effort: g.effort, permissionMode: g.permissionMode, providerId: g.providerId };
       let updated;
       try {
         ({ session: updated } = await api.claude.sendTurn({
@@ -8865,6 +9420,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         for (const id of running) next[id] = true;
         return { runningBySession: next };
       });
+      // This frame rides every SSE (re)connect — catch up threads whose turns
+      // finished while we were disconnected (see refreshLoadedTailsOnReconnect).
+      void refreshLoadedTailsOnReconnect(set, get);
       return;
     }
 
@@ -10489,7 +11047,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (get().leftPeekOpen) set({ leftPeekOpen: false });
     else set({ leftOpen: false });
   },
-  setRightOpen: (open) => set({ rightOpen: open }),
+  setRightOpen: (open) => {
+    // Pinning the panel (open or closed) always dismisses the hover-peek
+    // drawer — the floating and in-flow presentations must never stack
+    // (mirror of setLeftOpen).
+    set({ rightOpen: open, rightPeekOpen: false });
+  },
+  setRightPeekOpen: (open) => set({ rightPeekOpen: open }),
   setBottomTerminalOpen: (open) => set({ bottomTerminalOpen: open }),
   setBrowserPanelOpen: (open) => {
     // Opening the fullscreen overlay forces the right panel closed so the
@@ -10497,9 +11061,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // active at once (they'd fight over the shared WebContentsView). Closing
     // the overlay leaves rightOpen as-is (the user can reopen the panel).
     if (open) {
-      // The fullscreen overlay owns the workspace — dismiss the hover-peek
-      // drawer with it (its trigger strip is gated while the overlay is up).
-      set({ browserPanelOpen: true, rightOpen: false, leftPeekOpen: false });
+      // The fullscreen overlay owns the workspace — dismiss both hover-peek
+      // drawers with it (their trigger strips are gated while it's up).
+      set({ browserPanelOpen: true, rightOpen: false, leftPeekOpen: false, rightPeekOpen: false });
     } else {
       set({ browserPanelOpen: false });
     }
@@ -10523,6 +11087,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // The hover-peek drawer must not survive the mode switch (it would
         // float over the wide split with no trigger to re-dismiss it).
         leftPeekOpen: false,
+        rightPeekOpen: false,
         // The right panel is the mode's centerpiece — always show it on enter.
         // (The titlebar right-panel toggle then hides/shows it during the
         // mode; exit still restores the pre-enter rightOpen from the snapshot.)
@@ -10752,7 +11317,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   /** Update the center-pane display mode. The local store flips
    *  immediately so the layout change is instant; the DB write is
    *  fire-and-forget so a failed write doesn't block the UI. On the
-   *  next app start, `init` re-hydrates from the `settings` table. */
+   *  next app start, `init` re-hydrates from the `settings` table.
+   *  Split state needs no handling: single mode's grid rides
+   *  `splitSessionIds` (persisted), tabs mode's per-tab groups are
+   *  in-memory and simply don't exist in the other mode. */
   setDisplayMode: async (mode) => {
     set({ displayMode: mode });
     try {
@@ -12422,9 +12990,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const head = q[0];
     // Send-time model guard, checked BEFORE dropping the head: if the send
     // would be blocked (no model picked / none configured), the dropped item
-    // would be lost. Keep it queued + raise the guard UI.
-    if (!resolveSendModel(s)) {
-      raiseModelGuard();
+    // would be lost. Keep it queued + raise the guard UI. Row-scoped for
+    // non-active targets (split pane) so a focused session's unconfigured
+    // chips can't wedge a background session's queue.
+    const nonActiveRow = findNonActiveSendRow(s, sessionId);
+    if (!(nonActiveRow ? resolveSendModelForRow(s, nonActiveRow) : resolveSendModel(s))) {
+      if (!nonActiveRow) raiseModelGuard();
       return;
     }
     // 先乐观出队，再发送。若 sendPrompt 被前置 guard 拦截（返回 false），
@@ -13074,14 +13645,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     else if (opts?.line != null) viewMode[canonicalPath] = "edit";
     // Files that render as a read-only preview default to "preview" on FIRST
     // open (no prior view-mode for this file): Markdown (rendered), images
-    // (data-URL `<img>`), videos (`<video>` via app-resource://), and
-    // unsupported binary types (Office docs, archives, etc. - shown as a
-    // "can't preview" notice). Re-opening respects the user's earlier choice
-    // (e.g. they switched to "edit") since the entry already exists. A diff
-    // request above takes precedence over this default.
+    // (data-URL `<img>`), videos (`<video>` via app-resource://), PDFs
+    // (pdf.js pane), and unsupported binary types (Office docs, archives,
+    // etc. - shown as a "can't preview" notice). Re-opening respects the
+    // user's earlier choice (e.g. they switched to "edit") since the entry
+    // already exists. A diff request above takes precedence over this default.
     else if (
       !(canonicalPath in prevViewMode) &&
-      (isMarkdownPath(canonicalPath) || isImagePath(canonicalPath) || isVideoPath(canonicalPath) || isUnsupportedPath(canonicalPath))
+      (isMarkdownPath(canonicalPath) || isImagePath(canonicalPath) || isVideoPath(canonicalPath) || isPdfPath(canonicalPath) || isUnsupportedPath(canonicalPath))
     ) {
       viewMode[canonicalPath] = "preview";
     }
@@ -13093,6 +13664,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       opts?.diff && opts.before != null
         ? { ...prevDiffBefore, [canonicalPath]: opts.before }
         : prevDiffBefore;
+    // Hover-peek drawer mode (right panel closed, workspace visible): a file
+    // open must never pin the panel — it surfaces through the peeked drawer
+    // instead (auto-peeking it when it isn't showing; see the sidebar branch
+    // below and the nonce skip).
+    const pre = get();
+    const rightDrawerMode =
+      !pre.rightOpen &&
+      !pre.settingsOpen &&
+      !pre.schedPageOpen &&
+      !pre.browserPanelOpen &&
+      !pre.widePanelOpen;
     set((s) => ({
       ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
       ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: canonicalPath },
@@ -13101,8 +13683,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Bump the focus nonce so App opens the right panel if collapsed — but
       // only for real file opens. A diff review renders in the CENTER editor;
       // forcing the right panel (files tab + tree reveal) open for it is pure
-      // noise and cost, so diff opens leave the panel untouched.
-      ...(opts?.diff ? {} : { ideFocusNonce: s.ideFocusNonce + 1 }),
+      // noise and cost, so diff opens leave the panel untouched. Drawer mode
+      // skips it too: the nonce's only consumer pins the panel, and a drawer
+      // presenting the file must stay a drawer.
+      ...(opts?.diff || rightDrawerMode ? {} : { ideFocusNonce: s.ideFocusNonce + 1 }),
       // Unified center bar (tabs displayMode): opening a file focuses the
       // editor so it gets the full center width UNLESS user configured
       // sidebar preview placement.
@@ -13111,11 +13695,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         : {}),
       // Sidebar preview: file opens inside FilesPanel dual-column preview;
       // automatically widen the right sidebar and switch to files tab.
-      // Active in `single` displayMode OR in `tabs` displayMode with `sidebar` placement.
+      // Active in `single` displayMode OR in `tabs` displayMode with `sidebar`
+      // placement. Drawer mode: open the file INSIDE the hover-peek drawer —
+      // auto-peek it if not already showing (App arms an idle dismissal for
+      // store-driven peeks, since the mouse may never have entered the
+      // drawer) and keep the panel closed; the user pins it explicitly.
       ...(s.displayMode === "single" ||
       (s.displayMode === "tabs" && s.tabsFilePreviewPlacement === "sidebar")
         ? {
-            rightOpen: true,
+            ...(rightDrawerMode
+              ? { rightPeekOpen: true, leftPeekOpen: false }
+              : { rightOpen: true }),
             rightPanelTab: "files" as const,
             normalRightWidth: s.isRightPreviewExpanded ? s.normalRightWidth : s.rightWidth,
             rightWidth: clampRightWidth(
@@ -13245,18 +13835,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // plan tab is active, fall back to the chat view.
       const sid = s.activeSessionId;
       const planActive = !!(sid && s.planTabActiveBySession[sid]);
+      // Deliberately NO width change when the last file closes: the sidebar
+      // keeps its staged (preview) width and stays isRightPreviewExpanded, so
+      // the empty editor column just shows its placeholder instead of the
+      // panel snapping back to normalRightWidth. Width-linked state must stay
+      // consistent too — while expanded, divider drags tune previewRightWidth
+      // and openFileInIde leaves normalRightWidth untouched.
       return {
         ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
         ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },
         ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
         ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
         centerTabFocus: active == null && !planActive ? ("chat" as const) : s.centerTabFocus,
-        ...(active == null && s.isRightPreviewExpanded
-          ? {
-              rightWidth: s.normalRightWidth,
-              isRightPreviewExpanded: false,
-            }
-          : {}),
       };
     });
 

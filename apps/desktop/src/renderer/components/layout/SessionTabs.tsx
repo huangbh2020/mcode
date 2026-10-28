@@ -58,6 +58,38 @@ export function SessionTabs() {
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const selectSession = useSessionStore((s) => s.selectSession);
   const closeTab = useSessionStore((s) => s.closeTab);
+  // Per-tab split groups: the focused session may be a non-tab MEMBER pane
+  // of some tab's grid — that tab is the active one (its group owns the
+  // center). Member panes never appear as tabs.
+  const splitGroupsBySession = useSessionStore((s) => s.splitGroupsBySession);
+  // A tab is the ACTIVE one when the focused session is its own id OR one
+  // of its group's member panes.
+  const isTabActive = useCallback(
+    (id: string) => {
+      if (id === activeId) return true;
+      const members = splitGroupsBySession[id];
+      return !!activeId && !!members?.includes(activeId);
+    },
+    [activeId, splitGroupsBySession],
+  );
+  // Display session for a tab CHIP: while the tab is active and the focus
+  // sits on one of its group's MEMBER panes, the chip shows the FOCUSED
+  // session — name + provider icon (+ running/unread markers) follow what
+  // the user is actually looking at. Tab identity (dnd id, close, node
+  // registry) stays the root id; only the display data swaps.
+  const displayedIdFor = useCallback(
+    (id: string) => {
+      if (activeId && splitGroupsBySession[id]?.includes(activeId)) return activeId;
+      return id;
+    },
+    [activeId, splitGroupsBySession],
+  );
+  // The strip node the "scroll active into view" effect should target: the
+  // focused member pane is not registered (nodes key by root id).
+  const activeStripTab = useMemo(
+    () => tabs.find((id) => id === activeId || !!splitGroupsBySession[id]?.includes(activeId ?? "")) ?? null,
+    [tabs, activeId, splitGroupsBySession],
+  );
   const reorderTab = useSessionStore((s) => s.reorderTab);
   // Multi-row wrapping (toggled from the ⋯ overflow menu) vs the classic
   // single horizontally-scrolling row.
@@ -91,14 +123,16 @@ export function SessionTabs() {
 
   // Scroll the active tab into view whenever it changes — so selecting a
   // background tab or opening a new one never leaves it hidden off-screen.
+  // Targets the active STRIP tab (focus may sit on a member pane, whose id
+  // is not registered in tabNodes).
   useEffect(() => {
-    if (!activeId) return;
-    const node = tabNodes.current.get(activeId);
+    if (!activeStripTab) return;
+    const node = tabNodes.current.get(activeStripTab);
     node?.scrollIntoView({ inline: "nearest", behavior: "smooth", block: "nearest" });
     // Recompute after the smooth scroll settles.
     const t = setTimeout(recomputeScrollState, 260);
     return () => clearTimeout(t);
-  }, [activeId, tabs.length, recomputeScrollState]);
+  }, [activeStripTab, tabs.length, recomputeScrollState]);
 
   const scrollByPage = useCallback((dir: 1 | -1) => {
     const el = scrollRef.current;
@@ -197,10 +231,15 @@ export function SessionTabs() {
               strategy={sortStrategy}
             >
               {tabs.map((id) => {
-                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
-                const isActive = id === activeId;
-                const running = !!runningBySession[id] || orchAnchors[id] != null;
-                const unread = unreadBySession[id] ?? 0;
+                // Chip display follows the FOCUSED session when the focus
+                // sits on one of this tab's group's member panes (name +
+                // icon + running/unread markers); identity stays the root
+                // (sessionId prop → close/dnd/registry).
+                const displayId = displayedIdFor(id);
+                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, displayId, orchWorkersById);
+                const isActive = isTabActive(id);
+                const running = !!runningBySession[displayId] || orchAnchors[displayId] != null;
+                const unread = unreadBySession[displayId] ?? 0;
                 return (
                   <SortableSessionTab
                     key={id}
@@ -209,6 +248,7 @@ export function SessionTabs() {
                     isActive={isActive}
                     running={running}
                     unreadCount={unread}
+                    sessionCount={splitGroupsBySession[id]?.length}
                     multiRow={multiRow}
                     registerNode={(node) => {
                       if (node) tabNodes.current.set(id, node);
@@ -251,13 +291,14 @@ export function SessionTabs() {
           multiRow={multiRow}
           onToggleMultiRow={setTabBarMultiRow}
           items={tabs.map((id) => {
-            const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
+            const displayId = displayedIdFor(id);
+            const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, displayId, orchWorkersById);
             return {
               key: id,
               label: sess?.title ?? "(unknown)",
-              active: id === activeId,
+              active: isTabActive(id),
               dotClass:
-                runningBySession[id] || orchAnchors[id] != null
+                runningBySession[displayId] || orchAnchors[displayId] != null
                   ? "bg-accent animate-pulse"
                   : "bg-content-subtle/50",
             };
@@ -278,6 +319,10 @@ interface SortableTabProps {
    *  accent-colored count badge on non-active tabs so the user can see which
    *  background tabs have new activity. */
   unreadCount: number;
+  /** Split-pane count for the tab's per-tab group (undefined/≤1 = no
+   *  badge). Rendered as a small neutral count pill whenever the tab hosts
+   *  ≥ 2 sessions — "this tab is a grid of N". */
+  sessionCount?: number;
   /** Multi-row wrapping layout: tabs flex to fill their row between a min
    *  floor and their max cap, so flexbox breaks lines at the FLOOR width —
    *  a line only wraps when it genuinely can't hold another tab. Omit for
@@ -297,6 +342,7 @@ export function SortableSessionTab({
   isActive,
   running,
   unreadCount,
+  sessionCount,
   multiRow,
   registerNode,
   onActivate,
@@ -397,6 +443,13 @@ export function SortableSessionTab({
           tabs the close button leaves the layout entirely until hover, so
           the title owns the full tab width. */}
       <span className="min-w-0 flex-1 truncate">{title}</span>
+      {/* Split-pane count — the tab hosts N sessions (per-tab split grid).
+          Always visible (unlike the unread badge); ≤1 renders nothing. */}
+      {sessionCount != null && sessionCount >= 2 && (
+        <span className="shrink-0 rounded-full bg-surface-hover px-1.5 text-center text-[9px] font-medium leading-[14px] tabular-nums text-content-subtle">
+          {sessionCount}
+        </span>
+      )}
       {/* Unread badge - shown on non-active tabs with pending unread events.
           Leaves the layout on hover so the appearing close button gets the
           room (the badge clears when the tab is activated — selectSession). */}

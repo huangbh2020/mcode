@@ -52,6 +52,7 @@
     "mermaid": "^12.1.0",
     "monaco-editor": "^0.56.0",
     "node-pty": "^1.1.0",
+    "pdfjs-dist": "^6.4.299",
     "qrcode": "^1.5.4",
     "react-compiler-runtime": "^1.0.0",
     "react-icons": "^5.7.0",

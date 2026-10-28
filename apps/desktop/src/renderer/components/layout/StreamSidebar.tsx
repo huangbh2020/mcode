@@ -69,6 +69,7 @@ import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/compone
 import { ProjectManageMenuPopup, type ManageMenuState } from "./ProjectManageMenu.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
 import { ArchivedRow, HoverIconButton, RenameDialog, SessionContextMenu } from "./SidebarShared.js";
+import { beginSessionDrag } from "@renderer/lib/sessionDrag.js";
 import { ProjectAvatar } from "./ProjectAvatar.js";
 import { BrandLogo } from "./BrandLogo.js";
 import type { Project, Session } from "@contracts/session";
@@ -173,7 +174,10 @@ function StreamSidebarBase() {
   const loadStreamSessions = useSessionStore((s) => s.loadStreamSessions);
   const loadMoreStreamSessions = useSessionStore((s) => s.loadMoreStreamSessions);
   const ensureWorktreeInfo = useSessionStore((s) => s.ensureWorktreeInfo);
-  const openTab = useSessionStore((s) => s.openTab);
+  // Split-view aware session open (member focus / focused-slot takeover /
+  // plain openTab outside split view) — same entry semantics as the tree
+  // view's rows.
+  const openSession = useSessionStore((s) => s.openSessionFromSidebar);
   const startSession = useSessionStore((s) => s.startSession);
   const startTerminalSession = useSessionStore((s) => s.startTerminalSession);
   const archiveSession = useSessionStore((s) => s.archiveSession);
@@ -488,7 +492,7 @@ function StreamSidebarBase() {
           worktreeBranch={wt?.branch || null}
           worktreeUnmerged={unmerged}
           localBranch={localBranchOf(s)}
-          onSelect={() => void openTab(s.id)}
+          onSelect={() => void openSession(s.id)}
           onNewSession={() => {
             // Worktree-bound card spawns a sibling thread on the SAME
             // checkout (fork button + worktree wording); a local card
@@ -512,7 +516,7 @@ function StreamSidebarBase() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectById, projectColors, nowTick, activeSessionId, runningBySession, runningTurnStartedAt,
       orchRunningAt, pendingQuestionBySession, turnErrorBySession, unreadBySession, worktreeOf,
-      localBranchOf, openTab, startSession, setSessionPinned, archiveSession, deleteSession, registerNode],
+      localBranchOf, openSession, startSession, setSessionPinned, archiveSession, deleteSession, registerNode],
   );
 
   // Scheduled-task sessions (kind="automation") render only in the right
@@ -867,6 +871,10 @@ function StreamSidebarBase() {
         onClose={() => setCtxMenu(null)}
         onRename={(s) => { setCtxMenu(null); setRenaming({ id: s.id, title: s.title, kind: "session" }); }}
         onCopyTitle={(s) => { void navigator.clipboard.writeText(s.title); setCtxMenu(null); }}
+        onOpenInSplit={(s) => {
+          setCtxMenu(null);
+          void useSessionStore.getState().addToSplit(s.id);
+        }}
         onOpenFolder={(s) => {
           setCtxMenu(null);
           const proj = projectById.get(s.projectId);
@@ -993,9 +1001,11 @@ function StreamCard({
   const { t } = useI18n();
   const [pendingConfirm, setPendingConfirm] = useState<null | "archive" | "delete">(null);
   const [hovered, setHovered] = useState(false);
+  // True while this card is the active HTML5 drag source (split-view drag).
+  const [dragging, setDragging] = useState(false);
   const idle = pendingConfirm === null && status.kind !== "working";
   const showActions = idle && hovered;
-  const { Icon: ProviderIcon, color: providerColor, label: providerLabel } =
+  const { Icon: ProviderIcon, color: providerColor, label: providerLabel, dot: providerDot } =
     getProviderIcon(session.providerId);
 
   // In-flight recede: a running row that ISN'T the active one dims — the
@@ -1056,6 +1066,14 @@ function StreamCard({
   return (
     <li
       ref={(el) => registerNode(session.id, el)}
+      // Split-view drag source — same payload contract as the tree view's
+      // SessionRow (lib/sessionDrag.ts); themed ghost pill + lifted row.
+      draggable
+      onDragStart={(e) => {
+        beginSessionDrag(e, session, providerDot);
+        setDragging(true);
+      }}
+      onDragEnd={() => setDragging(false)}
       onClick={() => { setPendingConfirm(null); onSelect(); }}
       onMouseEnter={() => {
         setHovered(true);
@@ -1074,6 +1092,8 @@ function StreamCard({
           ? "bg-surface-hover text-content"
           : "text-content-muted hover:bg-surface-hover/60",
         recede && "opacity-75 transition-opacity hover:opacity-100",
+        // Lifted look while this card is the drag source.
+        dragging && "opacity-40",
       )}
     >
       {active && (

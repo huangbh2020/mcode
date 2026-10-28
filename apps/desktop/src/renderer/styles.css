@@ -110,18 +110,14 @@ div:has(> [role="menu"]) {
    * (zinc-700 / zinc-500) so secondary text doesn't wash out. */
   --content: 9 9 11; /* zinc-950 — near-black, max contrast on white */
   --content-muted: 63 63 70; /* zinc-700 — one stop darker than before */
-  --content-subtle: 113 113 122; /* zinc-500 — one stop darker than before */
+  --content-subtle: 92 97 108; /* deepened zinc/slate-600 — passes WCAG AA (≥4.5:1) on white and muted wells */
   /* borders. --edge is a cool zinc-300, one stop DEEPER than --surface-hover:
-   * borders must read as separators on white (~1.46:1) — the old zinc-200
-   * equaled the hover fill, so panel dividers / card outlines washed out and
-   * hover feedback had the same value as the border it sat next to. */
-  --edge: 213 216 222; /* cool zinc-300 */
+   * borders must read as separators on white (~1.5:1) — panel dividers / card outlines
+   * stay clearly visible without washing out into the hover feedback. */
+  --edge: 208 212 220; /* cool zinc-300 */
   /* Structural pane dividers (three-pane shell borders, the draggable
-   * splitter hairlines, the tab-strip underline) — one stop LIGHTER than
-   * --edge: these lines run the full window height, and at the card-border
-   * value they read as heavy rules across the whole UI. Cards and in-panel
-   * separators keep --edge. */
-  --panel-edge: 222 225 231; /* cool zinc-250 (~1.35:1 on white) */
+   * splitter hairlines, the tab-strip underline) — clean structural separation (~1.45:1 on white). */
+  --panel-edge: 216 220 227; /* cool zinc-250 */
   /* Composer input box outline — one stop deeper than --edge so the box
    * reads clearly at a glance in both themes (dark needs the brighter-than-
    * edge direction, light the deeper-than-edge direction). Only the composer
@@ -1755,10 +1751,26 @@ button.chat-ledger-head:hover {
   animation: composer-q-in 0.34s var(--composer-ease-out) backwards;
 }
 
+/* ───────────── Split-view drop acknowledgment ─────────────
+ * One-shot inset-ring pulse on the split drop host / grid after a session
+ * drag lands (App.tsx `split-drop-flash`, cleared on animationend). Pure
+ * ring fade — no movement — so it reads as "accepted here" without
+ * displacing layout. */
+@keyframes split-drop-flash {
+  from { box-shadow: inset 0 0 0 2px rgb(var(--accent) / 0.85); }
+  to { box-shadow: inset 0 0 0 2px rgb(var(--accent) / 0); }
+}
+.split-drop-flash {
+  animation: split-drop-flash 0.45s ease-out forwards;
+}
+
 /* Reduced motion: label shells snap instead of animating, and the
  * decorative loops (sweep / spin / launch) flatten away; entrance animations
  * degrade to instant appearance so arrival is still perceivable. */
 @media (prefers-reduced-motion: reduce) {
+  .split-drop-flash {
+    animation: none;
+  }
   [data-chat-root] .composer-lblwrap,
   [data-chat-root] .composer-minipill-seg {
     transition: none;
@@ -2764,4 +2776,31 @@ html.sketch.dark body::after {
   [data-chat-root] .oc-flash { animation: none; box-shadow: 0 0 0 3px rgb(var(--accent) / 0.3); }
   [data-chat-root] .oc-node-anim { transition: none; }
   [data-chat-root] .oc-edge-handle { transition: none; }
+}
+
+/* ───────────── pdf.js text layer (PdfPreviewPane) ─────────────
+ * Minimal port of pdf.js's official .textLayer rules: transparent absolutely
+ * positioned spans (pdf.js's TextLayer class writes each span's inline
+ * geometry) overlaying the page canvas, selectable & copyable. Kept local —
+ * importing pdf_viewer.css would drag in the whole viewer UI.
+ */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+}
+.pdf-text-layer :where(span) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.pdf-text-layer ::selection {
+  background: rgb(var(--accent) / 0.35);
 }

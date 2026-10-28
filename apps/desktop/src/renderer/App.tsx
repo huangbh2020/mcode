@@ -1,6 +1,9 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { IconX, SpinnerIcon } from "@renderer/lib/icons.js";
+import { getProviderIcon } from "@renderer/lib/providerIcon.js";
+import { getSessionDragPayload, isSessionDrag } from "@renderer/lib/sessionDrag.js";
 import { ThreePaneLayout } from "./components/layout/ThreePaneLayout.js";
 import { Divider } from "./components/layout/Divider.js";
 import { Titlebar } from "./components/layout/Titlebar.js";
@@ -8,8 +11,10 @@ import { LeftBar } from "./components/layout/LeftBar.js";
 import { StreamSidebar } from "./components/layout/StreamSidebar.js";
 import {
   LeftEdgePeekTrigger,
-  LeftPeekScrim,
+  RightEdgePeekTrigger,
+  PeekScrim,
   usePeekAutoClose,
+  AUTO_PEEK_IDLE_MS,
 } from "./components/layout/LeftPanelPeek.js";
 import { ChatPane } from "./components/chat/ChatPane.js";
 import { TerminalSessionPane } from "./components/chat/TerminalSessionPane.js";
@@ -57,6 +62,39 @@ const GitDiffDialog = lazy(() =>
 const PlanViewer = lazy(() =>
   import("./components/chat/PlanViewer.js").then((m) => ({ default: m.PlanViewer })),
 );
+
+/** Two-frame transition arming for a hover-peek drawer, shared by the left
+ *  and right drawers. Entering drawer mode re-parents the aside in a single
+ *  commit, and a live transform transition would replay a stale slide across
+ *  the window — the first frame must park the panel off-canvas with
+ *  transitions disabled, then arm.
+ *
+ *  Two frames, not one: a single rAF still fires BEFORE the first paint, so
+ *  arming would coalesce with the park into one style change and the
+ *  transform would glide none → ±100% across the window (visible when a
+ *  fullscreen page closes back onto a closed-sidebar workspace). Frame 1
+ *  paints the parked state; frame 2 arms the transitions. Exiting drawer
+ *  mode disarms and resets the side's peek flag (a drawer that no longer
+ *  exists must never stay "open"). */
+function usePeekDrawerArmed(drawer: boolean, resetPeek: (open: boolean) => void) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!drawer) {
+      setArmed(false);
+      resetPeek(false);
+      return;
+    }
+    let id2 = 0;
+    const id1 = requestAnimationFrame(() => {
+      id2 = requestAnimationFrame(() => setArmed(true));
+    });
+    return () => {
+      cancelAnimationFrame(id1);
+      cancelAnimationFrame(id2);
+    };
+  }, [drawer, resetPeek]);
+  return armed;
+}
 
 export function App() {
   // Subscribe to the claude event stream for the app's whole lifetime.
@@ -162,38 +200,18 @@ export function App() {
   const setLeftPeekOpen = useSessionStore((s) => s.setLeftPeekOpen);
   const browserPanelOpen = useSessionStore((s) => s.browserPanelOpen);
 
-  // ── Left-panel hover-peek drawer ──────────────────────────────────────
+  // ── Side-panel hover-peek drawers (left + right) ────────────────────────
   // Workspace visible + panel closed → the always-mounted aside flips from
-  // in-flow to a fixed off-canvas drawer: hovering the window's left edge
-  // floats it in OVER the content (no layout shift); pinning stays on the
-  // toggle buttons. Settings/sched pages keep the aside fully hidden.
+  // in-flow to a fixed off-canvas drawer: hovering the window's edge floats
+  // it in OVER the content (no layout shift); pinning stays on the toggle
+  // buttons. Settings/sched pages keep both asides fully hidden.
   const leftDrawer = !leftOpen && !settingsOpen && !schedPageOpen;
   // Drawer-mode entry must not animate: the aside re-parents from in-flow
   // (or display:none) to fixed in a single commit, and a live transform
   // transition would replay a stale slide across the window. The first
   // drawer frame parks the panel off-canvas with transitions disabled; they
   // arm one frame later so peek open/close glide.
-  const [leftDrawerArmed, setLeftDrawerArmed] = useState(false);
-  useEffect(() => {
-    if (!leftDrawer) {
-      setLeftDrawerArmed(false);
-      setLeftPeekOpen(false);
-      return;
-    }
-    // Two frames, not one: a single rAF still fires BEFORE the first paint,
-    // so arming would coalesce with the park into one style change and the
-    // transform would glide none → -100% across the window (visible when a
-    // fullscreen page closes back onto a closed-sidebar workspace). Frame 1
-    // paints the parked state; frame 2 arms the transitions.
-    let id2 = 0;
-    const id1 = requestAnimationFrame(() => {
-      id2 = requestAnimationFrame(() => setLeftDrawerArmed(true));
-    });
-    return () => {
-      cancelAnimationFrame(id1);
-      cancelAnimationFrame(id2);
-    };
-  }, [leftDrawer, setLeftPeekOpen]);
+  const leftDrawerArmed = usePeekDrawerArmed(leftDrawer, setLeftPeekOpen);
   // Dismiss the drawer on mouse-leave after a short grace period (re-entering
   // cancels), so grazing onto the scrim doesn't flicker it shut. Clicking the
   // scrim dismisses immediately; opening cancels any pending close.
@@ -203,10 +221,49 @@ export function App() {
   );
   const openLeftPeek = () => {
     cancelLeftPeekClose();
+    // The two drawers must never stack (both float over the workspace and
+    // share the z-band) — opening one dismisses the other.
+    setRightPeekOpen(false);
     setLeftPeekOpen(true);
   };
   const rightOpen = useSessionStore((s) => s.rightOpen);
   const setRightOpen = useSessionStore((s) => s.setRightOpen);
+  // Right-panel hover-peek state — mirror of the left: hovering the window's
+  // right edge floats the closed IDE panel in over the workspace.
+  const rightPeekOpen = useSessionStore((s) => s.rightPeekOpen);
+  const setRightPeekOpen = useSessionStore((s) => s.setRightPeekOpen);
+  const rightDrawer = !rightOpen && !settingsOpen && !schedPageOpen;
+  const rightDrawerArmed = usePeekDrawerArmed(rightDrawer, setRightPeekOpen);
+  const { schedule: scheduleRightPeekClose, cancel: cancelRightPeekClose } = usePeekAutoClose(
+    rightPeekOpen,
+    () => setRightPeekOpen(false),
+  );
+  // Distinguish user peeks (trigger strip / scrim path) from store-driven
+  // AUTO-peeks (a file opened while the panel was closed slides the drawer
+  // in with the file preview). Only auto-peeks get the idle dismissal below.
+  const rightPeekUserRef = useRef(false);
+  const prevRightPeekRef = useRef(rightPeekOpen);
+  const openRightPeek = () => {
+    cancelRightPeekClose();
+    rightPeekUserRef.current = true;
+    setLeftPeekOpen(false);
+    setRightPeekOpen(true);
+  };
+  useEffect(() => {
+    const rose = rightPeekOpen && !prevRightPeekRef.current;
+    prevRightPeekRef.current = rightPeekOpen;
+    if (!rightPeekOpen) {
+      rightPeekUserRef.current = false;
+      return;
+    }
+    // Auto-peeked (no user gesture): the mouse may never enter the drawer,
+    // so mouse-leave alone would leave it parked open over the workspace —
+    // arm the idle window. A mouse-enter cancels it (ThreePaneLayout wires
+    // cancelRightPeekClose), handing control to the normal leave-grace.
+    if (rose && !rightPeekUserRef.current) {
+      scheduleRightPeekClose(AUTO_PEEK_IDLE_MS);
+    }
+  }, [rightPeekOpen, scheduleRightPeekClose]);
   const rightPanelTab = useSessionStore((s) => s.rightPanelTab);
   const setRightPanelTab = useSessionStore((s) => s.setRightPanelTab);
   const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
@@ -330,12 +387,24 @@ export function App() {
       {leftDrawer && !leftPeekOpen && !browserPanelOpen && (
         <LeftEdgePeekTrigger onActivate={openLeftPeek} />
       )}
-      {leftDrawer && (
-        <LeftPeekScrim active={leftPeekOpen} onClose={() => setLeftPeekOpen(false)} />
+      {leftDrawer && <PeekScrim active={leftPeekOpen} onClose={() => setLeftPeekOpen(false)} />}
+      {/* Right-edge mirror of the trigger strip above (same intent delay +
+          click-to-skip; see LeftPanelPeek.tsx). Gated the same way: not while
+          a side peek is open, the browser overlay owns the workspace, or a
+          fullscreen page covers the row. The right drawer itself is the
+          layout's right aside in drawer mode (ThreePaneLayout props below). */}
+      {rightDrawer && !rightPeekOpen && !browserPanelOpen && (
+        <RightEdgePeekTrigger onActivate={openRightPeek} />
+      )}
+      {rightDrawer && (
+        <PeekScrim active={rightPeekOpen} onClose={() => setRightPeekOpen(false)} />
       )}
       <aside
         onMouseEnter={leftPeekOpen ? cancelLeftPeekClose : undefined}
-        onMouseLeave={leftPeekOpen ? scheduleLeftPeekClose : undefined}
+        // Explicit no-arg call: React passes the MouseEvent as the first
+        // argument, and schedule's optional ms-override parameter would
+        // swallow it as a grace duration.
+        onMouseLeave={leftPeekOpen ? () => scheduleLeftPeekClose() : undefined}
         className={cn(
           // min-w-0 kills the flex `min-width: auto` content floor —
           // without it the widest nowrap row in LeftBar (e.g. a long
@@ -438,6 +507,11 @@ export function App() {
             rightOpen={rightOpen}
             rightWidth={rightWidth}
             rightWidthPct={widePanelOpen ? widePanelPct : undefined}
+            rightPeekDrawer={rightDrawer}
+            rightPeekArmed={rightDrawerArmed}
+            rightPeekOpen={rightPeekOpen}
+            onRightPeekMouseEnter={cancelRightPeekClose}
+            onRightPeekMouseLeave={scheduleRightPeekClose}
             bottomTerminal={
               terminalPosition === "bottom" ? (
                 <BottomTerminalBar active={bottomTerminalOpen} />
@@ -603,6 +677,23 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
   );
   const centerTabFocus = useSessionStore((s) => s.centerTabFocus);
   const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
+  // Per-tab split groups (tabs displayMode): the ACTIVE tab's grid replaces
+  // its plain pane — the split lives INSIDE the tab, other tabs and the
+  // strip are untouched. The focused session may be a non-tab member pane,
+  // so the active TAB is resolved through the groups.
+  const splitGroupsBySession = useSessionStore((s) => s.splitGroupsBySession);
+  const activeTabId = (() => {
+    const a = activeSessionId;
+    if (a && openTabs.includes(a)) return a;
+    if (a) {
+      for (const [root, members] of Object.entries(splitGroupsBySession)) {
+        if (members.includes(a)) return root;
+      }
+    }
+    return null;
+  })();
+  const activeGroup = activeTabId ? splitGroupsBySession[activeTabId] : undefined;
+  const showSplitGrid = !!activeGroup && activeGroup.length >= 2;
   // The editor owns the content area only while focused AND it has content.
   // In `tabs` displayMode with `sidebar` placement, file preview lives in the
   // right sidebar's dual-column preview, so the center pane keeps the chat view.
@@ -620,33 +711,55 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {wide ? <SessionTabs /> : <UnifiedTabsBar />}
-      <div className="relative min-h-0 flex-1">
-        {openTabs.map((sid) => (
-          <div
-            key={sid}
-            className={cn(
-              "absolute inset-0",
-              sid === activeSessionId && !editorVisible ? "" : "hidden",
-            )}
-          >
-            <SessionSurface sessionId={sid} isActive={sid === activeSessionId && !editorVisible} />
-          </div>
-        ))}
-        {editorMounted && (
-          <div
-            className={cn(
-              "absolute inset-0 flex min-h-0 flex-col",
-              !editorVisible && "hidden",
-            )}
-          >
-            {/* hideTabsBar: the unified bar above already shows the file
-                tabs — a second OpenTabsBar would duplicate them. In wide
-                mode the strip is SessionTabs, and the hidden host renders
-                no bar at all. */}
-            <EditorColumn filePath={activeFile} hideTabsBar />
+      {/* Split drag-in host: dropping a sidebar session below the tab bar
+          splits the CURRENTLY OPEN tab in place (per-tab group) — the
+          dragged session never becomes a tab. Only the content area is a
+          target; the tab strip keeps its own dnd-kit reorder zone. */}
+      <SplitDropHost className="relative min-h-0 flex-1">
+        {/* Normal tab content — stays MOUNTED while the grid shows (CSS
+            hidden), same keep-alive contract as tab switches: entering or
+            dissolving the split must not unmount/remount the whole pane
+            set (that was the first-drop hitch — N Tiptap teardowns plus 2
+            fresh inits in one commit). While hidden, every pane is
+            forced "background" (isActive=false) so one-shot scroll
+            effects don't run against a display:none container. */}
+        <div className={cn("absolute inset-0", showSplitGrid && "hidden")}>
+          {openTabs.map((sid) => (
+            <div
+              key={sid}
+              className={cn(
+                "absolute inset-0",
+                sid === activeSessionId && !editorVisible && !showSplitGrid ? "" : "hidden",
+              )}
+            >
+              <SessionSurface
+                sessionId={sid}
+                isActive={sid === activeSessionId && !editorVisible && !showSplitGrid}
+              />
+            </div>
+          ))}
+          {editorMounted && (
+            <div
+              className={cn(
+                "absolute inset-0 flex min-h-0 flex-col",
+                !editorVisible && "hidden",
+              )}
+            >
+              {/* hideTabsBar: the unified bar above already shows the file
+                  tabs — a second OpenTabsBar would duplicate them. In wide
+                  mode the strip is SessionTabs, and the hidden host renders
+                  no bar at all. */}
+              <EditorColumn filePath={activeFile} hideTabsBar />
+            </div>
+          )}
+        </div>
+        {/* The active tab's split grid (per-tab group). */}
+        {showSplitGrid && (
+          <div className="absolute inset-0 flex min-h-0 flex-col">
+            <SplitChatArea sessionIds={activeGroup} />
           </div>
         )}
-      </div>
+      </SplitDropHost>
     </div>
   );
 }
@@ -776,6 +889,7 @@ function ChatColumn() {
   const displayMode = useSessionStore((s) => s.displayMode);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const openTabs = useSessionStore((s) => s.openTabs);
+  const splitSessionIds = useSessionStore((s) => s.splitSessionIds);
 
   // Single-mode memory policy driver (see the block comment above).
   useEffect(() => {
@@ -803,6 +917,10 @@ function ChatColumn() {
     const s = useSessionStore.getState();
     for (const id of candidates) {
       if (id === activeSessionId || singleModeGrace.includes(id)) continue;
+      // Split-view members are visibly mounted in the grid — exempt from
+      // the grace-window eviction entirely (agreed policy: split panes stay
+      // resident).
+      if (s.splitSessionIds.includes(id)) continue;
       // Live threads keep their buckets: a running turn's events and its
       // turn.done persistence read messagesBySession, and a pending question
       // drives the left-bar/activity badge. Retry on the next switch.
@@ -846,6 +964,14 @@ function ChatColumn() {
     );
   }
 
+  // Split view (single displayMode, ≥ 2 members): every member pane mounts
+  // simultaneously in the 2×2 grid with ONE shared composer strip below.
+  // Split members never take the keyed-remount path below — their lifetime
+  // is the grid, and the prune effect above exempts them.
+  if (splitSessionIds.length >= 2) {
+    return <SplitChatArea sessionIds={splitSessionIds} />;
+  }
+
   // single mode: mount ONLY the active pane. The keyed div forces a full
   // remount on switch — that IS the destruction the mode promises. What the
   // user loses vs. the old 8-pane keep-alive is instant back-switching
@@ -857,10 +983,294 @@ function ChatColumn() {
     return <ChatPane sessionId={null} />;
   }
   return (
-    <div className="relative min-h-0 flex-1">
+    <SplitDropHost className="relative min-h-0 flex-1">
       <div key={activeSessionId} className="absolute inset-0">
         <SessionSurface sessionId={activeSessionId} isActive />
       </div>
+    </SplitDropHost>
+  );
+}
+
+/** Drag-in host for the NON-split center: dragging a sidebar session over
+ *  the center materializes the split grid around the currently open session
+ *  (addToSplit seeds it as pane 1; from `tabs` displayMode it switches the
+ *  mode first). Used by the plain single view AND UnifiedTabbedPane's
+ *  content area. Same highlight contract as SplitChatArea's own drop
+ *  handling. */
+/** Drag-in host for the NON-split center. The drop is the split gesture in
+ *  BOTH display modes (store-side mode dispatch): `single` seeds the global
+ *  grid around the open session; `tabs` splits the currently open tab in
+ *  place (per-tab group — the dragged session never becomes a tab). Used by
+ *  the plain single view AND UnifiedTabbedPane's content area (the tab
+ *  strip itself keeps its own dnd-kit reorder zone). */
+function SplitDropHost({ className, children }: { className?: string; children: ReactNode }) {
+  const addToSplit = useSessionStore((s) => s.addToSplit);
+  const [dragOver, setDragOver] = useState(false);
+  // One-shot ring pulse after a successful drop — acknowledges the landing
+  // (styles.css `split-drop-flash`; cleared on animation end).
+  const [flash, setFlash] = useState(false);
+  return (
+    <div
+      className={cn(
+        className,
+        // Fade the highlight in/out (box-shadow = ring) + a faint tint.
+        "transition-[box-shadow,background-color] duration-200",
+        dragOver && "rounded-xl bg-accent/[0.04] ring-2 ring-inset ring-accent",
+        flash && "rounded-xl split-drop-flash",
+      )}
+      onDragOver={(e) => {
+        if (!isSessionDrag(e.dataTransfer.types)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false);
+      }}
+      onDrop={(e) => {
+        const sid = getSessionDragPayload(e.dataTransfer);
+        if (!sid) return;
+        e.preventDefault();
+        setDragOver(false);
+        setFlash(true);
+        void addToSplit(sid);
+      }}
+      onAnimationEnd={(e) => {
+        // animationend bubbles — child animations (composer cards etc.)
+        // must not clear the host's own flash.
+        if (e.target === e.currentTarget) setFlash(false);
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** One cell of the split grid: mini header (provider icon + title + running
+ *  dot + close) above the session surface. Click anywhere focuses the pane
+ *  (= the normal activation chain, so composer slots / title bar / git /
+ *  right panel all follow). The focused pane renders its composer column
+ *  into the shared strip via the portal target; unfocused chat panes keep
+ *  their column in place but hide the input (pending prompts still show —
+ *  an unfocused pane's approval must stay visible and answerable). */
+function SplitPaneCell({
+  sessionId,
+  focused,
+  composerPortalTarget,
+  deferred = false,
+}: {
+  sessionId: string;
+  focused: boolean;
+  composerPortalTarget: HTMLElement | null;
+  /** Skeleton-first mount: while true the cell renders its chrome (header +
+   *  ring) over a light spinner and the real surface mounts next frame —
+   *  pane init (Tiptap + timeline parse) is the heaviest part of the first
+   *  drop, and moving it one frame past the grid paint keeps the drop
+   *  feedback instant. */
+  deferred?: boolean;
+}) {
+  const { t } = useI18n();
+  const kind = useSessionStore((s) => selectSessionKind(s, sessionId));
+  const session = useSessionStore((s) => s.getSessionById(sessionId));
+  const isRunning = useSessionStore((s) => !!s.runningBySession[sessionId]);
+  const removeFromSplit = useSessionStore((s) => s.removeFromSplit);
+  // Pane focus = plain activation. Deliberately NOT openTab: in tabs mode a
+  // member pane must NOT join the tab strip (the split lives inside one
+  // tab); selectSession flips activeSessionId + hydrates without touching
+  // openTabs.
+  const selectSession = useSessionStore((s) => s.selectSession);
+  const provider = getProviderIcon(session?.providerId);
+  const ProviderIcon = provider.Icon;
+
+  return (
+    <section
+      className={cn(
+        // Rounded card, not a square tile: overflow-hidden clips the (rectangular)
+        // session surface to the corners. The 聚焦描边 lives on the OVERLAY
+        // below (not on this element) — see the ring note there.
+        "relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-surface",
+      )}
+      onPointerDown={() => {
+        if (!focused) void selectSession(sessionId);
+      }}
+    >
+      <header className="flex h-7 shrink-0 items-center gap-1.5 px-2">
+        <ProviderIcon size={12} className={cn("shrink-0", provider.color || "text-content-subtle")} />
+        <span className="min-w-0 flex-1 truncate text-[11px] text-content-muted">
+          {session?.title ?? sessionId}
+        </span>
+        {isRunning && (
+          <span
+            className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent"
+            title={t("layout.split.running")}
+          />
+        )}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void removeFromSplit(sessionId);
+          }}
+          title={t("layout.split.closePane")}
+          aria-label={t("layout.split.closePane")}
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
+        >
+          <IconX size={12} />
+        </button>
+      </header>
+      {/* Chat cells inset the scroll viewport from the card's bottom border
+          (pb lives on the wrapper, so it's a fixed gutter — content scrolls
+          ABOVE it, never clipping the rounded edge). The focused pane's
+          composer is portaled out to the strip, and hidden composers on
+          unfocused panes leave nothing below the stream, so without this
+          messages ride flush against the border. Terminal cells fill
+          naturally — no gutter there. */}
+      <div className={cn("min-h-0 flex-1", kind !== "terminal" && "pb-3")}>
+        {deferred ? (
+          <div className="flex h-full items-center justify-center">
+            <SpinnerIcon size={16} className="animate-spin text-content-subtle" />
+          </div>
+        ) : kind === "terminal" ? (
+          <TerminalSessionPane sessionId={sessionId} isActive={focused} />
+        ) : (
+          <ChatPane
+            sessionId={sessionId}
+            isActive
+            hideComposer={!focused}
+            composerPortalTarget={focused ? composerPortalTarget : null}
+          />
+        )}
+      </div>
+      {/* 聚焦格描边 as a paint-last overlay, NOT an inset box-shadow on the
+          section: inset rings paint UNDER child content, and the terminal
+          pane's opaque full-bleed canvas completely covered them. This
+          transparent layer re-draws the ring above everything; z-10 beats
+          the panes (they carry no z-index), pointer-events-none keeps
+          clicks/drag-through intact, and it inherits the rounded corners. */}
+      <div
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute inset-0 z-10 rounded-xl",
+          focused ? "ring-2 ring-inset ring-accent" : "ring-1 ring-inset ring-edge-panel",
+        )}
+      />
+    </section>
+  );
+}
+
+/** The split grid + the ONE shared full-width composer strip (single
+ *  displayMode, ≥ 2 members). Grid shapes per the agreed spec: 2 panes =
+ *  side-by-side single row; 3 = top row + bottom-left (grid auto-flow lands
+ *  there naturally); 4 = full 2×2. The strip hosts the FOCUSED pane's
+ *  composer column via ChatPane's portal prop — unfocused panes show their
+ *  streams (and their own pending prompts) only. A focused TERMINAL pane
+ *  collapses the strip: terminal input is the PTY itself. */
+function SplitChatArea({ sessionIds }: { sessionIds: string[] }) {
+  const addToSplit = useSessionStore((s) => s.addToSplit);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const [dragOver, setDragOver] = useState(false);
+  // One-shot ring pulse after a successful drop (see SplitDropHost).
+  const [flash, setFlash] = useState(false);
+  // Skeleton-first mount: the drop frame paints the grid chrome (cells,
+  // rings, strip); the real panes (Tiptap init + timeline parse × N — the
+  // heaviest part of the first drop) mount on the NEXT frame so the drop
+  // feedback is never hitched by the same commit. One-shot per grid
+  // lifetime; later member additions (3rd/4th pane) mount immediately.
+  const [panesMounted, setPanesMounted] = useState(false);
+  useEffect(() => {
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setPanesMounted(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, []);
+  const [stripEl, setStripEl] = useState<HTMLElement | null>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  // Layout effect + state (not the ref directly) so the focused pane's first
+  // paint already carries the portal target — a plain ref read would leave
+  // the composer rendered in-pane for one visible frame, and setState from
+  // a layout effect re-renders synchronously BEFORE paint.
+  useLayoutEffect(() => {
+    setStripEl(stripRef.current);
+  }, []);
+
+  // Focus must be a grid member (the store maintains this invariant; the
+  // fallback covers transient desync, e.g. a mid-flight session deletion).
+  const focusedId =
+    activeSessionId != null && sessionIds.includes(activeSessionId) ? activeSessionId : sessionIds[0];
+  const focusedKind = useSessionStore((s) => selectSessionKind(s, focusedId));
+  const stripHidden = focusedKind === "terminal";
+
+  return (
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      onDragOver={(e) => {
+        if (!isSessionDrag(e.dataTransfer.types)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false);
+      }}
+      onDrop={(e) => {
+        const sid = getSessionDragPayload(e.dataTransfer);
+        if (!sid) return;
+        e.preventDefault();
+        setDragOver(false);
+        setFlash(true);
+        // Guards live in the store: full grid / duplicate member / unknown
+        // session are silently absorbed (agreed UX).
+        void addToSplit(sid);
+      }}
+    >
+      <div
+        onAnimationEnd={(e) => {
+          // animationend bubbles — ignore child animations.
+          if (e.target === e.currentTarget) setFlash(false);
+        }}
+        className={cn(
+          // gap + padding (not a 1px hairline backdrop) so the rounded cards
+          // have breathing room at their corners.
+          "grid min-h-0 flex-1 grid-cols-2 gap-1.5 p-1.5",
+          // 2 panes share one full-height row; 3-4 fill the 2×2 grid.
+          sessionIds.length <= 2 ? "grid-rows-1" : "grid-rows-2",
+          // Highlight fades in/out while a session drag hovers.
+          "transition-[box-shadow] duration-200",
+          dragOver && "rounded-xl ring-2 ring-inset ring-accent",
+          flash && "rounded-xl split-drop-flash",
+        )}
+      >
+        {sessionIds.map((sid) => (
+          <SplitPaneCell
+            key={sid}
+            sessionId={sid}
+            focused={sid === focusedId}
+            composerPortalTarget={sid === focusedId ? stripEl : null}
+            deferred={!panesMounted}
+          />
+        ))}
+      </div>
+      {/* Shared composer strip — the focused pane's composer column portals
+          into this node (see ChatPane's composerPortalTarget). The portal
+          moves the column OUT of its pane's [data-chat-root] scope, which is
+          where every composer-card / minipill rule and the --chat-gutter
+          variable live (styles.css) — without the attribute the pill renders
+          styleless (segments concatenated). Same re-scope trick as
+          AutomationEditor's dialog body. As its own inline-size container
+          the strip also resolves the stepped gutter by ITS width (full grid
+          width), matching how a wide pane measures. */}
+      <div
+        ref={stripRef}
+        data-chat-root
+        className={cn(
+          "min-h-0 shrink-0 bg-surface",
+          stripHidden && "hidden",
+        )}
+      />
     </div>
   );
 }

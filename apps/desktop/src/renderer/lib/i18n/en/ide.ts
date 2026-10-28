@@ -84,6 +84,21 @@ export const en = {
   "ide.editor.videoUnsupported": "Can't play this video",
   "ide.editor.videoUnsupportedDesc":
     "The built-in player doesn't support this video's container or codec. Open it with your system player instead",
+  "ide.editor.readingPdf": "Loading PDF…",
+  "ide.editor.pdfFailed": "Couldn't render this PDF",
+  "ide.editor.pdfFailedDesc":
+    "The file may be corrupted, in an unsupported format, or failed to read. Try opening it with the default system app.",
+  "ide.editor.pdfEncrypted": "This PDF is password-protected",
+  "ide.editor.pdfEncryptedDesc":
+    "Password-protected PDFs can't be opened in-app yet. Open it with the default system app to enter the password.",
+  "ide.editor.pdfPrevPage": "Previous page",
+  "ide.editor.pdfNextPage": "Next page",
+  "ide.editor.pdfGoToPage": "Go to page",
+  "ide.editor.pdfZoomIn": "Zoom in",
+  "ide.editor.pdfZoomOut": "Zoom out",
+  "ide.editor.pdfFitWidth": "Fit width",
+  "ide.editor.pdfFitPage": "Fit page",
+  "ide.editor.pdfRotate": "Rotate 90°",
   "ide.editor.unknownExt": "Unknown",
   "ide.editor.cannotPreview": "Can't preview {ext} files",
   "ide.editor.unsupportedDesc":

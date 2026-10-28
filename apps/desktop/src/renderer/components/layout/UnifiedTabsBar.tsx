@@ -66,6 +66,29 @@ export function UnifiedTabsBar() {
   const selectSession = useSessionStore((s) => s.selectSession);
   const closeTab = useSessionStore((s) => s.closeTab);
   const reorderTab = useSessionStore((s) => s.reorderTab);
+  // Per-tab split groups: the focused session may be a non-tab MEMBER pane
+  // of some tab's grid — that tab is the active one (its group owns the
+  // center). Member panes never appear as tabs.
+  const splitGroupsBySession = useSessionStore((s) => s.splitGroupsBySession);
+  const isTabActive = useCallback(
+    (id: string) => {
+      if (id === activeId) return true;
+      const members = splitGroupsBySession[id];
+      return !!activeId && !!members?.includes(activeId);
+    },
+    [activeId, splitGroupsBySession],
+  );
+  // Chip display follows the FOCUSED session when the focus sits on one of
+  // a tab's group's member panes (name + icon + markers); identity stays
+  // the root id (sessionId prop → close/dnd/registry). Same contract as
+  // SessionTabs.
+  const displayedIdFor = useCallback(
+    (id: string) => {
+      if (activeId && splitGroupsBySession[id]?.includes(activeId)) return activeId;
+      return id;
+    },
+    [activeId, splitGroupsBySession],
+  );
   // Multi-row wrapping (toggled from the ⋯ overflow menu) vs the classic
   // single horizontally-scrolling row.
   const multiRow = useSessionStore((s) => s.tabBarMultiRow);
@@ -290,15 +313,17 @@ export function UnifiedTabsBar() {
           >
             <SortableContext items={tabs} strategy={sortStrategy}>
               {tabs.map((id) => {
-                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
+                const displayId = displayedIdFor(id);
+                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, displayId, orchWorkersById);
                 return (
                   <SortableSessionTab
                     key={id}
                     session={sess}
                     sessionId={id}
-                    isActive={id === activeId && !editorFocused}
-                    running={!!runningBySession[id] || orchAnchors[id] != null}
-                    unreadCount={unreadBySession[id] ?? 0}
+                    isActive={isTabActive(id) && !editorFocused}
+                    running={!!runningBySession[displayId] || orchAnchors[displayId] != null}
+                    unreadCount={unreadBySession[displayId] ?? 0}
+                    sessionCount={splitGroupsBySession[id]?.length}
                     multiRow={multiRow}
                     registerNode={(node) => {
                       if (node) tabNodes.current.set(id, node);
@@ -453,12 +478,13 @@ export function UnifiedTabsBar() {
           onToggleMultiRow={setTabBarMultiRow}
           items={[
             ...tabs.map((id) => {
-              const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
+              const displayId = displayedIdFor(id);
+              const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, displayId, orchWorkersById);
               return {
                 key: id,
                 label: sess?.title ?? "(unknown)",
-                active: id === activeId && !editorFocused,
-                dotClass: runningBySession[id] || orchAnchors[id] != null
+                active: isTabActive(id) && !editorFocused,
+                dotClass: runningBySession[displayId] || orchAnchors[displayId] != null
                   ? "bg-accent animate-pulse"
                   : "bg-content-subtle/50",
               };

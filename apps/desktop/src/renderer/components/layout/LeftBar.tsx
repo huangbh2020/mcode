@@ -67,6 +67,7 @@ import { normWorktreeKey, worktreeDisplayName } from "@renderer/lib/worktree.js"
 import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
 import { formatFullTime } from "@renderer/lib/time.js";
+import { beginSessionDrag } from "@renderer/lib/sessionDrag.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import type { Project, Session } from "@contracts/session";
@@ -140,11 +141,13 @@ function LeftBarBase({
   const loadMoreSessions = useSessionStore((s) => s.loadMoreSessions);
   const startSession = useSessionStore((s) => s.startSession);
   const startTerminalSession = useSessionStore((s) => s.startTerminalSession);
-  // Use `openTab` rather than `selectSession` so the clicked thread is
-  // added to the tab strip (in `tabs` mode) or simply activated (in
-  // `single` mode). Both display modes share the same entry point; the
-  // difference is whether SessionTabs is mounted above the center pane.
-  const openTab = useSessionStore((s) => s.openTab);
+  // Use `openSessionFromSidebar` (openTab + split-view semantics) rather
+  // than `selectSession` so the clicked thread is added to the tab strip (in
+  // `tabs` mode) or simply activated (in `single` mode) — and in split view
+  // a non-member click takes over the focused pane's slot. Both display
+  // modes share the same entry point; the difference is whether SessionTabs
+  // is mounted above the center pane.
+  const openSession = useSessionStore((s) => s.openSessionFromSidebar);
   const deleteProject = useSessionStore((s) => s.deleteProject);
   const archiveProject = useSessionStore((s) => s.archiveProject);
   const deleteSession = useSessionStore((s) => s.deleteSession);
@@ -671,7 +674,7 @@ function LeftBarBase({
           onNewSession={() => void startSession(p.id)}
           onNewTerminalSession={(providerId) => void startTerminalSession(p.id, providerId)}
           onLoadMore={() => void loadMoreSessions(p.id)}
-          onSelectSession={(sid) => void openTab(sid)}
+          onSelectSession={(sid) => void openSession(sid)}
           onDelete={() => {
             setConfirmDelete({ kind: "project", id: p.id, name: p.name });
           }}
@@ -706,7 +709,7 @@ function LeftBarBase({
       expandedProjects, expandedWorktrees, worktreeNames,
       activeProjectId, activeSessionId, activeSessionProjectId,
       runningBySession, bulkMode, bulkSelected, toggleBulkSession, toggleBulkProject,
-      toggleProjectExpanded, toggleWorktreeExpanded, startSession, loadMoreSessions, openTab,
+      toggleProjectExpanded, toggleWorktreeExpanded, startSession, loadMoreSessions, openSession,
       archiveSession, deleteSession, setSessionPinned, registerNode,
     ],
   );
@@ -917,7 +920,7 @@ function LeftBarBase({
                     active={s.id === activeSessionId}
                     isRunning={!!runningBySession[s.id]}
                     unreadCount={unreadBySession[s.id] ?? 0}
-                    onSelect={() => void openTab(s.id)}
+                    onSelect={() => void openSession(s.id)}
                     onTogglePin={() => void setSessionPinned(s.id, !s.pinnedAt)}
                     onArchive={() => void archiveSession(s.id, true)}
                     onDelete={() => void deleteSession(s.id)}
@@ -1153,6 +1156,10 @@ function LeftBarBase({
         onClose={() => setCtxMenu(null)}
         onRename={(s) => { setCtxMenu(null); setRenaming({ id: s.id, title: s.title, kind: "session" }); }}
         onCopyTitle={(s) => { void navigator.clipboard.writeText(s.title); setCtxMenu(null); }}
+        onOpenInSplit={(s) => {
+          setCtxMenu(null);
+          void useSessionStore.getState().addToSplit(s.id);
+        }}
         onOpenFolder={(s) => {
           setCtxMenu(null);
           const proj = findProject(s.projectId);
@@ -1771,6 +1778,9 @@ function SessionRow({
   // (the title gets the full width) and swaps to the archive/delete action
   // buttons on hover.
   const [hovered, setHovered] = useState(false);
+  // True while this row is the active HTML5 drag source (split-view drag):
+  // the row dims ("lifted") until dragend fires.
+  const [dragging, setDragging] = useState(false);
   // Bulk mode: a running session is locked out (must be stopped first —
   // deleting mid-turn would fight the runtime's own teardown). Rendered
   // dimmed with a hint instead of hidden: the user should see WHY it's
@@ -1795,6 +1805,17 @@ function SessionRow({
   return (
     <li
       ref={(el) => registerNode(session.id, el)}
+      // Split-view drag source: dropping the row onto the center chat area
+      // adds this session to the 2×2 grid (lib/sessionDrag.ts). Native
+      // HTML5 DnD, not dnd-kit — the drop targets live outside every
+      // DndContext and this row is not a sortable anyway (only project
+      // headers are). Bulk mode suspends the drag with everything else.
+      draggable={!bulkMode}
+      onDragStart={(e) => {
+        beginSessionDrag(e, session, getProviderIcon(session.providerId).dot);
+        setDragging(true);
+      }}
+      onDragEnd={() => setDragging(false)}
       onClick={handleRowClick}
       onMouseEnter={() => {
         setHovered(true);
@@ -1816,6 +1837,8 @@ function SessionRow({
       className={cn(
         "group flex cursor-pointer items-center gap-1 rounded-md px-1 py-1 [font-size:var(--right-panel-font-size)]",
         bulkMode && bulkLocked && "cursor-not-allowed opacity-45",
+        // Lifted look while this row is the drag source.
+        dragging && "opacity-40",
         bulkMode && bulkChecked
           ? "bg-accent/10 text-content ring-1 ring-inset ring-accent/40"
           : active

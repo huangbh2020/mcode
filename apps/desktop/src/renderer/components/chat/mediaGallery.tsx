@@ -670,20 +670,22 @@ export function MediaGallery({ blocks }: { blocks: MediaBlock[] }) {
           <span className="tabular-nums">
             {curIdx + 1} / {active.length}
           </span>
-          <span className="ml-1.5 flex items-center gap-1">
-            {active.map((_, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={() => setIdx(i)}
-                title={`${i + 1}`}
-                className={cn(
-                  "h-1.5 rounded-full transition-all",
-                  i === curIdx ? "w-3 bg-accent" : "w-1.5 bg-content-subtle/40 hover:bg-content-subtle/70",
-                )}
-              />
-            ))}
-          </span>
+          {active.length <= 12 && (
+            <span className="ml-1.5 flex items-center gap-1">
+              {active.map((_, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setIdx(i)}
+                  title={`${i + 1}`}
+                  className={cn(
+                    "h-1.5 rounded-full transition-all",
+                    i === curIdx ? "w-3 bg-accent" : "w-1.5 bg-content-subtle/40 hover:bg-content-subtle/70",
+                  )}
+                />
+              ))}
+            </span>
+          )}
         </div>
       )}
       {openIdx != null && (

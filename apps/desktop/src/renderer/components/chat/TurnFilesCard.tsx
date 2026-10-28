@@ -113,7 +113,7 @@ export function TurnFilesCard({
   );
 
   return (
-    <div className={cn("mb-[5px] rounded-lg border border-edge bg-surface-muted/60 shadow-sm text-xs text-content-muted", rewound && "opacity-60")}>
+    <div className={cn("mb-[5px] rounded-lg border border-edge bg-surface-muted/90 shadow-sm text-xs text-content-muted", rewound && "opacity-60")}>
       <div
         role="button"
         tabIndex={0}
@@ -308,7 +308,7 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
           void handleOpen();
         }
       }}
-      className="flex w-full cursor-pointer items-center gap-2 rounded-md bg-surface-muted/40 px-2 py-1.5 text-left transition-colors hover:bg-surface-hover"
+      className="flex w-full cursor-pointer items-center gap-2 rounded-md bg-surface/70 dark:bg-surface-muted/40 px-2 py-1.5 text-left transition-colors hover:bg-surface-hover"
       title={t("chatStream.turnFiles.reviewDiff")}
     >
       <span aria-hidden title={isCreated ? t("chatStream.turnFiles.createdThisTurn") : t("chatStream.turnFiles.modifiedThisTurn")} className="shrink-0 text-content-subtle">
