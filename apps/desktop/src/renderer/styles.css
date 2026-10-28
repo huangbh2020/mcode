@@ -1751,10 +1751,26 @@ button.chat-ledger-head:hover {
   animation: composer-q-in 0.34s var(--composer-ease-out) backwards;
 }
 
+/* ───────────── Split-view drop acknowledgment ─────────────
+ * One-shot inset-ring pulse on the split drop host / grid after a session
+ * drag lands (App.tsx `split-drop-flash`, cleared on animationend). Pure
+ * ring fade — no movement — so it reads as "accepted here" without
+ * displacing layout. */
+@keyframes split-drop-flash {
+  from { box-shadow: inset 0 0 0 2px rgb(var(--accent) / 0.85); }
+  to { box-shadow: inset 0 0 0 2px rgb(var(--accent) / 0); }
+}
+.split-drop-flash {
+  animation: split-drop-flash 0.45s ease-out forwards;
+}
+
 /* Reduced motion: label shells snap instead of animating, and the
  * decorative loops (sweep / spin / launch) flatten away; entrance animations
  * degrade to instant appearance so arrival is still perceivable. */
 @media (prefers-reduced-motion: reduce) {
+  .split-drop-flash {
+    animation: none;
+  }
   [data-chat-root] .composer-lblwrap,
   [data-chat-root] .composer-minipill-seg {
     transition: none;

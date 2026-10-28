@@ -26,6 +26,22 @@ interface Props {
    *  re-shapes it; the onResize/onReset callbacks switch to the wide split's
    *  percentage-based handlers. */
   rightWidthPct?: number;
+  /** Right-panel hover-peek drawer mode (mirror of the left aside's in
+   *  App.tsx): when true and rightOpen=false, the aside renders as a fixed
+   *  overlay parked at translate-x-full instead of display:none — still
+   *  mounted (TerminalPanel keep-alive), summoned from the window's right
+   *  edge. Left unset/false (settings page) keeps the classic hidden behavior. */
+  rightPeekDrawer?: boolean;
+  /** Whether the drawer's transform transition is armed (two frames after
+   *  entering drawer mode — see the leftDrawerArmed effect in App.tsx; the
+   *  same park-then-arm dance). */
+  rightPeekArmed?: boolean;
+  /** Whether the drawer is currently slid in over the workspace. */
+  rightPeekOpen?: boolean;
+  /** Grace-close wiring for the peeked drawer: re-entering cancels the
+   *  pending dismissal, leaving schedules it (usePeekAutoClose in App.tsx). */
+  onRightPeekMouseEnter?: () => void;
+  onRightPeekMouseLeave?: () => void;
   bottomTerminalHeight?: number;
   onResizeLeft?: (deltaPx: number) => void;
   onResizeRight?: (deltaPx: number) => void;
@@ -60,6 +76,11 @@ export function ThreePaneLayout({
   leftWidth,
   rightWidth,
   rightWidthPct,
+  rightPeekDrawer = false,
+  rightPeekArmed,
+  rightPeekOpen,
+  onRightPeekMouseEnter,
+  onRightPeekMouseLeave,
   bottomTerminalHeight,
   onResizeLeft,
   onResizeRight,
@@ -148,17 +169,58 @@ export function ThreePaneLayout({
          the divider. overflow-hidden (not overflow-y-auto): Files/Git scroll
          internally, and xterm FitAddon breaks under a scrolling ancestor.
          Kept mounted via CSS `hidden` when closed so stateful children like
-         TerminalPanel (PTYs and scrollback) survive toggling the sidebar. */}
+         TerminalPanel (PTYs and scrollback) survive toggling the sidebar.
+
+         Drawer mode (rightPeekDrawer, workspace only): the same element
+         re-parents to a fixed overlay parked at translate-x-full — the right
+         mirror of App.tsx's left drawer. Opening the peek glides it in over
+         the workspace with a left-cast shadow while the scrim below dims the
+         content. The inner border-l is dropped here: the drawer's own
+         border-l replaces it (two stacked hairlines would read 2px). */}
       {right && (
         <aside
+          onMouseEnter={rightPeekDrawer && rightPeekOpen ? onRightPeekMouseEnter : undefined}
+          // Explicit no-arg call: React passes the MouseEvent as the first
+          // argument, and schedule's optional ms-override parameter would
+          // swallow it as a grace duration.
+          onMouseLeave={
+            rightPeekDrawer && rightPeekOpen ? () => onRightPeekMouseLeave?.() : undefined
+          }
           className={cn(
-            "flex h-full min-w-0 shrink flex-col overflow-hidden border-t border-edge-panel bg-surface",
-            !rightOpen && "hidden",
-            !isDraggingRight && "transition-[width] duration-200 ease-out",
+            "flex h-full min-w-0 shrink flex-col overflow-hidden bg-surface",
+            rightPeekDrawer
+              ? cn(
+                  // Drawer mode: fixed overlay parked off-canvas; the peek
+                  // slides it in over the workspace (z-[45], under the z-50
+                  // dialogs). Unlike the left drawer it stops below the
+                  // titlebar (its home region): the panel's top rail has
+                  // interactive controls at its far right, and on Windows
+                  // the native min/max/close overlay that zone — a
+                  // full-height drawer would park them under the OS buttons.
+                  // h-full (base) → h-auto: top/bottom insets stretch it.
+                  "fixed right-0 top-10 bottom-0 z-[45] h-auto shrink-0 rounded-l-2xl border-l border-edge-panel/60",
+                  rightPeekArmed &&
+                    "transition-[transform,opacity,box-shadow] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
+                  rightPeekOpen
+                    ? "pointer-events-auto translate-x-0 opacity-100 shadow-[-12px_0_48px_-12px_rgba(0,0,0,0.45)]"
+                    : "pointer-events-none translate-x-full opacity-0",
+                )
+              : cn(
+                  "border-t border-edge-panel",
+                  !rightOpen && "hidden",
+                  !isDraggingRight && "transition-[width] duration-200 ease-out",
+                ),
           )}
           style={{ width: rightWidthPct !== undefined ? `${rightWidthPct}%` : rightWidth }}
         >
-          <div className="min-h-0 flex-1 overflow-hidden border-l border-edge-panel">{right}</div>
+          <div
+            className={cn(
+              "min-h-0 flex-1 overflow-hidden",
+              !rightPeekDrawer && "border-l border-edge-panel",
+            )}
+          >
+            {right}
+          </div>
         </aside>
       )}
     </>

@@ -300,13 +300,14 @@ export function CommandPalette() {
         break;
       case "session": {
         const sess = item.session;
-        // openTab assumes the session's project is active; switch first when
-        // jumping across projects so the left-bar + config sync up.
+        // openSessionFromSidebar (openTab + split-view semantics) assumes
+        // the session's project is active; switch first when jumping across
+        // projects so the left-bar + config sync up.
         const run = async () => {
           if (sess.projectId !== store.activeProjectId) {
             await store.selectProject(sess.projectId);
           }
-          await store.openTab(sess.id);
+          await store.openSessionFromSidebar(sess.id);
         };
         void run();
         break;
@@ -320,7 +321,7 @@ export function CommandPalette() {
           if (hit.projectId !== store.activeProjectId) {
             await store.selectProject(hit.projectId);
           }
-          await store.openTab(hit.sessionId);
+          await store.openSessionFromSidebar(hit.sessionId);
           store.setPendingBookmarkJump({
             sessionId: hit.sessionId,
             messageId: hit.bookmark.messageId,

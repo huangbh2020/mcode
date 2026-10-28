@@ -18,6 +18,7 @@ import {
   IconFolder,
   IconGitFork,
   IconGitMerge,
+  IconLayoutColumns,
   IconPencil,
   IconPin,
   IconPinnedFilled,
@@ -76,11 +77,15 @@ export interface SessionContextMenuProps {
   onMergeWorktree?: (session: Session) => void;
   onRenameWorktree?: (session: Session) => void;
   onRemoveWorktree?: (session: Session) => void;
+  /** "Open in split view" — adds the session to the single-mode 2×2 split
+   *  grid (the drag-in gesture's keyboard/fallback entry). Both sidebar
+   *  views wire it; hosts that don't pass it see no entry. */
+  onOpenInSplit?: (session: Session) => void;
 }
 
 export function SessionContextMenu({
   ctxMenu, onClose, onRename, onCopyTitle, onOpenFolder, onTogglePin,
-  onNewWorktreeSession, onMergeWorktree, onRenameWorktree, onRemoveWorktree,
+  onNewWorktreeSession, onMergeWorktree, onRenameWorktree, onRemoveWorktree, onOpenInSplit,
 }: SessionContextMenuProps) {
   const { t } = useI18n();
   // Virtual anchor pinned to the cursor coords so the popup opens where the
@@ -132,6 +137,15 @@ export function SessionContextMenu({
               <IconCopy size={14} className="shrink-0" />
               {t("layout.copySessionTitle")}
             </Menu.Item>
+            {onOpenInSplit && (
+              <Menu.Item
+                onClick={() => session && onOpenInSplit(session)}
+                className={itemClass}
+              >
+                <IconLayoutColumns size={14} className="shrink-0" />
+                {t("layout.openInSplitView")}
+              </Menu.Item>
+            )}
             {session?.worktreePath && onNewWorktreeSession && (
               <Menu.Item
                 onClick={() => onNewWorktreeSession(session)}

@@ -822,7 +822,12 @@ export function TerminalView({
 
     let raf = 0;
     const doFit = () => {
-      if (!active) return;
+      // Hidden hosts (display:none keep-alive) measure 0×0 — fitting then
+      // would collapse the pty to the minimum grid, so skip. Visible but
+      // INACTIVE hosts (a split-view pane that lost focus) are measurable
+      // and DO need the fit: `active` alone can't distinguish the two, so
+      // the box decides.
+      if (host.offsetWidth === 0 || host.offsetHeight === 0) return;
       const term = termRef.current;
       const fit = fitRef.current;
       const id = terminalIdRef.current;

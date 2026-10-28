@@ -230,6 +230,16 @@ export const DisplayModeSchema = z.enum(["single", "tabs"]);
 export type DisplayMode = z.infer<typeof DisplayModeSchema>;
 
 /**
+ * Split-view membership for the `single` display mode: the ordered sessionIds
+ * shown simultaneously in the center 2×2 grid (2 = side-by-side, 3 = top row
+ * + bottom-left, 4 = full grid). Persisted in the `settings` table under this
+ * key as a JSON string array. Length < 2 means "no split" (normal single
+ * view); dead ids are dropped during hydration and a remainder below 2
+ * collapses back to the plain single view.
+ */
+export const SPLIT_SESSIONS_SETTING_KEY = "ui.splitSessions";
+
+/**
  * In `tabs` displayMode, controls whether file previews open in the center
  * unified tab bar (default) or in the right sidebar's dual-column preview.
  */
