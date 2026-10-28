@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
-import { IconX } from "@renderer/lib/icons.js";
+import { IconX, SpinnerIcon } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { getSessionDragPayload, isSessionDrag } from "@renderer/lib/sessionDrag.js";
 import { ThreePaneLayout } from "./components/layout/ThreePaneLayout.js";
@@ -716,38 +716,48 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
           dragged session never becomes a tab. Only the content area is a
           target; the tab strip keeps its own dnd-kit reorder zone. */}
       <SplitDropHost className="relative min-h-0 flex-1">
-        {showSplitGrid ? (
+        {/* Normal tab content — stays MOUNTED while the grid shows (CSS
+            hidden), same keep-alive contract as tab switches: entering or
+            dissolving the split must not unmount/remount the whole pane
+            set (that was the first-drop hitch — N Tiptap teardowns plus 2
+            fresh inits in one commit). While hidden, every pane is
+            forced "background" (isActive=false) so one-shot scroll
+            effects don't run against a display:none container. */}
+        <div className={cn("absolute inset-0", showSplitGrid && "hidden")}>
+          {openTabs.map((sid) => (
+            <div
+              key={sid}
+              className={cn(
+                "absolute inset-0",
+                sid === activeSessionId && !editorVisible && !showSplitGrid ? "" : "hidden",
+              )}
+            >
+              <SessionSurface
+                sessionId={sid}
+                isActive={sid === activeSessionId && !editorVisible && !showSplitGrid}
+              />
+            </div>
+          ))}
+          {editorMounted && (
+            <div
+              className={cn(
+                "absolute inset-0 flex min-h-0 flex-col",
+                !editorVisible && "hidden",
+              )}
+            >
+              {/* hideTabsBar: the unified bar above already shows the file
+                  tabs — a second OpenTabsBar would duplicate them. In wide
+                  mode the strip is SessionTabs, and the hidden host renders
+                  no bar at all. */}
+              <EditorColumn filePath={activeFile} hideTabsBar />
+            </div>
+          )}
+        </div>
+        {/* The active tab's split grid (per-tab group). */}
+        {showSplitGrid && (
           <div className="absolute inset-0 flex min-h-0 flex-col">
             <SplitChatArea sessionIds={activeGroup} />
           </div>
-        ) : (
-          <>
-          {openTabs.map((sid) => (
-          <div
-            key={sid}
-            className={cn(
-              "absolute inset-0",
-              sid === activeSessionId && !editorVisible ? "" : "hidden",
-            )}
-          >
-            <SessionSurface sessionId={sid} isActive={sid === activeSessionId && !editorVisible} />
-          </div>
-        ))}
-        {editorMounted && (
-          <div
-            className={cn(
-              "absolute inset-0 flex min-h-0 flex-col",
-              !editorVisible && "hidden",
-            )}
-          >
-            {/* hideTabsBar: the unified bar above already shows the file
-                tabs — a second OpenTabsBar would duplicate them. In wide
-                mode the strip is SessionTabs, and the hidden host renders
-                no bar at all. */}
-            <EditorColumn filePath={activeFile} hideTabsBar />
-          </div>
-        )}
-          </>
         )}
       </SplitDropHost>
     </div>
@@ -1047,10 +1057,17 @@ function SplitPaneCell({
   sessionId,
   focused,
   composerPortalTarget,
+  deferred = false,
 }: {
   sessionId: string;
   focused: boolean;
   composerPortalTarget: HTMLElement | null;
+  /** Skeleton-first mount: while true the cell renders its chrome (header +
+   *  ring) over a light spinner and the real surface mounts next frame —
+   *  pane init (Tiptap + timeline parse) is the heaviest part of the first
+   *  drop, and moving it one frame past the grid paint keeps the drop
+   *  feedback instant. */
+  deferred?: boolean;
 }) {
   const { t } = useI18n();
   const kind = useSessionStore((s) => selectSessionKind(s, sessionId));
@@ -1109,7 +1126,11 @@ function SplitPaneCell({
           messages ride flush against the border. Terminal cells fill
           naturally — no gutter there. */}
       <div className={cn("min-h-0 flex-1", kind !== "terminal" && "pb-3")}>
-        {kind === "terminal" ? (
+        {deferred ? (
+          <div className="flex h-full items-center justify-center">
+            <SpinnerIcon size={16} className="animate-spin text-content-subtle" />
+          </div>
+        ) : kind === "terminal" ? (
           <TerminalSessionPane sessionId={sessionId} isActive={focused} />
         ) : (
           <ChatPane
@@ -1150,6 +1171,22 @@ function SplitChatArea({ sessionIds }: { sessionIds: string[] }) {
   const [dragOver, setDragOver] = useState(false);
   // One-shot ring pulse after a successful drop (see SplitDropHost).
   const [flash, setFlash] = useState(false);
+  // Skeleton-first mount: the drop frame paints the grid chrome (cells,
+  // rings, strip); the real panes (Tiptap init + timeline parse × N — the
+  // heaviest part of the first drop) mount on the NEXT frame so the drop
+  // feedback is never hitched by the same commit. One-shot per grid
+  // lifetime; later member additions (3rd/4th pane) mount immediately.
+  const [panesMounted, setPanesMounted] = useState(false);
+  useEffect(() => {
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setPanesMounted(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, []);
   const [stripEl, setStripEl] = useState<HTMLElement | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
   // Layout effect + state (not the ref directly) so the focused pane's first
@@ -1213,6 +1250,7 @@ function SplitChatArea({ sessionIds }: { sessionIds: string[] }) {
             sessionId={sid}
             focused={sid === focusedId}
             composerPortalTarget={sid === focusedId ? stripEl : null}
+            deferred={!panesMounted}
           />
         ))}
       </div>
