@@ -1069,10 +1069,9 @@ function SplitPaneCell({
     <section
       className={cn(
         // Rounded card, not a square tile: overflow-hidden clips the (rectangular)
-        // session surface to the corners; the inset ring follows the radius.
+        // session surface to the corners. The 聚焦描边 lives on the OVERLAY
+        // below (not on this element) — see the ring note there.
         "relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-surface",
-        // 聚焦格描边 — the one visual anchor of "input goes here".
-        focused ? "ring-2 ring-inset ring-accent" : "ring-1 ring-inset ring-edge-panel",
       )}
       onPointerDown={() => {
         if (!focused) void selectSession(sessionId);
@@ -1121,6 +1120,19 @@ function SplitPaneCell({
           />
         )}
       </div>
+      {/* 聚焦格描边 as a paint-last overlay, NOT an inset box-shadow on the
+          section: inset rings paint UNDER child content, and the terminal
+          pane's opaque full-bleed canvas completely covered them. This
+          transparent layer re-draws the ring above everything; z-10 beats
+          the panes (they carry no z-index), pointer-events-none keeps
+          clicks/drag-through intact, and it inherits the rounded corners. */}
+      <div
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute inset-0 z-10 rounded-xl",
+          focused ? "ring-2 ring-inset ring-accent" : "ring-1 ring-inset ring-edge-panel",
+        )}
+      />
     </section>
   );
 }
