@@ -203,9 +203,9 @@ export function FilesPanel() {
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center select-none p-6 text-center text-content-subtle">
-            <IconCode size={36} className="mb-2.5 text-content-subtle/25" />
+            <IconCode size={36} className="mb-2.5 text-content-subtle/50" />
             <div className="text-xs font-medium text-content-muted">{t("ide.files.noFileOpen")}</div>
-            <div className="mt-1 text-[11px] text-content-subtle/70">{t("ide.files.noFileOpenHint")}</div>
+            <div className="mt-1 text-[11px] text-content-subtle">{t("ide.files.noFileOpenHint")}</div>
           </div>
         )}
       </div>

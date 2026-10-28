@@ -13,6 +13,7 @@
  *
  * Channels:
  *  - `file:readFile`  — single-file utf-8 read (diff card, Monaco editor)
+ *  - `file:readPdfjsAsset` — one bundled pdf.js CMap/font/wasm file (PDF preview)
  *  - `file:listDir`   — one-level directory listing for the file tree
  *  - `file:search`    — recursive file search for composer @ / add-context
  *  - `file:writeFile` — utf-8 write with parent-dir creation (Monaco save)
@@ -24,12 +25,14 @@
 import type { IpcMain } from "electron";
 import { app, clipboard, nativeImage, shell } from "electron";
 import { readFile, writeFile, readdir, mkdir, rename, copyFile, access, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { TextDecoder } from "node:util";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   IPC,
   FileReadSchema,
   FileReadBinarySchema,
+  FileReadPdfjsAssetSchema,
   FileIsViewableSchema,
   FileListDirSchema,
   FileSearchSchema,
@@ -309,6 +312,71 @@ export async function readBinaryGuarded(filePath: string): Promise<{ dataUrl: st
   } catch (err) {
     log.warn(`file.readBinary failed for ${filePath}: ${(err as Error).message}`);
     return { dataUrl: "" };
+  }
+}
+
+/* ── file:readPdfjsAsset — bundled pdf.js auxiliary assets (CJK CMaps,
+   standard fonts, wasm) ──
+   The PDF preview runs pdf.js in the renderer, but that renderer is a file://
+   page in production: fetch() of ANY local resource (package files included)
+   is impossible there. pdf.js supports a custom BinaryDataFactory, so its
+   cMap/font/wasm loads are funneled through this IPC instead. Resolve pattern
+   mirrors bundledCliVersion() in outputStyleConfig.ts: createRequire from the
+   bundle resolves the dependency (works in dev node_modules and inside
+   app.asar alike — Electron's fs shim reads asar paths transparently). */
+
+/** Directory inside the pdfjs-dist package for each asset kind. */
+const PDFJS_ASSET_DIRS = {
+  cmap: "cmaps",
+  font: "standard_fonts",
+  wasm: "wasm",
+} as const;
+
+/** Bare filenames only — no separators, no dots-only tricks. pdf.js only ever
+ *  asks for names like `UniGB-UCS2-H.bcmap` / `FoxitSans.pfb` / `qcms_bg.wasm`. */
+const PDFJS_ASSET_NAME_RE = /^[A-Za-z0-9._-]+$/;
+
+let pdfjsPkgRootCache: string | null = null;
+function pdfjsPkgRoot(): string {
+  if (pdfjsPkgRootCache) return pdfjsPkgRootCache;
+  const req = createRequire(import.meta.url);
+  const root = dirname(req.resolve("pdfjs-dist/package.json"));
+  pdfjsPkgRootCache = root;
+  return root;
+}
+
+/** Shared guarded pdf.js-asset read — used by the desktop IPC handler (the
+ *  mobile RPC whitelist doesn't need it: the phone shell has no PDF pane).
+ *  Unknown/missing assets return `{ data: "" }` so pdf.js can degrade with its
+ *  own fallback instead of a thrown IPC error. */
+export async function readPdfjsAssetGuarded(
+  kind: "cmap" | "font" | "wasm",
+  name: string,
+): Promise<{ data: string }> {
+  if (!PDFJS_ASSET_NAME_RE.test(name) || name === "." || name === "..") {
+    log.warn(`file.readPdfjsAsset refused — bad asset name: ${JSON.stringify(name)}`);
+    return { data: "" };
+  }
+  let target: string;
+  try {
+    const root = pdfjsPkgRoot();
+    target = resolve(root, PDFJS_ASSET_DIRS[kind], name);
+    if (!pathWithin(root, target)) {
+      // Unreachable with the charset guard above; belt-and-suspenders against
+      // future renames of either check.
+      log.warn(`file.readPdfjsAsset refused — escapes pdfjs-dist root: ${name}`);
+      return { data: "" };
+    }
+  } catch (err) {
+    log.warn(`file.readPdfjsAsset refused — package root unresolved: ${(err as Error).message}`);
+    return { data: "" };
+  }
+  try {
+    return { data: (await readFile(target)).toString("base64") };
+  } catch {
+    // Unknown asset (pdf.js asks for optional files by name) — empty answer,
+    // the library logs its own warning and continues.
+    return { data: "" };
   }
 }
 
@@ -650,6 +718,14 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.FILE_READ_BINARY, async (_evt, raw) => {
     const input = FileReadBinarySchema.parse(raw);
     return readBinaryGuarded(input.filePath);
+  });
+
+  /* ── file:readPdfjsAsset — one bundled pdf.js CMap/font/wasm file, base64.
+     Serves the renderer's custom BinaryDataFactory (PDF preview; the file://
+     page cannot fetch package files itself). ── */
+  ipcMain.handle(IPC.FILE_READ_PDFJS_ASSET, async (_evt, raw) => {
+    const input = FileReadPdfjsAssetSchema.parse(raw);
+    return readPdfjsAssetGuarded(input.kind, input.name);
   });
 
   /* ── file:isViewable — containment check (no disk access): would the read

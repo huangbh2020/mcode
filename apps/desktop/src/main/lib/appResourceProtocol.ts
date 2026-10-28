@@ -46,6 +46,10 @@ export const MEDIA_CONTENT_TYPES: Record<string, string> = {
   ".mkv": "video/x-matroska",
   ".ogv": "video/ogg",
   ".avi": "video/x-msvideo",
+  // The desktop PDF pane reads bytes over IPC (file:readBinary), but the
+  // mobile /api/media route shares this table — phones then inline PDFs in
+  // their browser viewer for free.
+  ".pdf": "application/pdf",
 };
 const CONTENT_TYPES = MEDIA_CONTENT_TYPES;
 

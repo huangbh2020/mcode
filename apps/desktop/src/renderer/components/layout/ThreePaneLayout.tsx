@@ -158,7 +158,7 @@ export function ThreePaneLayout({
           )}
           style={{ width: rightWidthPct !== undefined ? `${rightWidthPct}%` : rightWidth }}
         >
-          <div className="min-h-0 flex-1 overflow-hidden border-l border-edge-panel/60">{right}</div>
+          <div className="min-h-0 flex-1 overflow-hidden border-l border-edge-panel">{right}</div>
         </aside>
       )}
     </>

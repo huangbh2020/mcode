@@ -2131,6 +2131,24 @@ export const FileReadBinarySchema = z.object({
 });
 export type FileReadBinaryInput = z.infer<typeof FileReadBinarySchema>;
 
+/** Read one bundled pdf.js auxiliary asset (CJK CMap / standard font / wasm)
+ * from the installed `pdfjs-dist` package on disk. The PDF preview's custom
+ * `BinaryDataFactory` calls this per asset — the production renderer is a
+ * `file://` page where `fetch()` of any local resource is impossible, so the
+ * bytes travel over IPC instead (same reason the cMaps can't be served over
+ * HTTP). `name` is a bare filename (`UniGB-UCS2-H.bcmap`, `FoxitSans.pfb`,
+ * `qcms_bg.wasm`) — main validates it against a strict charset and resolves
+ * it inside the package root, so a hostile value can't read arbitrary files.
+ * Returns base64; unknown assets resolve `{ data: "" }` (pdf.js then surfaces
+ * its own fallback/warning) rather than throwing. */
+export const FileReadPdfjsAssetSchema = z.object({
+  /** Which bundled directory the asset lives in. */
+  kind: z.enum(["cmap", "font", "wasm"]),
+  /** Bare filename, no path separators. */
+  name: z.string(),
+});
+export type FileReadPdfjsAssetInput = z.infer<typeof FileReadPdfjsAssetSchema>;
+
 /** Whether main's read guards would admit this path (project root ∪
  *  materialized session worktree). Pure in-memory check — NO disk access.
  *  Drives the message attachment card: workspace-outside file cards refuse
@@ -5158,6 +5176,8 @@ export interface RpcMap {
   "file.readFile": (input: FileReadInput) => Promise<{ content: string }>;
   /** Read a binary file as a base64 data URL (image preview). Same path guard. */
   "file.readBinary": (input: FileReadBinaryInput) => Promise<{ dataUrl: string }>;
+  /** Read a bundled pdf.js asset (CJK CMap / standard font / wasm) as base64. */
+  "file.readPdfjsAsset": (input: FileReadPdfjsAssetInput) => Promise<{ data: string }>;
   /** Pure containment check (no disk access): is the path inside a known
    *  project root or session worktree — i.e. would the read guards admit it? */
   "file.isViewable": (input: FileIsViewableInput) => Promise<{ viewable: boolean }>;
@@ -5744,6 +5764,8 @@ export const IPC = {
   FILE_READ: "file:readFile",
   // File read as base64 data URL (image preview)
   FILE_READ_BINARY: "file:readBinary",
+  // Bundled pdf.js auxiliary asset (CJK CMap / standard font / wasm) → base64
+  FILE_READ_PDFJS_ASSET: "file:readPdfjsAsset",
   // Path containment check (project/worktree membership, no disk access)
   FILE_IS_VIEWABLE: "file:isViewable",
   // OS dialog image picker → base64 images (composer 图片 button)

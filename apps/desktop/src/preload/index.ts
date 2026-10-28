@@ -295,6 +295,10 @@ const api = {
     /** Read a binary file as a base64 data URL (image preview). */
     readBinary: ((input) =>
       ipcRenderer.invoke(IPC.FILE_READ_BINARY, input)) as RpcMap["file.readBinary"],
+    /** Read a bundled pdf.js asset (CJK CMap / font / wasm) as base64 (PDF
+     *  preview) — the file:// renderer can't fetch package files itself. */
+    readPdfjsAsset: ((input) =>
+      ipcRenderer.invoke(IPC.FILE_READ_PDFJS_ASSET, input)) as RpcMap["file.readPdfjsAsset"],
     /** Path containment check (no disk access): attachment card click-to-view. */
     isViewable: ((input) =>
       ipcRenderer.invoke(IPC.FILE_IS_VIEWABLE, input)) as RpcMap["file.isViewable"],

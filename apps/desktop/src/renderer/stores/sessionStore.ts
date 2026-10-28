@@ -233,8 +233,14 @@ function isVideoPath(filePath: string): boolean {
   ].some((ext) => lower.endsWith(ext));
 }
 
+/** True for PDF files the editor renders with pdf.js (PdfPreviewPane).
+ *  Mirrors `isPdf()` in FileEditor.tsx — keep in sync. */
+function isPdfPath(filePath: string): boolean {
+  return filePath.toLowerCase().endsWith(".pdf");
+}
+
 /** True for binary file types the editor can neither edit nor preview (Office
- *  docs, archives, binaries, audio, fonts, PDF). Mirrors `isUnsupported()`
+ *  docs, archives, binaries, audio, fonts). Mirrors `isUnsupported()`
  *  in FileEditor.tsx. These default to preview mode so the user sees the
  *  "can't preview" notice instead of garbled Monaco content. */
 function isUnsupportedPath(filePath: string): boolean {
@@ -247,7 +253,6 @@ function isUnsupportedPath(filePath: string): boolean {
     ".mp3", ".ogg", ".flac", ".wav", ".m4a",
     ".db", ".sqlite", ".sqlite3",
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
-    ".pdf",
   ].some((ext) => lower.endsWith(ext));
 }
 
@@ -3195,15 +3200,98 @@ const MESSAGE_PAGE_SIZE = 200;
 
 /** Web transport (phone) page sizes. Every page crosses the network — often
  *  an off-LAN tunnel at a few Mbps — and long sessions carry heavy tool_use
- *  blocks, so a heavy page is still multi-MB even gzipped. The FIRST page is
- *  deliberately tiny: the user lands at the bottom and wants the recent
- *  tail visible fast; older pages are fetched as they scroll up (ChatPane's
+ *  blocks, so even a single page can run to megabytes. The FIRST page is
+ *  deliberately tiny: the user lands at the bottom and wants the recent tail
+ *  visible fast; older pages are fetched as they scroll up (ChatPane's
  *  near-top trigger) at a larger size to amortize round trips during active
- *  reading. Desktop keeps the IPC-sized 200 for both. */
-const MOBILE_FIRST_MESSAGE_PAGE_SIZE = 40;
-const MOBILE_OLDER_MESSAGE_PAGE_SIZE = 100;
+ *  reading. 2026-10-28: halved 40/100 → 20/40 — real-world relay reports had
+ *  40-row first pages stalling past the RPC deadline on slow links, which
+ *  left a running thread showing ONLY its live SSE tail and an idle one the
+ *  empty welcome screen (see prefetchSessionMessages's bounded retry and
+ *  webApi's dedicated session:messages deadline). Desktop keeps the
+ *  IPC-sized 200 for both. */
+const MOBILE_FIRST_MESSAGE_PAGE_SIZE = 20;
+const MOBILE_OLDER_MESSAGE_PAGE_SIZE = 40;
 const FIRST_MESSAGE_PAGE_SIZE = isWebTransport ? MOBILE_FIRST_MESSAGE_PAGE_SIZE : MESSAGE_PAGE_SIZE;
 const OLDER_MESSAGE_PAGE_SIZE = isWebTransport ? MOBILE_OLDER_MESSAGE_PAGE_SIZE : MESSAGE_PAGE_SIZE;
+
+/** Bounded auto-retry bookkeeping for `prefetchSessionMessages` (module-level:
+ * transient bookkeeping, deliberately not store state). On flaky phone links
+ * the first-page fetch dies at the transport level often enough that a silent
+ * one-shot attempt strands the thread — and a retry STORM after a hard
+ * outage (PC asleep) is just as bad, hence the burst window: failures older
+ * than the window reset the budget, so a later manual reopen retries fresh. */
+interface PrefetchRetryState {
+  count: number;
+  lastAt: number;
+}
+const prefetchRetries: Record<string, PrefetchRetryState> = {};
+const PREFETCH_RETRY_DELAY_MS = 2_000;
+const PREFETCH_MAX_RETRIES = 2;
+const PREFETCH_RETRY_WINDOW_MS = 60_000;
+
+/** SSE (re)connect tail catch-up (mobile only). The mobile event bus is
+ *  UNBUFFERED: turns that started AND finished while this client was
+ *  disconnected (a backgrounded phone, a tunnel flap) exist only in the DB —
+ *  their events are never replayed, `turn.done` included. Threads already
+ *  hydrated here never re-fetch (historyLoadedBySession gates the first-page
+ *  prefetch), so their buckets silently go stale. The server pushes
+ *  `session.runningSnapshot` as the FIRST frame of every (re)connect — the
+ *  perfect hook to union-merge a fresh first page into every loaded thread
+ *  (same merge semantics as prefetchSessionMessages: live copy wins on id
+ *  conflicts, additions append, (createdAt,id) order). Throttled + in-flight
+ *  guarded: EventSource auto-reconnects on every network blip and the
+ *  catch-up must not become a fetch storm. */
+let sseTailRefreshInFlight = false;
+let sseTailRefreshAt = 0;
+const SSE_TAIL_REFRESH_MIN_INTERVAL_MS = 10_000;
+
+async function refreshLoadedTailsOnReconnect(
+  set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  get: () => SessionState,
+): Promise<void> {
+  if (!isWebTransport) return; // defensive: the snapshot only rides SSE anyway
+  const now = Date.now();
+  if (sseTailRefreshInFlight) return;
+  if (now - sseTailRefreshAt < SSE_TAIL_REFRESH_MIN_INTERVAL_MS) return;
+  sseTailRefreshInFlight = true;
+  sseTailRefreshAt = now;
+  try {
+    const ids = Object.keys(get().historyLoadedBySession).filter(
+      (id) => get().historyLoadedBySession[id] === true,
+    );
+    await Promise.all(
+      ids.map(async (sessionId) => {
+        try {
+          const { messages } = await api.session.messages({
+            sessionId,
+            limit: FIRST_MESSAGE_PAGE_SIZE,
+          });
+          const live = get().messagesBySession[sessionId];
+          if (!live || live.length === 0) return; // empty local thread — nothing to catch up
+          const fetched = fromRecords(messages);
+          const byId = new Map(fetched.map((m) => [m.id, m]));
+          const extras: ChatMessage[] = [];
+          for (const m of live) {
+            if (byId.has(m.id)) byId.set(m.id, m);
+            else extras.push(m);
+          }
+          const merged = [...byId.values(), ...extras].sort(
+            (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+          );
+          if (merged.length === live.length && merged.every((m, i) => m === live[i])) return;
+          set((s) => ({
+            messagesBySession: { ...s.messagesBySession, [sessionId]: merged },
+          }));
+        } catch {
+          // Per-session failure is fine — the next reconnect retries.
+        }
+      }),
+    );
+  } finally {
+    sseTailRefreshInFlight = false;
+  }
+}
 
 /** Find a session across the active per-project caches, the archived bin,
  *  the global pinned bucket, and the stream sidebar's cross-project
@@ -7397,14 +7485,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return { activeSessionId: sessionId, unreadBySession, centerTabFocus: "chat" as const };
     });
     // Web transport: list rows are slim — pull the full row (heavy payloads)
-    // for the hydrates below. Messages DON'T depend on the session row, so
-    // their first-page fetch runs CONCURRENTLY with the detail round trip
-    // instead of behind it (one RTT less to first paint on a slow link; the
-    // fetch is deduped and merges with any live bucket either way). If the
-    // user switched away while in flight, bail before the payload hydrates:
-    // hydrating the stale target's capsule would clobber the new session's.
+    // for the hydrates below. Messages DON'T depend on the session row, and
+    // on web the two fetches are SEQUENCED (messages first): they are the
+    // heaviest payloads of an open, and in parallel on a constrained tunnel
+    // the detail row (turnFiles / transcripts) starves the chat page the user
+    // is staring at. If the user switched away while in flight, bail before
+    // the payload hydrates: hydrating the stale target's capsule would
+    // clobber the new session's.
     if (!get().historyLoadedBySession[sessionId]) {
-      void get().prefetchSessionMessages(sessionId);
+      if (isWebTransport) await get().prefetchSessionMessages(sessionId);
+      else void get().prefetchSessionMessages(sessionId);
     }
     await get().ensureSessionDetail(sessionId);
     if (get().activeSessionId !== sessionId) return;
@@ -7442,10 +7532,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     });
     // Same split as selectSession: light-field config sync before the flip,
-    // then the message first page CONCURRENTLY with the full-row fetch, then
-    // (guarded against a switch-away) the payload hydrates.
+    // then the message first page and the full-row fetch (sequenced on web —
+    // see selectSession), then (guarded against a switch-away) the payload
+    // hydrates.
     if (!get().historyLoadedBySession[sessionId]) {
-      void get().prefetchSessionMessages(sessionId);
+      if (isWebTransport) await get().prefetchSessionMessages(sessionId);
+      else void get().prefetchSessionMessages(sessionId);
     }
     await get().ensureSessionDetail(sessionId);
     if (get().activeSessionId !== sessionId) return;
@@ -7503,13 +7595,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         historyLoadedBySession: { ...s.historyLoadedBySession, [sessionId]: true },
         loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: false },
       }));
-    } catch {
+      delete prefetchRetries[sessionId];
+    } catch (err) {
       // Never leave the skeleton stuck up on a failed fetch — fall back to
       // the regular (empty) view so the composer stays usable. The hydration
       // flag stays unset so a later open retries the fetch.
+      console.error("prefetchSessionMessages failed:", err);
       set((s) => ({
         loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: false },
       }));
+      // Bounded auto-retry (mobile is the motivated case — a dropped/slow
+      // first page strands the thread on its live-only view): without it, a
+      // session opened while RUNNING keeps showing just the SSE tail (the
+      // history that would complete it never landed), and an idle one the
+      // empty welcome, until the user reopens it. Re-entry gates make the
+      // retry a no-op when history arrived via another path meanwhile.
+      const now = Date.now();
+      const prev = prefetchRetries[sessionId];
+      const count =
+        prev && now - prev.lastAt < PREFETCH_RETRY_WINDOW_MS ? prev.count : 0;
+      if (count < PREFETCH_MAX_RETRIES) {
+        prefetchRetries[sessionId] = { count: count + 1, lastAt: now };
+        setTimeout(() => {
+          void get().prefetchSessionMessages(sessionId);
+        }, PREFETCH_RETRY_DELAY_MS);
+      }
     }
   },
 
@@ -8865,6 +8975,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         for (const id of running) next[id] = true;
         return { runningBySession: next };
       });
+      // This frame rides every SSE (re)connect — catch up threads whose turns
+      // finished while we were disconnected (see refreshLoadedTailsOnReconnect).
+      void refreshLoadedTailsOnReconnect(set, get);
       return;
     }
 
@@ -13074,14 +13187,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     else if (opts?.line != null) viewMode[canonicalPath] = "edit";
     // Files that render as a read-only preview default to "preview" on FIRST
     // open (no prior view-mode for this file): Markdown (rendered), images
-    // (data-URL `<img>`), videos (`<video>` via app-resource://), and
-    // unsupported binary types (Office docs, archives, etc. - shown as a
-    // "can't preview" notice). Re-opening respects the user's earlier choice
-    // (e.g. they switched to "edit") since the entry already exists. A diff
-    // request above takes precedence over this default.
+    // (data-URL `<img>`), videos (`<video>` via app-resource://), PDFs
+    // (pdf.js pane), and unsupported binary types (Office docs, archives,
+    // etc. - shown as a "can't preview" notice). Re-opening respects the
+    // user's earlier choice (e.g. they switched to "edit") since the entry
+    // already exists. A diff request above takes precedence over this default.
     else if (
       !(canonicalPath in prevViewMode) &&
-      (isMarkdownPath(canonicalPath) || isImagePath(canonicalPath) || isVideoPath(canonicalPath) || isUnsupportedPath(canonicalPath))
+      (isMarkdownPath(canonicalPath) || isImagePath(canonicalPath) || isVideoPath(canonicalPath) || isPdfPath(canonicalPath) || isUnsupportedPath(canonicalPath))
     ) {
       viewMode[canonicalPath] = "preview";
     }

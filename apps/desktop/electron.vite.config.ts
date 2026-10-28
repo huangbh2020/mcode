@@ -182,9 +182,11 @@ export default defineConfig({
     // including the package makes Vite route those imports into the (empty)
     // .vite/deps cache. Excluding lets the `?worker` imports flow through the
     // normal worker pipeline. The alias above still points them at the real
-    // on-disk files.
+    // on-disk files. pdfjs-dist follows the same pattern (the pdf.worker
+    // `?worker` import in renderer/lib/pdfjs.ts); its main build is a single
+    // ESM file, so excluding costs nothing.
     optimizeDeps: {
-      exclude: ["monaco-editor"],
+      exclude: ["monaco-editor", "pdfjs-dist"],
     },
     plugins: [
       react({

@@ -176,10 +176,10 @@ export function MessageTimeline({
 
   return (
     <div
-      className="pointer-events-none absolute left-0 top-1/2 z-10 -translate-y-1/2"
+      className="pointer-events-none absolute left-0.5 top-1/2 z-10 -translate-y-1/2"
       aria-hidden
     >
-      <div className="pointer-events-auto flex max-h-[70vh] flex-col items-center justify-center gap-1.5 py-1">
+      <div className="pointer-events-auto flex max-h-[70vh] flex-col items-center justify-center gap-1.5 rounded-r-md py-1.5 px-0.5 opacity-40 transition-opacity duration-200 hover:opacity-100">
         {dashes.map((d) => (
           <TimelineDash
             key={d.key}

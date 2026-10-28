@@ -296,6 +296,13 @@ const RPC_TIMEOUT_MS: Record<string, number> = {
   // budget the client slightly above that so the server's own error (which
   // carries the real cause) wins the race over the generic timeout.
   "git:generateCommitMessage": 75_000,
+  // Chat-history pages are the biggest payloads on this wire — over a slow
+  // relay tunnel a page can legitimately take tens of seconds to drain. The
+  // 30s default aborted these MID-DOWNLOAD, which stranded the thread on its
+  // live SSE tail (a running session) or the empty welcome (an idle one)
+  // until a reopen. Pages are small now (see the store's MOBILE_*_PAGE_SIZE),
+  // so this budget only has to cover throughput, not size.
+  "session:messages": 90_000,
 };
 const RPC_DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -606,6 +613,9 @@ const skills: Api["skills"] = {
 const file: Api["file"] = {
   readFile: (input) => rpc("file:readFile", input),
   readBinary: (input) => rpc("file:readBinary", input),
+  // The PDF preview pane is desktop-only (no phone-shell editor), and the
+  // asset reader resolves the local pdfjs-dist install — meaningless over HTTP.
+  readPdfjsAsset: () => webUnsupported("file.readPdfjsAsset"),
   // Attachment-card view gating is a desktop main-process containment check.
   isViewable: () => webUnsupported("file.isViewable"),
   pickImages: () => pickImagesWeb(),
