@@ -146,6 +146,27 @@ nsis:
   perMachine: false
   deleteAppDataOnUninstall: false
 
+# ── Linux ──
+# AppImage = 免安装、可直接运行的便携包(任意 glibc 发行版都能跑,最适合
+#   Linux Mint 本地开发构建 / 分享);deb = Debian/Ubuntu 系(Mint 所属家族)的
+#   原生包。Linux 上不需要代码签名。
+# No `arch` is specified: electron-builder 跟随 process.arch(运行构建的机器
+#   原生架构),所以 x64 机器出 x64 包、arm64 机器出 arm64 包。
+# 原生 addon(better-sqlite3 / node-pty)已由上面的 asarUnpack 从 asar 中解出;
+#   它们在 install 时由 postinstall 钩子(ensure-better-sqlite3-electron-abi.mjs)
+#   拉取匹配 Electron ABI 的预编译,node-pty 则自带跨平台 N-API 预编译,Linux
+#   下均无需 node-gyp 现场编译(node-pty 自带、better-sqlite3 国内走预编译镜像)。
+# icon 复用 build/icon.png,electron-builder 会按需缩放生成 Linux 所需的各种
+#   尺寸(512x512 等),无需额外的 build/icons 目录。
+linux:
+  target:
+    - target: AppImage
+    - target: deb
+  category: Development
+  maintainer: huangbh2020
+  icon: build/icon.png
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+
 # ── Auto-update channel ──
 # electron-updater fetches latest-mac.yml / latest.yml from the GitHub Releases
 # "Assets" of this repo. The release workflow uploads these yml files alongside
