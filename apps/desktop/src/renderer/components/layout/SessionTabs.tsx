@@ -248,6 +248,7 @@ export function SessionTabs() {
                     isActive={isActive}
                     running={running}
                     unreadCount={unread}
+                    sessionCount={splitGroupsBySession[id]?.length}
                     multiRow={multiRow}
                     registerNode={(node) => {
                       if (node) tabNodes.current.set(id, node);
@@ -318,6 +319,10 @@ interface SortableTabProps {
    *  accent-colored count badge on non-active tabs so the user can see which
    *  background tabs have new activity. */
   unreadCount: number;
+  /** Split-pane count for the tab's per-tab group (undefined/≤1 = no
+   *  badge). Rendered as a small neutral count pill whenever the tab hosts
+   *  ≥ 2 sessions — "this tab is a grid of N". */
+  sessionCount?: number;
   /** Multi-row wrapping layout: tabs flex to fill their row between a min
    *  floor and their max cap, so flexbox breaks lines at the FLOOR width —
    *  a line only wraps when it genuinely can't hold another tab. Omit for
@@ -337,6 +342,7 @@ export function SortableSessionTab({
   isActive,
   running,
   unreadCount,
+  sessionCount,
   multiRow,
   registerNode,
   onActivate,
@@ -437,6 +443,13 @@ export function SortableSessionTab({
           tabs the close button leaves the layout entirely until hover, so
           the title owns the full tab width. */}
       <span className="min-w-0 flex-1 truncate">{title}</span>
+      {/* Split-pane count — the tab hosts N sessions (per-tab split grid).
+          Always visible (unlike the unread badge); ≤1 renders nothing. */}
+      {sessionCount != null && sessionCount >= 2 && (
+        <span className="shrink-0 rounded-full bg-surface-hover px-1.5 text-center text-[9px] font-medium leading-[14px] tabular-nums text-content-subtle">
+          {sessionCount}
+        </span>
+      )}
       {/* Unread badge - shown on non-active tabs with pending unread events.
           Leaves the layout on hover so the appearing close button gets the
           room (the badge clears when the tab is activated — selectSession). */}

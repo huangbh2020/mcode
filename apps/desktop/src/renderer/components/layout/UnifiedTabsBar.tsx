@@ -323,6 +323,7 @@ export function UnifiedTabsBar() {
                     isActive={isTabActive(id) && !editorFocused}
                     running={!!runningBySession[displayId] || orchAnchors[displayId] != null}
                     unreadCount={unreadBySession[displayId] ?? 0}
+                    sessionCount={splitGroupsBySession[id]?.length}
                     multiRow={multiRow}
                     registerNode={(node) => {
                       if (node) tabNodes.current.set(id, node);
