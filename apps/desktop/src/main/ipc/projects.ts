@@ -18,6 +18,7 @@ import {
   BookmarkSearchSchema,
   UpdateBookmarksSchema,
   SessionGetSchema,
+  ForkSessionSchema,
 } from "@contracts/ipc";
 import type { Project } from "@contracts/session";
 import { uid } from "@main/utils.js";
@@ -25,6 +26,7 @@ import { ProjectRepo, SessionRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { broadcastSessionChanged, broadcastSessionDeleted } from "@main/lib/sessionSync.js";
 import { scheduleScan } from "@main/lib/piSessionImport.js";
+import { forkSession } from "@main/lib/sessionFork.js";
 import { log } from "@main/lib/logger.js";
 
 export function registerProjectHandlers(ipcMain: IpcMain): void {
@@ -238,6 +240,11 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.SESSION_GET, (_evt, raw) => {
     const input = SessionGetSchema.parse(raw);
     return { session: SessionRepo.get(input.sessionId) ?? null };
+  });
+
+  ipcMain.handle(IPC.SESSION_FORK, async (_evt, raw) => {
+    const input = ForkSessionSchema.parse(raw);
+    return forkSession(input);
   });
 
   // Cross-project aggregate (stream sidebar's flat "全部项目" list). Same

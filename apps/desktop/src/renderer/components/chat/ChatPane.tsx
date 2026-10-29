@@ -27,6 +27,7 @@ import {
   IconExternalLink,
   IconSparkles,
   IconArrowBackUp,
+  IconGitFork,
 } from "@renderer/lib/icons.js";
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
@@ -86,6 +87,7 @@ import { isInFlightAutomation } from "@renderer/components/automation/automation
 import { MessageTimeline, type UserItemIndexMap } from "./MessageTimeline.js";
 import { SelectionToolbar, type SelectionToolbarState } from "./SelectionToolbar.js";
 import { BookmarkFly } from "./BookmarkFly.js";
+import { ForkSessionDialog } from "./ForkSessionDialog.js";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
 /**
@@ -1481,6 +1483,7 @@ function ChatPaneForSession({
     const sess = s.getSessionById(sessionId);
     return sess?.kind === "automation" || sess?.automationId != null;
   });
+  const currentSession = useSessionStore((s) => s.getSessionById(sessionId));
   const sessionModel = useSessionStore((s) => resolveTurnModel(s, sessionId));
   // Older-message pagination state for this session.
   const hasMoreMessages = useSessionStore((s) => !!s.hasMoreMessagesBySession[sessionId]);
@@ -1887,7 +1890,9 @@ function ChatPaneForSession({
   const sendQueuedPromptNow = useSessionStore((s) => s.sendQueuedPromptNow);
   const reorderPromptQueue = useSessionStore((s) => s.reorderPromptQueue);
 
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(
+    () => useSessionStore.getState().composerDraftBySession[sessionId]?.text ?? "",
+  );
   // ── Up/Down history recall ──
   // recallActive: the composer currently holds a recalled past message and
   // Up/Down should keep cycling history (until the user edits the text).
@@ -1908,6 +1913,7 @@ function ChatPaneForSession({
   // destructive option demands — the cascade deletes whole turns from BOTH the
   // view and the model's context.
   const [retractTarget, setRetractTarget] = useState<ChatMessage | null>(null);
+  const [forkTarget, setForkTarget] = useState<{ messageId?: string } | null>(null);
   const virtualListRef = useRef<LegendListRef>(null);
   // Recompute the "jump to bottom" button visibility from the live scroll
   // state. Returns true if the list is near the bottom (button hidden), false
@@ -2148,7 +2154,9 @@ function ChatPaneForSession({
   // Content tags: long/multi-line pastes promoted to chips above the
   // textarea so they don't bury the input area. Ephemeral per-turn UI
   // state (cleared on send). See lib/contentTag.ts for the promote rules.
-  const [tags, setTags] = useState<ContentTag[]>([]);
+  const [tags, setTags] = useState<ContentTag[]>(
+    () => useSessionStore.getState().composerDraftBySession[sessionId]?.tags ?? [],
+  );
   // Staged user-attached images (paste / OS picker) — thumbnail chips above
   // the editor, sent inline with the prompt as base64 content blocks.
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -2688,14 +2696,14 @@ function ChatPaneForSession({
   // ── Composer draft persistence ──
   // The store's composerDraftBySession holds each thread's unsent input so it
   // survives this pane unmounting (single-mode thread switch, tab close).
-  // Restore runs BEFORE the write-through below (declaration order matters):
-  // the write-through's first run sees the stale empty `value` and would
-  // otherwise clear a pre-existing draft before restore reads it.
   useEffect(() => {
     const draft = useSessionStore.getState().composerDraftBySession[sessionId];
     // Guard: skip empty drafts so a never-typed thread isn't clobbered.
     if (!draft || (!draft.text && draft.tags.length === 0)) return;
-    if (draft.html) editorRef.current?.setHTML(draft.html);
+    if (editorRef.current) {
+      if (draft.html) editorRef.current.setHTML(draft.html);
+      else if (draft.text) editorRef.current.setText(draft.text);
+    }
     setValue(draft.text);
     if (draft.tags.length > 0) setTags(draft.tags);
   }, [sessionId]);
@@ -2708,9 +2716,11 @@ function ChatPaneForSession({
       useSessionStore.getState().clearComposerDraft(sessionId);
       return;
     }
+    const currentHtml = editorRef.current?.getHTML();
+    const existingHtml = useSessionStore.getState().composerDraftBySession[sessionId]?.html ?? "";
     useSessionStore.getState().saveComposerDraft(sessionId, {
       text: value,
-      html: editorRef.current?.getHTML() ?? "",
+      html: currentHtml || existingHtml,
       tags,
     });
   }, [value, tags, sessionId]);
@@ -3981,6 +3991,7 @@ function ChatPaneForSession({
                   onSubmitEdit={handleEditSubmit}
                   onCancelEdit={() => setEditingMessageId(null)}
                   onRetract={(msg) => setRetractTarget(msg)}
+                  onFork={(msg) => setForkTarget({ messageId: msg.id })}
                   onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
                   projectPath={projectPath}
                 />
@@ -4173,6 +4184,7 @@ function ChatPaneForSession({
                 tightTop={idx === 0}
                 onOpenPlan={onOpenPlan}
                 projectPath={projectPath}
+                onFork={(m) => setForkTarget({ messageId: m.id })}
               />
             ));
           })()}
@@ -4938,6 +4950,7 @@ function ChatPaneForSession({
               <RenderErrorBoundary>
                 <ComposerEditor
                   ref={editorRef}
+                  initialContent={useSessionStore.getState().composerDraftBySession[sessionId]?.html || value}
                   editable={!textareaLocked && !orchBlocking}
                   placeholder={
                     voiceActive
@@ -5176,7 +5189,16 @@ function ChatPaneForSession({
           setRetractTarget(null);
           if (target) void retractMessage(sessionId, target.id);
         }}
+      />
 
+      <ForkSessionDialog
+        open={forkTarget != null}
+        onOpenChange={(open) => {
+          if (!open) setForkTarget(null);
+        }}
+        sessionId={sessionId}
+        messageId={forkTarget?.messageId}
+        initialTitle={currentSession?.title}
       />
     </div>
     </StreamAnchorPauseContext.Provider>
@@ -5245,6 +5267,7 @@ const MessageRow = memo(function MessageRow({
   isEditing,
   onStartEdit,
   onRetract,
+  onFork,
   onSubmitEdit,
   onCancelEdit,
   onOpenPlan,
@@ -5270,6 +5293,8 @@ const MessageRow = memo(function MessageRow({
   onStartEdit?: (msg: ChatMessage) => void;
   /** Open the retract confirmation dialog armed at this message. */
   onRetract?: (msg: ChatMessage) => void;
+  /** Fork session starting up to this message. */
+  onFork?: (msg: ChatMessage) => void;
   onSubmitEdit?: (
     msg: ChatMessage,
     newText: string,
@@ -5693,6 +5718,17 @@ const MessageRow = memo(function MessageRow({
             )}
           >
             {showCopy && <CopyButton text={copyText} />}
+            {showCopy && onFork && (
+              <button
+                type="button"
+                onClick={() => onFork(msg)}
+                title={t("chatStream.fork.buttonTooltip")}
+                aria-label={t("chatStream.fork.buttonTooltip")}
+                className="inline-flex items-center rounded px-1 py-0.5 text-[10px] text-content-subtle transition-colors hover:bg-surface-hover hover:text-content-muted"
+              >
+                <IconGitFork size={12} />
+              </button>
+            )}
             {showEdit && (
               <button
                 type="button"

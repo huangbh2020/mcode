@@ -1945,6 +1945,8 @@ export interface SessionState {
   reorderProjects: (orderedIds: string[]) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   archiveSession: (id: string, archived: boolean) => Promise<void>;
+  /** Fork an existing session (or up to a specific messageId) into a new session. */
+  forkSession: (input: { sessionId: string; messageId?: string; title?: string; useWorktree?: boolean }) => Promise<Session>;
   /** Rename a session (persist a user-edited title). Updates the row in
    *  `sessionsByProject` if it's in the loaded page slice, so the left bar
    *  + tab strip reflect the new title immediately. The store does NOT trim
@@ -8554,6 +8556,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         streamDirty: true,
       };
     });
+  },
+
+  forkSession: async (input) => {
+    const { session } = await api.session.fork(input);
+    const projectId = session.projectId;
+    set((s) => {
+      const list = s.sessionsByProject[projectId] ?? [];
+      const nextList = [session, ...list.filter((x) => x.id !== session.id)];
+      return {
+        sessionsByProject: { ...s.sessionsByProject, [projectId]: nextList },
+        sessions: nextList,
+        activeProjectId: projectId,
+      };
+    });
+    await get().openTab(session.id);
+    return session;
   },
 
   renameSession: async (id, title) => {

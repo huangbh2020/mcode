@@ -1548,6 +1548,14 @@ export const SessionGetSchema = z.object({
 });
 export type SessionGetInput = z.infer<typeof SessionGetSchema>;
 
+export const ForkSessionSchema = z.object({
+  sessionId: z.string(),
+  messageId: z.string().optional(),
+  title: z.string().optional(),
+  useWorktree: z.boolean().optional(),
+});
+export type ForkSessionInput = z.infer<typeof ForkSessionSchema>;
+
 export const SessionMessagesSchema = z.object({
   sessionId: z.string(),
   /** Page size. Omit for the legacy unpaginated path (all rows). */
@@ -5035,6 +5043,8 @@ export interface RpcMap {
   /** Full session row (heavy payloads included) by id — the mobile
    *  companion's on-demand detail fetch after slim list loads. */
   "session.get": (input: SessionGetInput) => Promise<{ session: Session | null }>;
+  /** Fork an existing session (optionally up to a specific messageId) into a new session. */
+  "session.fork": (input: ForkSessionInput) => Promise<{ session: Session }>;
   "session.messages": (
     input: SessionMessagesInput,
   ) => Promise<{ messages: MessageRecord[]; hasMore: boolean }>;
@@ -5709,6 +5719,7 @@ export const IPC = {
   SESSION_SEARCH: "session:search",
   SESSION_SEARCH_BOOKMARKS: "session:searchBookmarks",
   SESSION_GET: "session:get",
+  SESSION_FORK: "session:fork",
   SESSION_MESSAGES: "session:messages",
   SESSION_SAVE_MESSAGES: "session:saveMessages",
   SESSION_UPSERT_MESSAGES: "session:upsertMessages",
