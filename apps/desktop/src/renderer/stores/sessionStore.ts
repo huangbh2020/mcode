@@ -279,6 +279,31 @@ function sameNavEntry(a: NavEntry, b: NavEntry): boolean {
  *  around the openFileInIde call. */
 let navHistoryRevealing = false;
 
+/** Whether a browser container is currently on screen — i.e. the user can see
+ *  the embedded WebContentsViews right now. True when the PC-fullscreen
+ *  overlay is open, or the right panel is open with the browser tab showing
+ *  (a session-scoped tab shadows the global one — same effective-tab rule
+ *  RightPanel uses for rendering). False while the settings / sched overlay
+ *  is up: the OS-level view hides under those, so nothing is watchable.
+ *  Mirrors BrowserPanel's local `isActive` computation — keep the two in
+ *  sync. Consumers: markAgentBrowsing (attention-dot gating) and App.tsx's
+ *  global tabOpened fallback (adopt only when no container is subscribed). */
+export function browserContainerActive(s: {
+  browserPanelOpen: boolean;
+  rightOpen: boolean;
+  rightPanelTab: string;
+  activeSessionId: string | null;
+  sessionRightTabsBySession: Record<string, { active: string | null }>;
+  settingsOpen: boolean;
+  schedPageOpen: boolean;
+}): boolean {
+  if (s.settingsOpen || s.schedPageOpen) return false;
+  if (s.browserPanelOpen) return true;
+  const sess = s.activeSessionId ? s.sessionRightTabsBySession[s.activeSessionId] : undefined;
+  const effTab = sess?.active ?? s.rightPanelTab;
+  return s.rightOpen && effTab === "browser";
+}
+
 /** Snapshot the ACTIVE project's current location (active file + its
  *  last-known cursor) as a history entry, or null when no file is active.
  *  The cursor comes from lib/editorNav (module state, see its docs). A
@@ -316,7 +341,17 @@ function isSessionChatOnScreen(
   if (s.displayMode === "single" && s.splitSessionIds.includes(sid)) return true;
   if (s.displayMode === "tabs" && s.activeSessionId) {
     const group = activeTabsModeSplitGroup(s);
-    if (group) return group.includes(sid);
+    if (group) {
+      if (!group.includes(sid)) return false;
+      // The grid only shows while the chat owns the center — when a file
+      // open handed the center to the editor (centerTabFocus "editor"),
+      // the members are hidden again and must badge/toast normally.
+      return !(
+        s.tabsFilePreviewPlacement !== "sidebar" &&
+        s.centerTabFocus === "editor" &&
+        !s.widePanelOpen
+      );
+    }
   }
   if (sid !== s.activeSessionId) return false;
   return !(
@@ -894,6 +929,13 @@ export interface SessionState {
    *  focused session is the "active tab" for strip highlighting and
    *  center rendering; see activeTabsModeSplitRoot). */
   splitGroupsBySession: Record<string, string[]>;
+  /** Measured width (px) of the split grid area, written by SplitChatArea's
+   *  ResizeObserver. Drives the width-adaptive capacity (splitCapacityForWidth)
+   *  that gates addToSplit. Null until the first measure (capacity 4,
+   *  optimistic); zero-size reports (hidden grids) are ignored by the
+   *  writer. UI-only, not persisted. */
+  splitAreaWidth: number | null;
+  setSplitAreaWidth: (width: number) => void;
   /** In `tabs` displayMode: whether file previews open in the center unified
    *  tab bar ("center", default) or in the right sidebar's dual-column preview ("sidebar").
    *  Persisted in the `settings` table under `ui.tabsFilePreviewPlacement`. */
@@ -1217,6 +1259,12 @@ export interface SessionState {
    *  the Titlebar toggle button can show a count badge). Updated by the panel
    *  via setBrowserTabCount. NOT persisted. */
   browserTabCount: number;
+  /** Browser views the agent opened/reused while the user wasn't watching
+   *  (browserIds). Drives the pulsing attention dot on the rail's browser
+   *  icon — an agent browsing in the background must not yank the right panel
+   *  away from what the user is reading; the dot invites them over instead.
+   *  Cleared wholesale when the browser becomes visible. NOT persisted. */
+  agentBrowsingIds: string[];
   /** Device-toolbar visibility in the browser panel (the DevTools-style bar
    *  under the address bar with the device dropdown + custom dims + rotate).
    *  Toggled by the 📱 button in BrowserToolbar; a per-session in-memory flag
@@ -1897,6 +1945,8 @@ export interface SessionState {
   reorderProjects: (orderedIds: string[]) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   archiveSession: (id: string, archived: boolean) => Promise<void>;
+  /** Fork an existing session (or up to a specific messageId) into a new session. */
+  forkSession: (input: { sessionId: string; messageId?: string; title?: string; useWorktree?: boolean }) => Promise<Session>;
   /** Rename a session (persist a user-edited title). Updates the row in
    *  `sessionsByProject` if it's in the loaded page slice, so the left bar
    *  + tab strip reflect the new title immediately. The store does NOT trim
@@ -2054,6 +2104,13 @@ export interface SessionState {
   setBrowserDeviceToolbarOpen: (open: boolean) => void;
   /** Update the open-browser-tab count (drives the Titlebar badge). */
   setBrowserTabCount: (count: number) => void;
+  /** Record an agent browser use for the rail's attention dot: appends the
+   *  browserId to agentBrowsingIds unless the browser is currently visible
+   *  (browserContainerActive) — no dot for something the user can already
+   *  see. No-ops when the id is already listed. */
+  markAgentBrowsing: (browserId: string) => void;
+  /** Clear the agent-browsing attention list (the user opened the browser). */
+  clearAgentBrowsing: () => void;
   /** Replace the whole browser-tabs list (shared sidebar/overlay state). */
   setBrowserTabs: (tabs: BrowserTab[]) => void;
   /** Set the active browser tab id. */
@@ -3467,6 +3524,33 @@ export function parseSplitSessionIds(
   if (!Array.isArray(parsed)) return [];
   const valid = parsed.filter((x): x is string => typeof x === "string").filter(exists);
   return valid.length >= 2 ? valid : [];
+}
+
+/** Minimum width (px) a split pane must keep — the defining invariant of
+ *  the width-adaptive split: how many panes the grid accepts is decided by
+ *  the measured area width divided by this floor. */
+export const SPLIT_PANE_MIN_WIDTH = 360;
+
+/** Adaptive split capacity (2..4) for a measured grid-area width: how many
+ *  panes fit side-by-side while every pane keeps ≥ SPLIT_PANE_MIN_WIDTH.
+ *  Unknown/unmeasured width (the grid hasn't rendered yet — e.g. the very
+ *  first drop starts from the plain single view) → optimistic 4; a narrow
+ *  area floors at 2 (a split is ≥ 2 by definition; the two panes may run
+ *  below the floor at extreme narrowness — graceful degradation). Existing
+ *  members are NEVER evicted when the width shrinks: the capacity only
+ *  gates new additions while the layout recomputes its column count. */
+export function splitCapacityForWidth(width: number | null | undefined): number {
+  if (width == null || width <= 0) return 4;
+  return Math.max(2, Math.min(4, Math.floor(width / SPLIT_PANE_MIN_WIDTH)));
+}
+
+/** Column count for N panes in a measured area: as many equal columns as
+ *  fit while keeping the pane floor (clamped to N — no empty columns).
+ *  Unmeasured width falls back to the legacy 2-column grid. */
+export function splitColumnsForWidth(n: number, width: number | null | undefined): number {
+  if (width == null || width <= 0) return Math.min(n, 2);
+  const fit = Math.max(1, Math.floor(width / SPLIT_PANE_MIN_WIDTH));
+  return Math.max(1, Math.min(n, fit));
 }
 
 /** Look up a session's kind across every list cache (project windows, pinned,
@@ -5821,6 +5905,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Per-tab split groups (tabs displayMode) — see the field docs. Empty
   // until the user drags a session onto an open tab; in-memory only.
   splitGroupsBySession: {},
+  // Measured split-grid area width (adaptive pane capacity) — null until
+  // SplitChatArea's first ResizeObserver report.
+  splitAreaWidth: null,
   tabsFilePreviewPlacement: "center",
   // Tab strips wrap onto multiple rows instead of horizontal scrolling.
   // Persisted under `ui.tabBarMultiRow`; init() overwrites from the DB.
@@ -5943,6 +6030,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Mobile-shell fullscreen viewer (file/diff/plan) - closed by default.
   mobileViewer: null,
   browserTabCount: 0,
+  agentBrowsingIds: [],
   browserDeviceToolbarOpen: false,
   browserTabs: [],
   browserActiveTabId: null,
@@ -7830,7 +7918,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         await get().selectSession(sessionId);
         return;
       }
-      if (group.length >= 4) return; // full grid: silent reject
+      // Width-adaptive capacity: reject beyond what the measured area fits
+      // while every pane keeps its minimum width (full grid: silent reject).
+      if (group.length >= splitCapacityForWidth(s.splitAreaWidth)) return;
       const next = [...group, sessionId];
       set({
         splitGroupsBySession: { ...s.splitGroupsBySession, [root]: next },
@@ -7842,7 +7932,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     // ── single displayMode: the global persisted grid ──
-    if (s.splitSessionIds.length >= 4) return;
+    if (s.splitSessionIds.length >= splitCapacityForWidth(s.splitAreaWidth)) return;
     // A split needs a partner: dropping the FOCUSED session itself (or any
     // drop while nothing is open) onto an empty grid can't form one —
     // degrade to a plain focus and keep the 0-or-≥2 invariant.
@@ -7907,6 +7997,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const successor = next[idx] ?? next[idx - 1] ?? null;
       if (successor) await get().selectSession(successor);
     }
+  },
+
+  setSplitAreaWidth: (width) => {
+    // Zero-size reports arrive when the grid host is display:none (tab
+    // switched away) — they'd collapse the capacity; ignore them.
+    if (width <= 0) return;
+    if (get().splitAreaWidth === width) return;
+    set({ splitAreaWidth: width });
   },
 
   openSessionFromSidebar: async (sessionId) => {
@@ -8458,6 +8556,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         streamDirty: true,
       };
     });
+  },
+
+  forkSession: async (input) => {
+    const { session } = await api.session.fork(input);
+    const projectId = session.projectId;
+    set((s) => {
+      const list = s.sessionsByProject[projectId] ?? [];
+      const nextList = [session, ...list.filter((x) => x.id !== session.id)];
+      return {
+        sessionsByProject: { ...s.sessionsByProject, [projectId]: nextList },
+        sessions: nextList,
+        activeProjectId: projectId,
+      };
+    });
+    await get().openTab(session.id);
+    return session;
   },
 
   renameSession: async (id, title) => {
@@ -11106,6 +11220,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
   setBrowserTabCount: (count) => set({ browserTabCount: Math.max(0, count) }),
+  markAgentBrowsing: (browserId) => {
+    // The user is already watching a browser container — the view the agent
+    // just drove is on screen (adoptions make it the active tab). No dot.
+    if (browserContainerActive(get())) return;
+    const ids = get().agentBrowsingIds;
+    if (ids.includes(browserId)) return;
+    set({ agentBrowsingIds: [...ids, browserId] });
+  },
+  clearAgentBrowsing: () => {
+    if (get().agentBrowsingIds.length === 0) return;
+    set({ agentBrowsingIds: [] });
+  },
   setBrowserDeviceToolbarOpen: (open) => set({ browserDeviceToolbarOpen: open }),
   suppressBrowserView: (suppressed) =>
     set((s) => ({ browserViewSuppressed: Math.max(0, s.browserViewSuppressed + (suppressed ? 1 : -1)) })),

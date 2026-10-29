@@ -1132,9 +1132,9 @@ button.chat-ledger-head:hover {
   }
 }
 
-/* 工具行状态图标：运行中圆弧 ↔ 完成对勾在同一格内交叉淡换（error 仍是红
- * 叉，由组件层直接渲染）。两态 glyph 常驻 DOM，靠 data-status 切换透明度，
- * transition 保证 running→done 是一次交叉淡换 + 轻微回弹。 */
+/* 工具行状态图标：仅运行中的工具显示圆弧，完成即消失（2026-10-29 起不再
+ * 渲染完成对勾——活跃回合里成排绿勾是视觉噪音；error 红叉由组件层直接
+ * 渲染，不经过这里）。 */
 .chat-st {
   position: relative;
   display: inline-grid;
@@ -1144,14 +1144,6 @@ button.chat-ledger-head:hover {
   flex: none;
 }
 
-.chat-st > span {
-  grid-area: 1 / 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 0.24s ease, transform 0.32s var(--chat-spring);
-}
-
 .chat-st-run {
   width: 10px;
   height: 10px;
@@ -1159,22 +1151,6 @@ button.chat-ledger-head:hover {
   border: 1.6px solid rgb(var(--accent) / 0.26);
   border-top-color: rgb(var(--accent));
   animation: chat-st-spin 0.72s linear infinite;
-}
-
-.chat-st-done {
-  opacity: 0;
-  transform: scale(0.5);
-  color: rgb(var(--accent));
-}
-
-.chat-st[data-status="done"] .chat-st-run {
-  opacity: 0;
-  animation: none;
-}
-
-.chat-st[data-status="done"] .chat-st-done {
-  opacity: 1;
-  transform: none;
 }
 
 @keyframes chat-st-spin {
@@ -1201,7 +1177,6 @@ button.chat-ledger-head:hover {
     border-top-color: rgb(var(--accent));
   }
 
-  .chat-st > span,
   .chat-fold,
   .chat-fold-inner,
   .chat-ledger,
@@ -1476,25 +1451,28 @@ button.chat-ledger-head:hover {
  *
  * The active preset is selected by the `data-chat-density` attribute on <html>,
  * written by lib/appearance.ts from the persisted `ui.chatDensity` setting.
- * The :root block below is the "comfortable" default (= the old hardcoded
- * `mt-3` / `mt-5` / `space-y-2` / `my-1.5`), so the uncustomized state and any
- * consumer outside [data-chat-density] resolve unchanged. The explicit
- * selectors cover all three modes for clarity.
+ * The :root block below is the "comfortable" default — originally the old
+ * hardcoded `mt-3` / `mt-5` / `space-y-2` / `my-1.5`, retuned on 2026-10-29
+ * for looser prose rhythm, so the uncustomized state and any
+ * consumer outside [data-chat-density] resolve to the retuned values. The
+ * explicit selectors cover all three modes for clarity.
  *
  * The three presets are spread wide enough that switching is immediately
  * perceptible: compact packs messages tightly, comfortable is the balanced
  * default, cozy gives generous breathing room between turns. */
 :root,
 [data-chat-density="comfortable"] {
-  --chat-row-gap-assistant: 0.75rem; /* 12px (was mt-3) */
-  --chat-row-gap-user: 1.25rem;      /* 20px (was mt-5) */
+  /* 2026-10-29 retune: looser prose rhythm (leading 1.6→1.7, paragraph gap
+   * 6→10px) for reading comfort; compact keeps the old packed values. */
+  --chat-row-gap-assistant: 1rem;    /* 16px */
+  --chat-row-gap-user: 1.25rem;      /* 20px */
   --chat-row-gap-turn-lead: 100px;   /* 明显的下一轮对话起始间距（缩小一半后为 100px） */
-  --chat-block-gap: 0.5rem;          /* 8px  (was space-y-2) */
-  --chat-md-gap-xs: 0.25rem;         /* 4px  */
-  --chat-md-gap-sm: 0.375rem;        /* 6px  */
-  --chat-md-gap-md: 0.5rem;          /* 8px  */
-  --chat-md-gap-lg: 0.75rem;         /* 12px */
-  --chat-md-leading: 1.6;            /* = --chat-line-height default */
+  --chat-block-gap: 0.625rem;        /* 10px */
+  --chat-md-gap-xs: 0.375rem;        /* 6px  */
+  --chat-md-gap-sm: 0.625rem;        /* 10px */
+  --chat-md-gap-md: 0.75rem;         /* 12px */
+  --chat-md-gap-lg: 1.125rem;        /* 18px */
+  --chat-md-leading: 1.7;
 }
 [data-chat-density="compact"] {
   --chat-row-gap-assistant: 0.25rem; /* 4px */

@@ -17,6 +17,7 @@ import {
   IconPaperclip,
   IconFile,
   IconPhoto,
+  IconArrowsMaximize,
   IconClipboard,
   IconX,
   IconPencil,
@@ -26,6 +27,7 @@ import {
   IconExternalLink,
   IconSparkles,
   IconArrowBackUp,
+  IconGitFork,
 } from "@renderer/lib/icons.js";
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
@@ -85,6 +87,7 @@ import { isInFlightAutomation } from "@renderer/components/automation/automation
 import { MessageTimeline, type UserItemIndexMap } from "./MessageTimeline.js";
 import { SelectionToolbar, type SelectionToolbarState } from "./SelectionToolbar.js";
 import { BookmarkFly } from "./BookmarkFly.js";
+import { ForkSessionDialog } from "./ForkSessionDialog.js";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
 /**
@@ -1257,6 +1260,7 @@ export const ChatPane = memo(
     isActive = true,
     chipsMode = "auto",
     hideComposer = false,
+    unloadComposer = false,
     composerPortalTarget = null,
     targetMessageId = null,
   }: {
@@ -1273,6 +1277,12 @@ export const ChatPane = memo(
      *  question / plan prompts — those are decisions, not free input, and an
      *  unattended task may legitimately wait on them. */
     hideComposer?: boolean;
+    /** Memory trim for background split panes: with hideComposer, don't
+     *  mount the Tiptap editor at all (the hidden card keeps its shell).
+     *  Drafts live in composerDraftBySession (write-through), so refocusing
+     *  restores text/tags on the remount the portal-target flip causes
+     *  anyway. Only meaningful together with hideComposer. */
+    unloadComposer?: boolean;
     /** Split-view bottom strip: when provided (the focused pane only), the
      *  whole composer column — pending prompts, chips row, input card and
      *  its anchored pickers — renders through a portal into this element so
@@ -1300,6 +1310,7 @@ export const ChatPane = memo(
         isActive={isActive}
         chipsMode={chipsMode}
         hideComposer={hideComposer}
+        unloadComposer={unloadComposer}
         composerPortalTarget={composerPortalTarget}
         targetMessageId={targetMessageId}
       />
@@ -1310,6 +1321,7 @@ export const ChatPane = memo(
     prev.isActive === next.isActive &&
     prev.chipsMode === next.chipsMode &&
     prev.hideComposer === next.hideComposer &&
+    prev.unloadComposer === next.unloadComposer &&
     prev.composerPortalTarget === next.composerPortalTarget &&
     prev.targetMessageId === next.targetMessageId,
 );
@@ -1431,6 +1443,7 @@ function ChatPaneForSession({
   isActive,
   chipsMode = "auto",
   hideComposer = false,
+  unloadComposer = false,
   composerPortalTarget = null,
   targetMessageId = null,
 }: {
@@ -1438,6 +1451,7 @@ function ChatPaneForSession({
   isActive: boolean;
   chipsMode?: ComposerChipsMode;
   hideComposer?: boolean;
+  unloadComposer?: boolean;
   composerPortalTarget?: HTMLElement | null;
   targetMessageId?: string | null;
 }) {
@@ -1469,6 +1483,7 @@ function ChatPaneForSession({
     const sess = s.getSessionById(sessionId);
     return sess?.kind === "automation" || sess?.automationId != null;
   });
+  const currentSession = useSessionStore((s) => s.getSessionById(sessionId));
   const sessionModel = useSessionStore((s) => resolveTurnModel(s, sessionId));
   // Older-message pagination state for this session.
   const hasMoreMessages = useSessionStore((s) => !!s.hasMoreMessagesBySession[sessionId]);
@@ -1847,16 +1862,16 @@ function ChatPaneForSession({
   // the approval panel takes the place of the input area entirely so the user
   // can't type a competing prompt.
   const inputBlocked = sessionBusy || !!headApproval;
-  // The TEXTAREA specifically: unlocked while a turn is running so the user
-  // can type ahead and enqueue the next prompt. Still hard-locked when an
-  // approval / AskUserQuestion is pending (that panel owns the input area).
-  const textareaLocked = !!headApproval || !!pendingQuestion;
   // Any of the three bottom prompts (tool approval / plan approval / question)
-  // currently visible. When one is shown the composer card is hidden entirely
-  // - the prompt takes its place in the flow, pushing the message stream up
-  // instead of overlaying it. The composer stays mounted (state + Tiptap
-  // history preserved) via `hidden` (display:none); it just isn't rendered.
+  // currently visible. When one is shown the composer card is hidden in single-pane
+  // mode - the prompt takes its place in the flow, pushing the message stream up
+  // instead of overlaying it. In split-pane mode (composerPortalTarget != null),
+  // the card stays visible in the shared bottom strip but locked.
   const hasPendingPrompt = !!headApproval || !!pendingPlanApproval || !!pendingQuestion;
+  // The TEXTAREA specifically: unlocked while a turn is running so the user
+  // can type ahead and enqueue the next prompt. Hard-locked whenever a prompt
+  // (tool approval / plan approval / question) is pending.
+  const textareaLocked = hasPendingPrompt;
   // Voice model selected AND downloaded — the mic button stays hidden until
   // the user sets one up in Settings → 语音输入 (refreshed when the dialog
   // closes, so a first download makes the button appear without a restart).
@@ -1875,7 +1890,9 @@ function ChatPaneForSession({
   const sendQueuedPromptNow = useSessionStore((s) => s.sendQueuedPromptNow);
   const reorderPromptQueue = useSessionStore((s) => s.reorderPromptQueue);
 
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(
+    () => useSessionStore.getState().composerDraftBySession[sessionId]?.text ?? "",
+  );
   // ── Up/Down history recall ──
   // recallActive: the composer currently holds a recalled past message and
   // Up/Down should keep cycling history (until the user edits the text).
@@ -1896,6 +1913,7 @@ function ChatPaneForSession({
   // destructive option demands — the cascade deletes whole turns from BOTH the
   // view and the model's context.
   const [retractTarget, setRetractTarget] = useState<ChatMessage | null>(null);
+  const [forkTarget, setForkTarget] = useState<{ messageId?: string } | null>(null);
   const virtualListRef = useRef<LegendListRef>(null);
   // Recompute the "jump to bottom" button visibility from the live scroll
   // state. Returns true if the list is near the bottom (button hidden), false
@@ -2136,7 +2154,9 @@ function ChatPaneForSession({
   // Content tags: long/multi-line pastes promoted to chips above the
   // textarea so they don't bury the input area. Ephemeral per-turn UI
   // state (cleared on send). See lib/contentTag.ts for the promote rules.
-  const [tags, setTags] = useState<ContentTag[]>([]);
+  const [tags, setTags] = useState<ContentTag[]>(
+    () => useSessionStore.getState().composerDraftBySession[sessionId]?.tags ?? [],
+  );
   // Staged user-attached images (paste / OS picker) — thumbnail chips above
   // the editor, sent inline with the prompt as base64 content blocks.
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -2676,14 +2696,14 @@ function ChatPaneForSession({
   // ── Composer draft persistence ──
   // The store's composerDraftBySession holds each thread's unsent input so it
   // survives this pane unmounting (single-mode thread switch, tab close).
-  // Restore runs BEFORE the write-through below (declaration order matters):
-  // the write-through's first run sees the stale empty `value` and would
-  // otherwise clear a pre-existing draft before restore reads it.
   useEffect(() => {
     const draft = useSessionStore.getState().composerDraftBySession[sessionId];
     // Guard: skip empty drafts so a never-typed thread isn't clobbered.
     if (!draft || (!draft.text && draft.tags.length === 0)) return;
-    if (draft.html) editorRef.current?.setHTML(draft.html);
+    if (editorRef.current) {
+      if (draft.html) editorRef.current.setHTML(draft.html);
+      else if (draft.text) editorRef.current.setText(draft.text);
+    }
     setValue(draft.text);
     if (draft.tags.length > 0) setTags(draft.tags);
   }, [sessionId]);
@@ -2696,9 +2716,11 @@ function ChatPaneForSession({
       useSessionStore.getState().clearComposerDraft(sessionId);
       return;
     }
+    const currentHtml = editorRef.current?.getHTML();
+    const existingHtml = useSessionStore.getState().composerDraftBySession[sessionId]?.html ?? "";
     useSessionStore.getState().saveComposerDraft(sessionId, {
       text: value,
-      html: editorRef.current?.getHTML() ?? "",
+      html: currentHtml || existingHtml,
       tags,
     });
   }, [value, tags, sessionId]);
@@ -3969,6 +3991,7 @@ function ChatPaneForSession({
                   onSubmitEdit={handleEditSubmit}
                   onCancelEdit={() => setEditingMessageId(null)}
                   onRetract={(msg) => setRetractTarget(msg)}
+                  onFork={(msg) => setForkTarget({ messageId: msg.id })}
                   onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
                   projectPath={projectPath}
                 />
@@ -4161,6 +4184,7 @@ function ChatPaneForSession({
                 tightTop={idx === 0}
                 onOpenPlan={onOpenPlan}
                 projectPath={projectPath}
+                onFork={(m) => setForkTarget({ messageId: m.id })}
               />
             ));
           })()}
@@ -4496,26 +4520,26 @@ function ChatPaneForSession({
         </div>
       )}
 
-      {/* Input box — fixed at the bottom (outside the scroll container) so
-          the user always has access to the composer. No border-t divider:
-          the box sits flush against the message area. When the session is
-          empty the wrapper takes flex-1 and centers the box vertically. */}
-      <ComposerPortal target={composerPortalTarget}>
-      <div className={cn(
-        "relative px-[var(--chat-gutter)]",
-        empty
-          ? "flex flex-1 items-center justify-center overflow-hidden"
-          : "shrink-0 pb-3",
-      )}>
-        <div className={cn("relative w-full", empty ? "max-w-4xl" : "mx-auto max-w-5xl pt-5")}>
-          {empty && !composerPortalTarget && (
-            <EmptyThreadWelcome projectName={projectName} />
-          )}
+      {/* Pending decision cards (plan approval / tool approval / AskUserQuestion /
+          orchestration attention). Always rendered INSIDE this pane — never
+          portaled to the split composer strip (composerPortalTarget), so the
+          card's position follows the asking session instead of the focused
+          pane: focus flips (pointerdown selects the pane) used to teleport the
+          card mid-interaction to the bottom strip, remounting it and wiping
+          in-progress answers. The strip keeps only the chips row + composer
+          card. min-h-0 without shrink-0 so a tall card yields to the pane
+          height — each card is a flex column with overflow hidden, so it
+          scrolls internally instead of clipping its footer. */}
+      <div
+        className={cn(
+          "flex min-h-0 flex-col px-[var(--chat-gutter)]",
+          hasPendingPrompt && "pt-5",
+        )}
+      >
+        <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-col">
           {/* Plan-approval card (ExitPlanMode) - the model drafted a plan in
               plan mode and is awaiting the user's approve/reject decision.
-              Rendered inside the composer column so it sits directly above the
-              input box; yields to a pending tool approval (which blocks
-              everything). */}
+              Yields to a pending tool approval (which blocks everything). */}
           {pendingPlanApproval && !headApproval && (
             <PlanApprovalPrompt
               sessionId={sessionId}
@@ -4540,12 +4564,9 @@ function ChatPaneForSession({
             />
           )}
 
-          {/* Tool-approval card (canUseTool). Rendered in-flow above the input
-              box so the message stream shrinks to make room instead of being
-              overlaid - the user keeps seeing the streaming data while deciding.
-              Highest precedence of the three prompts: plan approval and
-              AskUserQuestion are suppressed while a tool approval is the head of
-              the queue. */}
+          {/* Tool-approval card (canUseTool). Highest precedence of the three
+              prompts: plan approval and AskUserQuestion are suppressed while a
+              tool approval is the head of the queue. */}
           {headApproval && (
             <ApprovalPrompt
               key={headApproval.requestId}
@@ -4567,11 +4588,10 @@ function ChatPaneForSession({
             />
           )}
 
-          {/* AskUserQuestion card. Rendered in-flow above the input box so the
-              message stream shrinks to make room instead of being overlaid. The
-              composer stays visible below but is locked (`textareaLocked`) while
-              a question is pending. Renders only when no tool approval or plan
-              approval is pending (those take precedence). */}
+          {/* AskUserQuestion card. The composer stays visible below but is
+              locked (`textareaLocked`) while a question is pending. Renders
+              only when no tool approval or plan approval is pending (those
+              take precedence). */}
           {activeQuestion && !headApproval && !pendingPlanApproval && (
             <QuestionPrompt
               questions={activeQuestion}
@@ -4586,6 +4606,36 @@ function ChatPaneForSession({
               为琥珀横幅。 */}
           {activeQuestion == null && !headApproval && !pendingPlanApproval && (
             <OrchAttentionCard sessionId={sessionId} />
+          )}
+        </div>
+      </div>
+
+      {/* Input box — fixed at the bottom (outside the scroll container) so
+          the user always has access to the composer. No border-t divider:
+          the box sits flush against the message area. When the session is
+          empty the wrapper takes flex-1 and centers the box vertically. */}
+      <ComposerPortal target={composerPortalTarget}>
+      <div className={cn(
+        "relative px-[var(--chat-gutter)]",
+        empty
+          ? "flex flex-1 items-center justify-center overflow-hidden"
+          : "shrink-0 pb-3",
+      )}>
+        <div
+          className={cn(
+            "relative w-full",
+            empty
+              ? "max-w-4xl"
+              // Pending decision cards live in the pane above (never portaled),
+              // so the column skips its top padding while one owns the input
+              // area in single-pane mode — otherwise the card and the chips row would drift apart.
+              : hasPendingPrompt && !composerPortalTarget
+                ? "mx-auto max-w-5xl"
+                : "mx-auto max-w-5xl pt-5",
+          )}
+        >
+          {empty && !composerPortalTarget && (
+            <EmptyThreadWelcome projectName={projectName} />
           )}
           {/* Composer-top chips row — directory switcher (fresh LOCAL
               sessions only, hidden when there's <2 projects) then the
@@ -4613,10 +4663,11 @@ function ChatPaneForSession({
               // Voice listening active glow + subtle pulse
               voiceActive && "border-accent ring-2 ring-accent/30 shadow-[0_0_16px_rgb(var(--accent)/0.18)] animate-pulse",
               // Hide the composer card entirely while a bottom prompt (approval /
-              // plan approval / question) is visible - the prompt takes its place
-              // in the flow. `hidden` (display:none) keeps the component mounted
-              // so state (draft, tags, Tiptap history) survives the hide/show.
-              hasPendingPrompt && "hidden",
+              // plan approval / question) is visible in single-pane mode - the prompt takes its place
+              // in the flow. In split-pane mode (composerPortalTarget != null), the prompt
+              // stays in its cell while the composer stays visible in the bottom shared strip
+              // but locked via `textareaLocked`.
+              hasPendingPrompt && !composerPortalTarget && "hidden",
               // View-only hosts (right-panel scheduled-task pane) hide the
               // whole input box; same mounted-but-display-none semantics.
               hideComposer && "hidden",
@@ -4889,37 +4940,47 @@ function ChatPaneForSession({
                 down the whole tree (logged 2026-09-07 <ComposerEditor2>). The
                 fallback card loses the input box but keeps the app alive —
                 switching sessions remounts the composer fresh. */}
-            <RenderErrorBoundary>
-              <ComposerEditor
-                ref={editorRef}
-                editable={!textareaLocked && !orchBlocking}
-                placeholder={
-                  voiceActive
-                    ? t("chat.voice.placeholderListening")
-                    : textareaLocked
-                      ? "Claude is working…"
-                      : orchBlocking
-                      ? t("orch.canvas.inputLocked")
-                      : schedHintVisible
-                        ? t("automation.composerSchedHint")
-                        : sessionBusy
-                          ? t("chat.placeholderQueued")
-                          : t("chat.placeholderIdle")
-                }
-                onChange={handleChange}
-                onEnter={handleEnter}
-                onHistoryUp={handleHistoryUp}
-                onHistoryDown={handleHistoryDown}
-                historyNavEnabled={recallEnabled}
-                onPromotePaste={handlePromotePaste}
-                shouldPromotePaste={(text) => !pastePlainText && shouldPromoteToTag(text, pasteTagThresholdChars)}
-                onPasteFiles={handlePasteFiles}
-                className={cn(
-                  "px-3 pt-2.5 text-sm leading-relaxed text-content",
-                  (visibleTags.length > 0 || pendingImages.length > 0) && "pt-1.5",
-                )}
-              />
-            </RenderErrorBoundary>
+            {/* unloadComposer: the hidden composer of a background split pane
+                (hideComposer hosts) renders NO Tiptap at all — the editor is
+                the single heaviest object in the card, and refocusing the
+                pane remounts the whole column anyway (portal-target flip),
+                with the draft restored from composerDraftBySession. Tiptap
+                undo history is the only thing lost, and it dies on that
+                remount regardless. */}
+            {!unloadComposer && (
+              <RenderErrorBoundary>
+                <ComposerEditor
+                  ref={editorRef}
+                  initialContent={useSessionStore.getState().composerDraftBySession[sessionId]?.html || value}
+                  editable={!textareaLocked && !orchBlocking}
+                  placeholder={
+                    voiceActive
+                      ? t("chat.voice.placeholderListening")
+                      : textareaLocked
+                        ? t("chat.placeholderLocked")
+                        : orchBlocking
+                        ? t("orch.canvas.inputLocked")
+                        : schedHintVisible
+                          ? t("automation.composerSchedHint")
+                          : sessionBusy
+                            ? t("chat.placeholderQueued")
+                            : t("chat.placeholderIdle")
+                  }
+                  onChange={handleChange}
+                  onEnter={handleEnter}
+                  onHistoryUp={handleHistoryUp}
+                  onHistoryDown={handleHistoryDown}
+                  historyNavEnabled={recallEnabled}
+                  onPromotePaste={handlePromotePaste}
+                  shouldPromotePaste={(text) => !pastePlainText && shouldPromoteToTag(text, pasteTagThresholdChars)}
+                  onPasteFiles={handlePasteFiles}
+                  className={cn(
+                    "px-3 pt-2.5 text-sm leading-relaxed text-content",
+                    (visibleTags.length > 0 || pendingImages.length > 0) && "pt-1.5",
+                  )}
+                />
+              </RenderErrorBoundary>
+            )}
             <div
               ref={composerActionRowRef}
               className="composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5"
@@ -4995,7 +5056,7 @@ function ChatPaneForSession({
                 ) : (
                   <button
                     onClick={sessionBusy ? handleEnqueue : handleSend}
-                    disabled={!hasComposerContent}
+                    disabled={!hasComposerContent || textareaLocked}
                     title={sessionBusy ? t("chat.enqueue") : t("chat.send")}
                     aria-label={sessionBusy ? t("chat.enqueue") : t("chat.send")}
                     data-ready={hasComposerContent ? "1" : "0"}
@@ -5129,7 +5190,16 @@ function ChatPaneForSession({
           setRetractTarget(null);
           if (target) void retractMessage(sessionId, target.id);
         }}
+      />
 
+      <ForkSessionDialog
+        open={forkTarget != null}
+        onOpenChange={(open) => {
+          if (!open) setForkTarget(null);
+        }}
+        sessionId={sessionId}
+        messageId={forkTarget?.messageId}
+        initialTitle={currentSession?.title}
       />
     </div>
     </StreamAnchorPauseContext.Provider>
@@ -5198,6 +5268,7 @@ const MessageRow = memo(function MessageRow({
   isEditing,
   onStartEdit,
   onRetract,
+  onFork,
   onSubmitEdit,
   onCancelEdit,
   onOpenPlan,
@@ -5223,6 +5294,8 @@ const MessageRow = memo(function MessageRow({
   onStartEdit?: (msg: ChatMessage) => void;
   /** Open the retract confirmation dialog armed at this message. */
   onRetract?: (msg: ChatMessage) => void;
+  /** Fork session starting up to this message. */
+  onFork?: (msg: ChatMessage) => void;
   onSubmitEdit?: (
     msg: ChatMessage,
     newText: string,
@@ -5534,21 +5607,37 @@ const MessageRow = memo(function MessageRow({
                     userProseBlocks.length > 0 && "mb-[var(--chat-block-gap)]",
                   )}
                 >
-                  {userImageBlocks.map((img, i) => (
+                  {userImageBlocks.length === 1 ? (
                     <button
-                      key={i}
                       type="button"
-                      onClick={() => setActiveImageIdx(i)}
-                      title={t("chat.imageN", { n: i + 1 })}
-                      className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-edge bg-surface transition-all hover:border-accent/60 hover:shadow-sm"
+                      onClick={() => setActiveImageIdx(0)}
+                      title={t("chat.imageN", { n: 1 })}
+                      className="group inline-flex items-center gap-1.5 rounded-lg border border-edge bg-surface-muted/60 px-2.5 py-1.5 text-xs font-medium text-content transition-all hover:border-accent/60 hover:bg-surface-hover hover:shadow-sm"
                     >
-                      <img
-                        src={`data:${img.mimeType};base64,${img.data}`}
-                        alt={t("chat.imageN", { n: i + 1 })}
-                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
-                      />
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-accent/10 text-accent transition-colors group-hover:bg-accent group-hover:text-white">
+                        <IconPhoto size={12} />
+                      </span>
+                      <span>{t("chat.imageN", { n: 1 })}</span>
+                      <IconArrowsMaximize size={11} className="text-content-subtle opacity-70 transition-opacity group-hover:opacity-100" />
                     </button>
-                  ))}
+                  ) : (
+                    <div className="inline-flex items-center gap-2 rounded-lg border border-edge/80 bg-surface-muted/50 py-1 pl-2.5 pr-1.5 text-xs font-medium text-content">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-accent/15 text-accent">
+                        <IconPhoto size={12} />
+                      </span>
+                      <span className="font-semibold text-content-strong">
+                        {t("chatStream.media.userImagesTotal", { n: userImageBlocks.length })}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveImageIdx(0)}
+                        className="ml-1 inline-flex items-center gap-1 rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-white shadow-xs transition-opacity hover:opacity-90 active:opacity-100"
+                      >
+                        <IconArrowsMaximize size={11} />
+                        <span>{t("chatStream.media.previewAll")}</span>
+                      </button>
+                    </div>
+                  )}
                   {activeImageIdx !== null && (
                     <MediaLightbox
                       items={userMediaItems}
@@ -5630,6 +5719,17 @@ const MessageRow = memo(function MessageRow({
             )}
           >
             {showCopy && <CopyButton text={copyText} />}
+            {showCopy && onFork && (
+              <button
+                type="button"
+                onClick={() => onFork(msg)}
+                title={t("chatStream.fork.buttonTooltip")}
+                aria-label={t("chatStream.fork.buttonTooltip")}
+                className="inline-flex items-center rounded px-1 py-0.5 text-[10px] text-content-subtle transition-colors hover:bg-surface-hover hover:text-content-muted"
+              >
+                <IconGitFork size={12} />
+              </button>
+            )}
             {showEdit && (
               <button
                 type="button"

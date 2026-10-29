@@ -59,6 +59,7 @@ import { BrandLogo } from "./BrandLogo.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
 import { describeSchedule, taskNextLine } from "@renderer/components/automation/automationFormat.js";
 import { HoverIconButton, RenameDialog, SessionContextMenu, ArchivedRow } from "./SidebarShared.js";
+import { ForkSessionDialog } from "@renderer/components/chat/ForkSessionDialog.js";
 import { LeftBarModeSwitch } from "./StreamSidebar.js";
 import { ProjectAvatar } from "./ProjectAvatar.js";
 import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
@@ -325,6 +326,7 @@ function LeftBarBase({
   // right-clicked (base-ui's ContextMenu.Trigger anchors to the element edge,
   // not the cursor, which doesn't match the expected behavior).
   const [ctxMenu, setCtxMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
+  const [forkSessionTarget, setForkSessionTarget] = useState<Session | null>(null);
 
   // ── Rename dialog state. Shared by sessions, projects, and worktree
   // groups; `kind` picks the dialog copy and the dispatch target on submit.
@@ -1156,6 +1158,10 @@ function LeftBarBase({
         onClose={() => setCtxMenu(null)}
         onRename={(s) => { setCtxMenu(null); setRenaming({ id: s.id, title: s.title, kind: "session" }); }}
         onCopyTitle={(s) => { void navigator.clipboard.writeText(s.title); setCtxMenu(null); }}
+        onFork={(s) => {
+          setCtxMenu(null);
+          setForkSessionTarget(s);
+        }}
         onOpenInSplit={(s) => {
           setCtxMenu(null);
           void useSessionStore.getState().addToSplit(s.id);
@@ -1248,6 +1254,17 @@ function LeftBarBase({
         worktreePath={wtMerge?.worktreePath ?? ""}
         repoPath={wtMerge?.repoPath ?? null}
       />
+
+      {forkSessionTarget && (
+        <ForkSessionDialog
+          open={forkSessionTarget != null}
+          onOpenChange={(open) => {
+            if (!open) setForkSessionTarget(null);
+          }}
+          sessionId={forkSessionTarget.id}
+          initialTitle={forkSessionTarget.title}
+        />
+      )}
 
       {/* Right-click context menu for project rows. Hosts the "移动到分组"
           actions (existing groups + 新建分组 + 移出分组), plus pin / rename. */}

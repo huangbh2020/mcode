@@ -158,6 +158,8 @@ interface ComposerEditorProps {
   placeholder: string;
   /** Whether the editor accepts input (false = read-only / locked). */
   editable: boolean;
+  /** Initial HTML or plain-text content used when the editor is first created. */
+  initialContent?: string;
   /** Called on every content change with the current plain-text-with-skills.
    *  `textDelta` is the document size change of the transaction that produced
    *  it: negative = net deletion, >= 0 = neutral/insertion. The parent uses
@@ -323,6 +325,7 @@ export const ComposerEditor = forwardRef<
   {
     placeholder,
     editable,
+    initialContent,
     onChange,
     onEnter,
     onHistoryUp,
@@ -365,7 +368,7 @@ export const ComposerEditor = forwardRef<
       SkillPill,
       FilePill,
     ],
-    content: "",
+    content: initialContent || "",
     editable,
     editorProps: {
       attributes: {

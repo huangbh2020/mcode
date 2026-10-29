@@ -143,6 +143,7 @@ export const zh = {
   "layout.tabTerminal": "终端",
   "layout.tabTurns": "轮次流程",
   "layout.tabBrowser": "浏览器",
+  "layout.browserAgentBrowsing": "agent 正在浏览网页 — 点击查看",
   "layout.closeSidebarBrowser": "关闭侧边栏浏览器",
 
   /* ── titlebar git quick-commit (ToolbarGitCommit) ── */

@@ -74,6 +74,12 @@ export function RightPanel() {
   const closeSessionTab = useSessionStore((s) => s.closeSessionRightTab);
   const setTab = useSessionStore((s) => s.setRightPanelTab);
   const browserTabCount = useSessionStore((s) => s.browserTabCount);
+  // Agent-browsing attention dot: the agent drives the embedded browser
+  // without switching the panel anymore; the dot on the browser rail icon
+  // invites the user over. Cleared below once the browser is actually shown.
+  const agentBrowsingIds = useSessionStore((s) => s.agentBrowsingIds);
+  const clearAgentBrowsing = useSessionStore((s) => s.clearAgentBrowsing);
+  const browserPanelOpen = useSessionStore((s) => s.browserPanelOpen);
   const terminalPosition = useSessionStore((s) => s.terminalPosition);
   const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
   const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
@@ -102,6 +108,14 @@ export function RightPanel() {
     }
     return res;
   }, [openSessionTabs, tab]);
+
+  // The user is looking at the browser (right-panel browser tab or the PC
+  // fullscreen overlay) — the agent-browsing attention dot has served its
+  // purpose, drop it.
+  const browserVisible = (tab === "browser" && rightOpen) || browserPanelOpen;
+  useEffect(() => {
+    if (browserVisible) clearAgentBrowsing();
+  }, [browserVisible, clearAgentBrowsing]);
 
   // 保证当前会话的编排运行记录已拉取
   useEffect(() => {
@@ -173,7 +187,12 @@ export function RightPanel() {
           active={tab === "browser"}
           onClick={() => setTab("browser")}
           badgeCount={browserTabCount}
-          title={t("layout.tabBrowser") + hintFor("layout.toggle-browser")}
+          attention={agentBrowsingIds.length > 0}
+          title={
+            agentBrowsingIds.length > 0
+              ? t("layout.browserAgentBrowsing")
+              : t("layout.tabBrowser") + hintFor("layout.toggle-browser")
+          }
         >
           <IconWorld size={16} className="shrink-0" />
         </RailButton>
@@ -333,18 +352,22 @@ export function RightPanel() {
 
 /** A square icon button in the panel's rail. Active state uses the accent
  *  token; idle state uses the muted content token with a hover surface.
- *  Optional badgeCount renders the open-tab-count pill (browser). */
+ *  Optional badgeCount renders the open-tab-count pill (browser). Optional
+ *  attention renders a pulsing dot (bottom-right, clear of the count pill)
+ *  — "something happened here that you haven't seen" (agent browsing). */
 function RailButton({
   active,
   onClick,
   title,
   badgeCount,
+  attention,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   title: string;
   badgeCount?: number;
+  attention?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -360,6 +383,9 @@ function RailButton({
       )}
     >
       {children}
+      {attention && (
+        <span className="absolute -bottom-0.5 -right-0.5 size-2 animate-pulse rounded-full bg-accent ring-2 ring-surface" />
+      )}
       {badgeCount !== undefined && badgeCount > 0 && (
         <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold leading-none text-white">
           {badgeCount}

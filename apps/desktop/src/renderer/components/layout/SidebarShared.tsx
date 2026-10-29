@@ -64,6 +64,7 @@ export interface SessionContextMenuProps {
   onClose: () => void;
   onRename: (session: Session) => void;
   onCopyTitle: (session: Session) => void;
+  onFork?: (session: Session) => void;
   onOpenFolder: (session: Session) => void;
   onTogglePin: (session: Session) => void;
   /** "New session in this worktree" — present only for materialized
@@ -84,7 +85,7 @@ export interface SessionContextMenuProps {
 }
 
 export function SessionContextMenu({
-  ctxMenu, onClose, onRename, onCopyTitle, onOpenFolder, onTogglePin,
+  ctxMenu, onClose, onRename, onCopyTitle, onFork, onOpenFolder, onTogglePin,
   onNewWorktreeSession, onMergeWorktree, onRenameWorktree, onRemoveWorktree, onOpenInSplit,
 }: SessionContextMenuProps) {
   const { t } = useI18n();
@@ -137,6 +138,15 @@ export function SessionContextMenu({
               <IconCopy size={14} className="shrink-0" />
               {t("layout.copySessionTitle")}
             </Menu.Item>
+            {onFork && (
+              <Menu.Item
+                onClick={() => session && onFork(session)}
+                className={itemClass}
+              >
+                <IconGitFork size={14} className="shrink-0" />
+                {t("chatStream.fork.button")}
+              </Menu.Item>
+            )}
             {onOpenInSplit && (
               <Menu.Item
                 onClick={() => session && onOpenInSplit(session)}

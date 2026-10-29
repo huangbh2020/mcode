@@ -171,10 +171,23 @@ export function createMainWindow(): BrowserWindow {
     if (tag === "ERROR") log.error(line2);
     else if (tag === "WARN") log.warn(line2);
   });
+  let crashReloadTimer: NodeJS.Timeout | null = null;
   mainWindow.webContents.on("render-process-gone", (_e, details) => {
     const line = `[renderer:GONE] ${JSON.stringify(details)}`;
     process.stderr.write(`${line}\n`);
     log.error(line);
+
+    // Auto-reload the renderer if it crashed or ran out of memory (OOM),
+    // rather than leaving a dead, unresponsive white screen.
+    if (details.reason !== "clean-exit" && mainWindow && !mainWindow.isDestroyed()) {
+      if (crashReloadTimer) clearTimeout(crashReloadTimer);
+      crashReloadTimer = setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+          log.warn(`reloading renderer after crash (${details.reason})...`);
+          mainWindow.webContents.reload();
+        }
+      }, 500);
+    }
   });
   mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
     const line = `[renderer:FAIL_LOAD] ${code} ${desc} ${url}`;
@@ -231,16 +244,21 @@ export function getMainWindow(): BrowserWindow | null {
 
 /** Send a push event to the renderer (main -> renderer).
  *
- *  Defensive against a closed/destroyed window: node-pty's onExit/onData and
- *  the approval bridges fire asynchronously, so they can run after the window
- *  has torn down during quit. Calling webContents.send() on a destroyed window
- *  throws "Object has been destroyed" (an uncaught main-process exception).
- *  Drop silently in that case - the renderer is gone and nobody can receive
- *  the message anyway. */
+ *  Defensive against a closed/destroyed window or disposed frame: node-pty's
+ *  onExit/onData, ServiceScanner, and approval bridges fire asynchronously, so
+ *  they can run after the window has torn down or while the renderer crashed.
+ *  Calling webContents.send() on a destroyed window or disposed frame throws
+ *  "Render frame was disposed before WebFrameMain could be accessed" or
+ *  "Object has been destroyed". We guard against both and catch any synchronous
+ *  throw so the main process never crashes from a dead renderer. */
 export function sendToRenderer(channel: string, ...args: unknown[]): void {
   const win = mainWindow;
   if (!win || win.isDestroyed()) return;
   const wc = win.webContents;
-  if (wc.isDestroyed()) return;
-  wc.send(channel, ...args);
+  if (wc.isDestroyed() || wc.isCrashed()) return;
+  try {
+    wc.send(channel, ...args);
+  } catch {
+    // Drop silently if the render frame was disposed before or during access.
+  }
 }

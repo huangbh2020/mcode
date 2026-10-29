@@ -69,6 +69,7 @@ import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/compone
 import { ProjectManageMenuPopup, type ManageMenuState } from "./ProjectManageMenu.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
 import { ArchivedRow, HoverIconButton, RenameDialog, SessionContextMenu } from "./SidebarShared.js";
+import { ForkSessionDialog } from "@renderer/components/chat/ForkSessionDialog.js";
 import { beginSessionDrag } from "@renderer/lib/sessionDrag.js";
 import { ProjectAvatar } from "./ProjectAvatar.js";
 import { BrandLogo } from "./BrandLogo.js";
@@ -388,6 +389,7 @@ function StreamSidebarBase() {
 
   // ── Dialogs / menus (same wiring as the tree view).
   const [ctxMenu, setCtxMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
+  const [forkSessionTarget, setForkSessionTarget] = useState<Session | null>(null);
   const [renaming, setRenaming] = useState<
     { id: string; title: string; kind: "session" | "project" | "worktree" | "group" } | null
   >(null);
@@ -871,6 +873,10 @@ function StreamSidebarBase() {
         onClose={() => setCtxMenu(null)}
         onRename={(s) => { setCtxMenu(null); setRenaming({ id: s.id, title: s.title, kind: "session" }); }}
         onCopyTitle={(s) => { void navigator.clipboard.writeText(s.title); setCtxMenu(null); }}
+        onFork={(s) => {
+          setCtxMenu(null);
+          setForkSessionTarget(s);
+        }}
         onOpenInSplit={(s) => {
           setCtxMenu(null);
           void useSessionStore.getState().addToSplit(s.id);
@@ -960,6 +966,17 @@ function StreamSidebarBase() {
           else void deleteSession(confirmDelete.id);
         }}
       />
+
+      {forkSessionTarget && (
+        <ForkSessionDialog
+          open={forkSessionTarget != null}
+          onOpenChange={(open) => {
+            if (!open) setForkSessionTarget(null);
+          }}
+          sessionId={forkSessionTarget.id}
+          initialTitle={forkSessionTarget.title}
+        />
+      )}
     </div>
   );
 }

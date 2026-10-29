@@ -140,6 +140,7 @@ export const en = {
   "layout.tabTerminal": "Terminal",
   "layout.tabTurns": "Turn Flow",
   "layout.tabBrowser": "Browser",
+  "layout.browserAgentBrowsing": "Agent is browsing — click to watch",
   "layout.closeSidebarBrowser": "Close sidebar browser",
 
   /* ── titlebar git quick-commit (ToolbarGitCommit) ── */

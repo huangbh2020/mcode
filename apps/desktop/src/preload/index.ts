@@ -109,6 +109,8 @@ const api = {
       ipcRenderer.invoke(IPC.SESSION_LIST_ALL, input)) as RpcMap["session.listAll"],
     get: ((input) =>
       ipcRenderer.invoke(IPC.SESSION_GET, input)) as RpcMap["session.get"],
+    fork: ((input) =>
+      ipcRenderer.invoke(IPC.SESSION_FORK, input)) as RpcMap["session.fork"],
   },
   setting: {
     get: ((input) =>

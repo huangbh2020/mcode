@@ -88,6 +88,12 @@ export const en = {
   // ── MessageBlocks: inline video (script-generated media) ──
   "chatStream.media.tabVideos": "Videos",
   "chatStream.media.tabImages": "Images",
+  "chatStream.media.previewAll": "Preview all",
+  "chatStream.media.screenshotsTotal": "Browser screenshots · {n} total",
+  "chatStream.media.videosTotal": "Videos · {n} total",
+  "chatStream.media.userImagesTotal": "User images · {n} total",
+  "chatStream.media.expandList": "Expand list",
+  "chatStream.media.collapseList": "Collapse list",
   "chatStream.video.unplayable": "Can't play",
   "chatStream.video.openInEditor": "Open in editor",
 
@@ -335,4 +341,17 @@ export const en = {
   "chatStream.retract.confirm": "Retract",
   "chatStream.retract.failed": "Retract failed",
 
+  // ── Fork Session ──
+  "chatStream.fork.button": "Fork",
+  "chatStream.fork.buttonTooltip": "Fork exploration from this message",
+  "chatStream.fork.headerTooltip": "Fork current session to explore",
+  "chatStream.fork.dialogTitle": "Fork Session Exploration",
+  "chatStream.fork.dialogDesc": "Create an independent session branching from context up to this point without affecting current conversation.",
+  "chatStream.fork.titleLabel": "New Session Title",
+  "chatStream.fork.titlePlaceholder": "Enter new session title…",
+  "chatStream.fork.useWorktreeLabel": "Enable workspace isolation (Git Worktree)",
+  "chatStream.fork.useWorktreeHint": "Run in an isolated git worktree so file edits won't touch main directory",
+  "chatStream.fork.confirm": "Fork Session",
+  "chatStream.fork.failed": "Failed to fork session",
+  "chatStream.fork.successToast": "Session forked successfully",
 } as const;

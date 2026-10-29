@@ -34,6 +34,9 @@ import { smokeSettings, sendTurnCalls } from "./prelude.js";
 import {
   useSessionStore,
   parseSplitSessionIds,
+  splitCapacityForWidth,
+  splitColumnsForWidth,
+  SPLIT_PANE_MIN_WIDTH,
   type QueuedPrompt,
 } from "@renderer/stores/sessionStore.js";
 import type { Session } from "@contracts/session";
@@ -96,6 +99,7 @@ function seed(sessions: Session[], active: string): void {
     displayMode: "single",
     splitSessionIds: [],
     splitGroupsBySession: {},
+    splitAreaWidth: null,
     openTabs: [active],
     activeSessionId: active,
     sessionsByProject: { [PROJECT]: sessions },
@@ -153,6 +157,43 @@ async function main(): Promise<void> {
   eq("grows to 4", useSessionStore.getState().splitSessionIds, ["A", "B", "C", "D"]);
   await useSessionStore.getState().addToSplit("E");
   eq("full grid silently rejects", useSessionStore.getState().splitSessionIds, ["A", "B", "C", "D"]);
+
+  /* ── 1b. width-adaptive capacity ── */
+  console.log("[1b] width-adaptive capacity");
+  eq("capacity: unknown width is optimistic 4", splitCapacityForWidth(null), 4);
+  eq("capacity: below 2×min floors at 2", splitCapacityForWidth(SPLIT_PANE_MIN_WIDTH * 2 - 40), 2);
+  eq("capacity: 2×min..3×min → 2", splitCapacityForWidth(SPLIT_PANE_MIN_WIDTH * 2 + 10), 2);
+  eq("capacity: ≥3×min → 3", splitCapacityForWidth(SPLIT_PANE_MIN_WIDTH * 3 + 10), 3);
+  eq("capacity: ≥4×min → 4", splitCapacityForWidth(SPLIT_PANE_MIN_WIDTH * 4 + 10), 4);
+  eq("columns: unmeasured falls back to 2", splitColumnsForWidth(4, null), 2);
+  eq("columns: N clamps to fit", splitColumnsForWidth(2, SPLIT_PANE_MIN_WIDTH * 4 + 10), 2);
+  eq("columns: wide area fits all panes", splitColumnsForWidth(4, SPLIT_PANE_MIN_WIDTH * 4 + 10), 4);
+  eq("columns: floor 1 at extreme narrowness", splitColumnsForWidth(2, SPLIT_PANE_MIN_WIDTH - 10), 1);
+  // Narrow area (capacity 2) rejects the 3rd pane; widening re-admits it.
+  seed([A, B, C, D], "A");
+  useSessionStore.getState().setSplitAreaWidth(SPLIT_PANE_MIN_WIDTH * 2 + 10);
+  await useSessionStore.getState().addToSplit("B");
+  await useSessionStore.getState().addToSplit("C");
+  eq("narrow area rejects the 3rd pane", useSessionStore.getState().splitSessionIds, ["A", "B"]);
+  useSessionStore.getState().setSplitAreaWidth(SPLIT_PANE_MIN_WIDTH * 3 + 10);
+  await useSessionStore.getState().addToSplit("C");
+  eq("widening re-admits the pane", useSessionStore.getState().splitSessionIds, ["A", "B", "C"]);
+  // Shrinking never evicts existing members — capacity only gates adds.
+  useSessionStore.getState().setSplitAreaWidth(SPLIT_PANE_MIN_WIDTH * 2 + 10);
+  eq("shrinking keeps existing members", useSessionStore.getState().splitSessionIds, ["A", "B", "C"]);
+  // Tabs branch shares the same capacity guard.
+  seed([A, B, C], "A");
+  await useSessionStore.getState().setDisplayMode("tabs");
+  useSessionStore.getState().setSplitAreaWidth(SPLIT_PANE_MIN_WIDTH * 2 + 10);
+  await useSessionStore.getState().addToSplit("B");
+  await useSessionStore.getState().addToSplit("C");
+  eq("tabs branch honors the capacity", useSessionStore.getState().splitGroupsBySession["A"], ["A", "B"]);
+  // Restore the post-[1] state ([A,B,C,D], D focused) for group [2]; seed
+  // also resets the measured width (capacity back to the optimistic 4).
+  seed([A, B, C, D], "A");
+  await useSessionStore.getState().addToSplit("B");
+  await useSessionStore.getState().addToSplit("C");
+  await useSessionStore.getState().addToSplit("D");
 
   /* ── 2. removeFromSplit focus handoff + collapse ── */
   console.log("[2] removeFromSplit");
@@ -317,6 +358,19 @@ async function main(): Promise<void> {
     questions: [{ header: "h", question: "q", multiSelect: false, options: [{ label: "x", value: "x" }] }],
   });
   check("hidden tabs-group member badges", useSessionStore.getState().unreadBySession["B"] === 1);
+  // When a file open hands the center to the editor (centerTabFocus
+  // "editor"), the grid yields and its members are off-screen again —
+  // even though their tab is the focused one.
+  await useSessionStore.getState().selectSession("A");
+  useSessionStore.setState({ centerTabFocus: "editor" });
+  useSessionStore.getState().ingestEvent({
+    type: "question.ask",
+    sessionId: "B",
+    requestId: "q5",
+    questions: [{ header: "h", question: "q", multiSelect: false, options: [{ label: "x", value: "x" }] }],
+  });
+  check("editor-owns-center hides the grid (member badges)", useSessionStore.getState().unreadBySession["B"] === 2);
+  useSessionStore.setState({ centerTabFocus: "chat" });
 
   /* ── 6. sendPrompt row-scoped slots + drain gate ── */
   console.log("[6] sendPrompt row-scoped slots");

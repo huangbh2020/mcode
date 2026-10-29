@@ -287,6 +287,9 @@ class ServiceScanner {
 
   /** Last liveness check timestamp to rate-limit idle checks to IDLE_LIVENESS_TICK_MS. */
   private lastLivenessAt = 0;
+  /** Backoff timer and failure counter to avoid hammering WMI/PowerShell when Windows is under load. */
+  private consecutiveFailures = 0;
+  private errorBackoffUntil = 0;
 
   start(): void {
     if (this.timer || this.disposed) return;
@@ -309,6 +312,8 @@ class ServiceScanner {
 
   private tick(): void {
     if (this.scanning || this.disposed) return;
+    const now = Date.now();
+    if (now < this.errorBackoffUntil) return;
     if (!this.shouldScan()) return;
 
     // Fast-path: when no session is actively executing a turn, no bash command
@@ -321,12 +326,14 @@ class ServiceScanner {
       this.bashWindows.size === 0 &&
       this.claimed.size === 0;
 
-    const now = Date.now();
     if (isIdleLivenessOnly) {
       if (now - this.lastLivenessAt < IDLE_LIVENESS_TICK_MS) return;
       this.lastLivenessAt = now;
       this.scanning = true;
       this.checkLivenessOnly()
+        .then(() => {
+          this.consecutiveFailures = 0;
+        })
         .catch((err) => {
           log.warn(`service scanner: liveness check failed: ${err instanceof Error ? err.message : String(err)}`);
         })
@@ -339,8 +346,16 @@ class ServiceScanner {
     this.lastLivenessAt = now;
     this.scanning = true;
     this.scanOnce()
+      .then(() => {
+        this.consecutiveFailures = 0;
+      })
       .catch((err) => {
-        log.warn(`service scanner: scan failed: ${err instanceof Error ? err.message : String(err)}`);
+        this.consecutiveFailures++;
+        const backoffMs = Math.min(60_000, 5_000 * Math.pow(2, this.consecutiveFailures - 1));
+        this.errorBackoffUntil = Date.now() + backoffMs;
+        log.warn(
+          `service scanner: scan failed (backing off ${backoffMs / 1000}s): ${err instanceof Error ? err.message : String(err)}`,
+        );
       })
       .finally(() => {
         this.scanning = false;

@@ -1548,6 +1548,14 @@ export const SessionGetSchema = z.object({
 });
 export type SessionGetInput = z.infer<typeof SessionGetSchema>;
 
+export const ForkSessionSchema = z.object({
+  sessionId: z.string(),
+  messageId: z.string().optional(),
+  title: z.string().optional(),
+  useWorktree: z.boolean().optional(),
+});
+export type ForkSessionInput = z.infer<typeof ForkSessionSchema>;
+
 export const SessionMessagesSchema = z.object({
   sessionId: z.string(),
   /** Page size. Omit for the legacy unpaginated path (all rows). */
@@ -3895,10 +3903,15 @@ export interface PickedElement {
  *  - "pickResult": the user clicked an element in pick mode.
  *  - "crashed":    the renderer process died; the view needs recreating.
  *  - "agentOpened": an agent tool created/reused a browser view; the renderer
- *    should switch the right panel to the browser tab so the view is visible.
+ *    adopts it into the tab list and (when the browser isn't visible) shows a
+ *    pulsing attention dot on the rail's browser icon — the right panel is NOT
+ *    switched (an agent browsing in the background must not yank the user's
+ *    current tab).
  *  - "tabOpened": a page opened a link in a new window (target=_blank /
  *    window.open); main created a fresh view for it and the renderer should
  *    adopt that browserId as a new panel tab (payload: BrowserTabOpened).
+ *    BrowserPanel consumes this while a container is active; App.tsx's global
+ *    listener adopts it as a fallback when none is (unwatched popup).
  *  - "authRequest": a page asked for HTTP Basic Auth; the payload is a
  *    BrowserAuthRequest and the renderer should show a login dialog, then
  *    answer via the browser.authRespond RPC.
@@ -5030,6 +5043,8 @@ export interface RpcMap {
   /** Full session row (heavy payloads included) by id — the mobile
    *  companion's on-demand detail fetch after slim list loads. */
   "session.get": (input: SessionGetInput) => Promise<{ session: Session | null }>;
+  /** Fork an existing session (optionally up to a specific messageId) into a new session. */
+  "session.fork": (input: ForkSessionInput) => Promise<{ session: Session }>;
   "session.messages": (
     input: SessionMessagesInput,
   ) => Promise<{ messages: MessageRecord[]; hasMore: boolean }>;
@@ -5704,6 +5719,7 @@ export const IPC = {
   SESSION_SEARCH: "session:search",
   SESSION_SEARCH_BOOKMARKS: "session:searchBookmarks",
   SESSION_GET: "session:get",
+  SESSION_FORK: "session:fork",
   SESSION_MESSAGES: "session:messages",
   SESSION_SAVE_MESSAGES: "session:saveMessages",
   SESSION_UPSERT_MESSAGES: "session:upsertMessages",

@@ -31,6 +31,7 @@ export const zh = {
   "chat.jumpToBottom": "回到底部",
   "chat.placeholderQueued": "排队输入…  (Enter 加入队列)",
   "chat.placeholderIdle": "发送消息…  (@ 引用文件 · / 命令 · 粘贴图片)",
+  "chat.placeholderLocked": "等待确认中… 请在上方卡片中完成操作",
   "chat.attachFiles": "添加上下文文件",
   "chat.addImage": "添加图片",
   "chat.attachMenu": "添加附件",

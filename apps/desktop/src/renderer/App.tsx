@@ -36,7 +36,7 @@ import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useMouseGestures } from "./hooks/useMouseGestures.js";
 import { useSuppressBrowserView } from "./hooks/useSuppressBrowserView.js";
-import { useSessionStore, selectSessionKind } from "./stores/sessionStore.js";
+import { useSessionStore, selectSessionKind, browserContainerActive, splitColumnsForWidth } from "./stores/sessionStore.js";
 import type { BrowserDevicePreset } from "@contracts/ipc";
 import { api } from "./lib/api.js";
 import { useTheme } from "./lib/theme.js";
@@ -107,47 +107,55 @@ export function App() {
   useEffect(() => {
     startPortalPopupWatcher();
   }, []);
-  // When an agent browser tool opens/reuses a view, surface the browser panel
-  // so the user sees the agent browsing and BrowserPanel can sync bounds.
-  // Subscribed globally (not in BrowserPanel, which only mounts when the
-  // browser tab is already active) so the panel switch happens even if the
-  // right panel is currently on files/git. The view is adopted into the
+  // When an agent browser tool opens/reuses a view, adopt it into the
   // renderer's tab list so BrowserPanel's show/hide/bounds logic manages it.
+  // Subscribed globally (BrowserPanel's own subscription only runs while a
+  // container is active) so adoption happens even if the right panel is
+  // currently on files/git.
   //
-  // The agent opens in the right sidebar (scrollable column) by default — a
-  // desktop page renders at full width inside the sidebar; a phone page narrows
-  // to the emulated viewport. The fullscreen overlay is never triggered
-  // automatically: it's reserved for the user to open manually via the
-  // "展开为 PC 全屏" button when they want more room.
+  // The panel is NOT switched: an agent browsing in the background must not
+  // yank the user away from what they're reading. Instead the rail's browser
+  // icon shows a pulsing attention dot (store's agentBrowsingIds, cleared
+  // when the browser becomes visible) — the user clicks over when they want
+  // to watch. The agent's tools don't need the view visible: hidden views
+  // take the offscreen/CDP fallback paths in BrowserManager.
   //
-  // Respect the user's manual view-mode choice: if they've switched to the
-  // fullscreen overlay, the agent must NOT yank them back to the sidebar. We
-  // still adopt the tab so the overlay surfaces the agent's view, but leave
-  // browserPanelOpen untouched. Only when the user is NOT in fullscreen do we
-  // force the sidebar to own the view (isActive = !browserPanelOpen) and open
-  // the right panel on the browser tab.
+  // Fullscreen overlay is untouched too — if it's up the user is already
+  // watching the browser, so only the adoption is needed (markAgentBrowsing
+  // no-ops via browserContainerActive).
+  //
+  // Also a fallback consumer for "tabOpened" (page-initiated window.open,
+  // e.g. an agent click on a target=_blank link in a hidden view):
+  // BrowserPanel handles that event itself whenever a container is active,
+  // but with the panel never force-mounted anymore an unwatched popup would
+  // otherwise be orphaned — its view lives in main with no tab in the
+  // renderer's strip, unreachable until restart. Adopt it + raise the dot.
+  //
   // The device toolbar is auto-opened so the requested emulation takes effect
   // (collapsed = full-width desktop, ignoring the agent's device).
   useEffect(() => {
     const off = api.on.browserEvent((msg) => {
-      if (msg.type !== "agentOpened") return;
-      const p = (msg.payload as { url?: string; title?: string; device?: BrowserDevicePreset }) ?? {};
-      const st = useSessionStore.getState();
-      const createdNew = st.adoptAgentBrowserTab(msg.browserId, p);
-      if (!st.browserPanelOpen) {
-        // Not in fullscreen — bring up the sidebar to show the agent browsing.
-        // The sidebar browser is a session-scoped tab: open it on the ACTIVE
-        // session (the rail's "+" menu does the same).
-        st.openSessionRightTab("browser");
-        st.setRightOpen(true);
+      if (msg.type === "agentOpened") {
+        const p = (msg.payload as { url?: string; title?: string; device?: BrowserDevicePreset }) ?? {};
+        const st = useSessionStore.getState();
+        st.markAgentBrowsing(msg.browserId);
+        const createdNew = st.adoptAgentBrowserTab(msg.browserId, p);
+        // Only auto-open the device toolbar for a brand-new agent tab, so the
+        // requested emulation is visible. For an existing tab, preserve the
+        // user's toolbar state — reopening it over their collapsed choice would
+        // be surprising, and the user's device/size selection is preserved by
+        // adoptAgentBrowserTab regardless.
+        if (createdNew) {
+          st.setBrowserDeviceToolbarOpen(true);
+        }
+        return;
       }
-      // Only auto-open the device toolbar for a brand-new agent tab, so the
-      // requested emulation is visible. For an existing tab, preserve the
-      // user's toolbar state — reopening it over their collapsed choice would
-      // be surprising, and the user's device/size selection is preserved by
-      // adoptAgentBrowserTab regardless.
-      if (createdNew) {
-        st.setBrowserDeviceToolbarOpen(true);
+      if (msg.type === "tabOpened") {
+        const st = useSessionStore.getState();
+        if (browserContainerActive(st)) return; // active container consumes it
+        const p = (msg.payload as { url?: string; title?: string }) ?? {};
+        st.markAgentBrowsing(msg.browserId);
+        st.adoptAgentBrowserTab(msg.browserId, p);
       }
     });
     return off;
@@ -693,7 +701,6 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
     return null;
   })();
   const activeGroup = activeTabId ? splitGroupsBySession[activeTabId] : undefined;
-  const showSplitGrid = !!activeGroup && activeGroup.length >= 2;
   // The editor owns the content area only while focused AND it has content.
   // In `tabs` displayMode with `sidebar` placement, file preview lives in the
   // right sidebar's dual-column preview, so the center pane keeps the chat view.
@@ -707,6 +714,13 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
   // wide-mode surface, matching isSessionChatOnScreen's wide semantics.
   const editorMounted = showEditor && !(wide && !activeFile);
   const editorVisible = showEditor && !wide;
+  // `&& !editorVisible`: when the user opens a FILE from inside a split pane
+  // (turn-files card, chat link…), the center editor takes over — the grid
+  // yields (it lives in the hidden keep-alive container) so the file is
+  // actually VISIBLE; closing the file / refocusing the chat brings the
+  // grid back. Without this the editor mounted into the hidden container
+  // and the click looked like a no-op.
+  const showSplitGrid = !!activeGroup && activeGroup.length >= 2 && !editorVisible;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -724,20 +738,29 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
             forced "background" (isActive=false) so one-shot scroll
             effects don't run against a display:none container. */}
         <div className={cn("absolute inset-0", showSplitGrid && "hidden")}>
-          {openTabs.map((sid) => (
-            <div
-              key={sid}
-              className={cn(
-                "absolute inset-0",
-                sid === activeSessionId && !editorVisible && !showSplitGrid ? "" : "hidden",
-              )}
-            >
-              <SessionSurface
-                sessionId={sid}
-                isActive={sid === activeSessionId && !editorVisible && !showSplitGrid}
-              />
-            </div>
-          ))}
+          {openTabs.map((sid) => {
+            // While this tab's grid shows, its root session lives in a FRESH
+            // pane inside the grid — skip the hidden duplicate here. A whole
+            // ChatPane tree (virtualized timeline + parsed blocks) per split
+            // tab is pure memory waste; on grid exit the pane remounts (one
+            // Tiptap init — far cheaper than the N-pane storm this
+            // container's keep-alive exists to avoid).
+            if (showSplitGrid && sid === activeTabId) return null;
+            return (
+              <div
+                key={sid}
+                className={cn(
+                  "absolute inset-0",
+                  sid === activeSessionId && !editorVisible && !showSplitGrid ? "" : "hidden",
+                )}
+              >
+                <SessionSurface
+                  sessionId={sid}
+                  isActive={sid === activeSessionId && !editorVisible && !showSplitGrid}
+                />
+              </div>
+            );
+          })}
           {editorMounted && (
             <div
               className={cn(
@@ -1078,6 +1101,15 @@ function SplitPaneCell({
   // member pane must NOT join the tab strip (the split lives inside one
   // tab); selectSession flips activeSessionId + hydrates without touching
   // openTabs.
+  //
+  // Focus fires on CLICK, not pointerdown: a pointerdown flip re-renders
+  // mid-gesture (the focused pane's composer portals into the strip → the
+  // strip grows → the grid shrinks) and the row under the cursor moves
+  // away between pointerdown and pointerup — the browser then dispatches
+  // the click on the moved-under element / a common ancestor, so child
+  // handlers (turn-files rows, message links) never fire and the user
+  // needs a second click. With onClick the child's handler runs first
+  // (bubbling), the focus flip + layout shift land AFTER the action.
   const selectSession = useSessionStore((s) => s.selectSession);
   const provider = getProviderIcon(session?.providerId);
   const ProviderIcon = provider.Icon;
@@ -1090,7 +1122,7 @@ function SplitPaneCell({
         // below (not on this element) — see the ring note there.
         "relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-surface",
       )}
-      onPointerDown={() => {
+      onClick={() => {
         if (!focused) void selectSession(sessionId);
       }}
     >
@@ -1137,6 +1169,10 @@ function SplitPaneCell({
             sessionId={sessionId}
             isActive
             hideComposer={!focused}
+            // Memory trim: a background pane's hidden composer mounts no
+            // Tiptap (drafts live in composerDraftBySession; refocusing
+            // remounts the column anyway via the portal-target flip).
+            unloadComposer={!focused}
             composerPortalTarget={focused ? composerPortalTarget : null}
           />
         )}
@@ -1197,6 +1233,26 @@ function SplitChatArea({ sessionIds }: { sessionIds: string[] }) {
     setStripEl(stripRef.current);
   }, []);
 
+  // Width-adaptive split: measure the grid area and feed the store so
+  // addToSplit's capacity guard (splitCapacityForWidth) tracks the REAL
+  // available width, and the column count keeps every pane above the
+  // minimum width floor.
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const setSplitAreaWidth = useSessionStore((s) => s.setSplitAreaWidth);
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      if (w > 0) setSplitAreaWidth(Math.round(w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [setSplitAreaWidth]);
+  const splitAreaWidth = useSessionStore((s) => s.splitAreaWidth);
+  const cols = splitColumnsForWidth(sessionIds.length, splitAreaWidth);
+  const rows = Math.ceil(sessionIds.length / cols);
+
   // Focus must be a grid member (the store maintains this invariant; the
   // fallback covers transient desync, e.g. a mid-flight session deletion).
   const focusedId =
@@ -1228,16 +1284,22 @@ function SplitChatArea({ sessionIds }: { sessionIds: string[] }) {
       }}
     >
       <div
+        ref={gridRef}
         onAnimationEnd={(e) => {
           // animationend bubbles — ignore child animations.
           if (e.target === e.currentTarget) setFlash(false);
         }}
+        // Width-adaptive columns: as many equal columns as fit above the
+        // pane minimum width (2-across on narrow areas, 3/4-across on wide
+        // ones), wrapping into ceil(N/cols) equal rows.
+        style={{
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+        }}
         className={cn(
           // gap + padding (not a 1px hairline backdrop) so the rounded cards
           // have breathing room at their corners.
-          "grid min-h-0 flex-1 grid-cols-2 gap-1.5 p-1.5",
-          // 2 panes share one full-height row; 3-4 fill the 2×2 grid.
-          sessionIds.length <= 2 ? "grid-rows-1" : "grid-rows-2",
+          "grid min-h-0 flex-1 gap-1.5 p-1.5",
           // Highlight fades in/out while a session drag hovers.
           "transition-[box-shadow] duration-200",
           dragOver && "rounded-xl ring-2 ring-inset ring-accent",

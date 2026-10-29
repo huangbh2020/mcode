@@ -93,6 +93,12 @@ export const zh = {
   // ── MessageBlocks: inline video (script-generated media) ──
   "chatStream.media.tabVideos": "视频",
   "chatStream.media.tabImages": "图片",
+  "chatStream.media.previewAll": "预览全部",
+  "chatStream.media.screenshotsTotal": "浏览器截图 · 共 {n} 张",
+  "chatStream.media.videosTotal": "视频附件 · 共 {n} 个",
+  "chatStream.media.userImagesTotal": "用户图片 · 共 {n} 张",
+  "chatStream.media.expandList": "展开列表",
+  "chatStream.media.collapseList": "收起列表",
   "chatStream.video.unplayable": "无法播放",
   "chatStream.video.openInEditor": "在编辑器中打开",
 
@@ -340,4 +346,17 @@ export const zh = {
   "chatStream.retract.confirm": "撤回",
   "chatStream.retract.failed": "撤回失败",
 
+  // ── 会话分叉 (Fork Session) ──
+  "chatStream.fork.button": "分叉",
+  "chatStream.fork.buttonTooltip": "从此消息分叉探索",
+  "chatStream.fork.headerTooltip": "分叉当前会话探索",
+  "chatStream.fork.dialogTitle": "分叉会话探索",
+  "chatStream.fork.dialogDesc": "基于此节点前的上下文创建独立会话进行探索，不影响当前会话与大模型记忆。",
+  "chatStream.fork.titleLabel": "新会话名称",
+  "chatStream.fork.titlePlaceholder": "输入新会话名称…",
+  "chatStream.fork.useWorktreeLabel": "启用代码工作区隔离 (Git Worktree)",
+  "chatStream.fork.useWorktreeHint": "在独立工作树中运行，避免大模型修改主目录代码",
+  "chatStream.fork.confirm": "分叉新会话",
+  "chatStream.fork.failed": "分叉会话失败",
+  "chatStream.fork.successToast": "已成功分叉为新会话",
 } as const;
