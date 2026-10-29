@@ -132,11 +132,38 @@ jobs:
             console.log("Release version: " + v);
           '
 
+      # electron-builder downloads helper binaries from GitHub releases at
+      # package time (electron zips, winCodeSign, NSIS + nsis-resources). These
+      # downloads are occasionally flaky: the v0.2.14 run died on
+      # nsis-resources-3.4.1 after the 134 MB electron zip had already
+      # succeeded, and app-builder does not retry on its own. Two defenses:
+      # (a) cache the electron-builder cache dir across runs - once warm,
+      #     packaging does zero downloads;
+      # (b) retry the package step - artifacts fetched in a failed attempt are
+      #     already inside this run's cache dir, so attempt N+1 only fetches
+      #     what is still missing.
+      - name: Cache electron-builder binaries
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\electron-builder\Cache' || '~/Library/Caches/electron-builder' }}
+          key: electron-builder-binaries-${{ matrix.os }}
+
       - name: Build & package
         # Use bash on Windows too (the runner ships Git Bash) so the env vars
         # and any shell syntax in the package script work uniformly.
         shell: bash
-        run: pnpm --filter @mcode/desktop package
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm --filter @mcode/desktop package; then
+              exit 0
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "Package failed on attempt $attempt, giving up." >&2
+              exit 1
+            fi
+            echo "Package attempt $attempt failed (transient binary download?), retrying in 15s..." >&2
+            sleep 15
+          done
         env:
           # The renderer build (shiki's ~100 language grammar chunks +
           # monaco workers) peaks above Node's default 2GB heap on CI.
