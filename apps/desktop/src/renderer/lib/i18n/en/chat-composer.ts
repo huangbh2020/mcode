@@ -25,6 +25,7 @@ export const en = {
   "chat.jumpToBottom": "Jump to bottom",
   "chat.placeholderQueued": "Queue a message…  (Enter to enqueue)",
   "chat.placeholderIdle": "Send a message…  (@ files · / commands · paste images)",
+  "chat.placeholderLocked": "Waiting for decision… Please respond to the prompt above",
   "chat.attachFiles": "Add context files",
   "chat.addImage": "Add image",
   "chat.attachMenu": "Add attachment",

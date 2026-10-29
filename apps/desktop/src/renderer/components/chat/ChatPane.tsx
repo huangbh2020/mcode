@@ -1862,16 +1862,16 @@ function ChatPaneForSession({
   // the approval panel takes the place of the input area entirely so the user
   // can't type a competing prompt.
   const inputBlocked = sessionBusy || !!headApproval;
-  // The TEXTAREA specifically: unlocked while a turn is running so the user
-  // can type ahead and enqueue the next prompt. Still hard-locked when an
-  // approval / AskUserQuestion is pending (that panel owns the input area).
-  const textareaLocked = !!headApproval || !!pendingQuestion;
   // Any of the three bottom prompts (tool approval / plan approval / question)
-  // currently visible. When one is shown the composer card is hidden entirely
-  // - the prompt takes its place in the flow, pushing the message stream up
-  // instead of overlaying it. The composer stays mounted (state + Tiptap
-  // history preserved) via `hidden` (display:none); it just isn't rendered.
+  // currently visible. When one is shown the composer card is hidden in single-pane
+  // mode - the prompt takes its place in the flow, pushing the message stream up
+  // instead of overlaying it. In split-pane mode (composerPortalTarget != null),
+  // the card stays visible in the shared bottom strip but locked.
   const hasPendingPrompt = !!headApproval || !!pendingPlanApproval || !!pendingQuestion;
+  // The TEXTAREA specifically: unlocked while a turn is running so the user
+  // can type ahead and enqueue the next prompt. Hard-locked whenever a prompt
+  // (tool approval / plan approval / question) is pending.
+  const textareaLocked = hasPendingPrompt;
   // Voice model selected AND downloaded — the mic button stays hidden until
   // the user sets one up in Settings → 语音输入 (refreshed when the dialog
   // closes, so a first download makes the button appear without a restart).
@@ -4628,8 +4628,8 @@ function ChatPaneForSession({
               ? "max-w-4xl"
               // Pending decision cards live in the pane above (never portaled),
               // so the column skips its top padding while one owns the input
-              // area — otherwise the card and the chips row would drift apart.
-              : hasPendingPrompt
+              // area in single-pane mode — otherwise the card and the chips row would drift apart.
+              : hasPendingPrompt && !composerPortalTarget
                 ? "mx-auto max-w-5xl"
                 : "mx-auto max-w-5xl pt-5",
           )}
@@ -4663,10 +4663,11 @@ function ChatPaneForSession({
               // Voice listening active glow + subtle pulse
               voiceActive && "border-accent ring-2 ring-accent/30 shadow-[0_0_16px_rgb(var(--accent)/0.18)] animate-pulse",
               // Hide the composer card entirely while a bottom prompt (approval /
-              // plan approval / question) is visible - the prompt takes its place
-              // in the flow. `hidden` (display:none) keeps the component mounted
-              // so state (draft, tags, Tiptap history) survives the hide/show.
-              hasPendingPrompt && "hidden",
+              // plan approval / question) is visible in single-pane mode - the prompt takes its place
+              // in the flow. In split-pane mode (composerPortalTarget != null), the prompt
+              // stays in its cell while the composer stays visible in the bottom shared strip
+              // but locked via `textareaLocked`.
+              hasPendingPrompt && !composerPortalTarget && "hidden",
               // View-only hosts (right-panel scheduled-task pane) hide the
               // whole input box; same mounted-but-display-none semantics.
               hideComposer && "hidden",
@@ -4956,7 +4957,7 @@ function ChatPaneForSession({
                     voiceActive
                       ? t("chat.voice.placeholderListening")
                       : textareaLocked
-                        ? "Claude is working…"
+                        ? t("chat.placeholderLocked")
                         : orchBlocking
                         ? t("orch.canvas.inputLocked")
                         : schedHintVisible
@@ -5055,7 +5056,7 @@ function ChatPaneForSession({
                 ) : (
                   <button
                     onClick={sessionBusy ? handleEnqueue : handleSend}
-                    disabled={!hasComposerContent}
+                    disabled={!hasComposerContent || textareaLocked}
                     title={sessionBusy ? t("chat.enqueue") : t("chat.send")}
                     aria-label={sessionBusy ? t("chat.enqueue") : t("chat.send")}
                     data-ready={hasComposerContent ? "1" : "0"}
