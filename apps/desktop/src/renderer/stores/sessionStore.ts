@@ -279,6 +279,31 @@ function sameNavEntry(a: NavEntry, b: NavEntry): boolean {
  *  around the openFileInIde call. */
 let navHistoryRevealing = false;
 
+/** Whether a browser container is currently on screen — i.e. the user can see
+ *  the embedded WebContentsViews right now. True when the PC-fullscreen
+ *  overlay is open, or the right panel is open with the browser tab showing
+ *  (a session-scoped tab shadows the global one — same effective-tab rule
+ *  RightPanel uses for rendering). False while the settings / sched overlay
+ *  is up: the OS-level view hides under those, so nothing is watchable.
+ *  Mirrors BrowserPanel's local `isActive` computation — keep the two in
+ *  sync. Consumers: markAgentBrowsing (attention-dot gating) and App.tsx's
+ *  global tabOpened fallback (adopt only when no container is subscribed). */
+export function browserContainerActive(s: {
+  browserPanelOpen: boolean;
+  rightOpen: boolean;
+  rightPanelTab: string;
+  activeSessionId: string | null;
+  sessionRightTabsBySession: Record<string, { active: string | null }>;
+  settingsOpen: boolean;
+  schedPageOpen: boolean;
+}): boolean {
+  if (s.settingsOpen || s.schedPageOpen) return false;
+  if (s.browserPanelOpen) return true;
+  const sess = s.activeSessionId ? s.sessionRightTabsBySession[s.activeSessionId] : undefined;
+  const effTab = sess?.active ?? s.rightPanelTab;
+  return s.rightOpen && effTab === "browser";
+}
+
 /** Snapshot the ACTIVE project's current location (active file + its
  *  last-known cursor) as a history entry, or null when no file is active.
  *  The cursor comes from lib/editorNav (module state, see its docs). A
@@ -1217,6 +1242,12 @@ export interface SessionState {
    *  the Titlebar toggle button can show a count badge). Updated by the panel
    *  via setBrowserTabCount. NOT persisted. */
   browserTabCount: number;
+  /** Browser views the agent opened/reused while the user wasn't watching
+   *  (browserIds). Drives the pulsing attention dot on the rail's browser
+   *  icon — an agent browsing in the background must not yank the right panel
+   *  away from what the user is reading; the dot invites them over instead.
+   *  Cleared wholesale when the browser becomes visible. NOT persisted. */
+  agentBrowsingIds: string[];
   /** Device-toolbar visibility in the browser panel (the DevTools-style bar
    *  under the address bar with the device dropdown + custom dims + rotate).
    *  Toggled by the 📱 button in BrowserToolbar; a per-session in-memory flag
@@ -2054,6 +2085,13 @@ export interface SessionState {
   setBrowserDeviceToolbarOpen: (open: boolean) => void;
   /** Update the open-browser-tab count (drives the Titlebar badge). */
   setBrowserTabCount: (count: number) => void;
+  /** Record an agent browser use for the rail's attention dot: appends the
+   *  browserId to agentBrowsingIds unless the browser is currently visible
+   *  (browserContainerActive) — no dot for something the user can already
+   *  see. No-ops when the id is already listed. */
+  markAgentBrowsing: (browserId: string) => void;
+  /** Clear the agent-browsing attention list (the user opened the browser). */
+  clearAgentBrowsing: () => void;
   /** Replace the whole browser-tabs list (shared sidebar/overlay state). */
   setBrowserTabs: (tabs: BrowserTab[]) => void;
   /** Set the active browser tab id. */
@@ -5943,6 +5981,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Mobile-shell fullscreen viewer (file/diff/plan) - closed by default.
   mobileViewer: null,
   browserTabCount: 0,
+  agentBrowsingIds: [],
   browserDeviceToolbarOpen: false,
   browserTabs: [],
   browserActiveTabId: null,
@@ -11106,6 +11145,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
   setBrowserTabCount: (count) => set({ browserTabCount: Math.max(0, count) }),
+  markAgentBrowsing: (browserId) => {
+    // The user is already watching a browser container — the view the agent
+    // just drove is on screen (adoptions make it the active tab). No dot.
+    if (browserContainerActive(get())) return;
+    const ids = get().agentBrowsingIds;
+    if (ids.includes(browserId)) return;
+    set({ agentBrowsingIds: [...ids, browserId] });
+  },
+  clearAgentBrowsing: () => {
+    if (get().agentBrowsingIds.length === 0) return;
+    set({ agentBrowsingIds: [] });
+  },
   setBrowserDeviceToolbarOpen: (open) => set({ browserDeviceToolbarOpen: open }),
   suppressBrowserView: (suppressed) =>
     set((s) => ({ browserViewSuppressed: Math.max(0, s.browserViewSuppressed + (suppressed ? 1 : -1)) })),

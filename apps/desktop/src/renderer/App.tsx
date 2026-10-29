@@ -36,7 +36,7 @@ import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useMouseGestures } from "./hooks/useMouseGestures.js";
 import { useSuppressBrowserView } from "./hooks/useSuppressBrowserView.js";
-import { useSessionStore, selectSessionKind } from "./stores/sessionStore.js";
+import { useSessionStore, selectSessionKind, browserContainerActive } from "./stores/sessionStore.js";
 import type { BrowserDevicePreset } from "@contracts/ipc";
 import { api } from "./lib/api.js";
 import { useTheme } from "./lib/theme.js";
@@ -107,47 +107,55 @@ export function App() {
   useEffect(() => {
     startPortalPopupWatcher();
   }, []);
-  // When an agent browser tool opens/reuses a view, surface the browser panel
-  // so the user sees the agent browsing and BrowserPanel can sync bounds.
-  // Subscribed globally (not in BrowserPanel, which only mounts when the
-  // browser tab is already active) so the panel switch happens even if the
-  // right panel is currently on files/git. The view is adopted into the
+  // When an agent browser tool opens/reuses a view, adopt it into the
   // renderer's tab list so BrowserPanel's show/hide/bounds logic manages it.
+  // Subscribed globally (BrowserPanel's own subscription only runs while a
+  // container is active) so adoption happens even if the right panel is
+  // currently on files/git.
   //
-  // The agent opens in the right sidebar (scrollable column) by default — a
-  // desktop page renders at full width inside the sidebar; a phone page narrows
-  // to the emulated viewport. The fullscreen overlay is never triggered
-  // automatically: it's reserved for the user to open manually via the
-  // "展开为 PC 全屏" button when they want more room.
+  // The panel is NOT switched: an agent browsing in the background must not
+  // yank the user away from what they're reading. Instead the rail's browser
+  // icon shows a pulsing attention dot (store's agentBrowsingIds, cleared
+  // when the browser becomes visible) — the user clicks over when they want
+  // to watch. The agent's tools don't need the view visible: hidden views
+  // take the offscreen/CDP fallback paths in BrowserManager.
   //
-  // Respect the user's manual view-mode choice: if they've switched to the
-  // fullscreen overlay, the agent must NOT yank them back to the sidebar. We
-  // still adopt the tab so the overlay surfaces the agent's view, but leave
-  // browserPanelOpen untouched. Only when the user is NOT in fullscreen do we
-  // force the sidebar to own the view (isActive = !browserPanelOpen) and open
-  // the right panel on the browser tab.
+  // Fullscreen overlay is untouched too — if it's up the user is already
+  // watching the browser, so only the adoption is needed (markAgentBrowsing
+  // no-ops via browserContainerActive).
+  //
+  // Also a fallback consumer for "tabOpened" (page-initiated window.open,
+  // e.g. an agent click on a target=_blank link in a hidden view):
+  // BrowserPanel handles that event itself whenever a container is active,
+  // but with the panel never force-mounted anymore an unwatched popup would
+  // otherwise be orphaned — its view lives in main with no tab in the
+  // renderer's strip, unreachable until restart. Adopt it + raise the dot.
+  //
   // The device toolbar is auto-opened so the requested emulation takes effect
   // (collapsed = full-width desktop, ignoring the agent's device).
   useEffect(() => {
     const off = api.on.browserEvent((msg) => {
-      if (msg.type !== "agentOpened") return;
-      const p = (msg.payload as { url?: string; title?: string; device?: BrowserDevicePreset }) ?? {};
-      const st = useSessionStore.getState();
-      const createdNew = st.adoptAgentBrowserTab(msg.browserId, p);
-      if (!st.browserPanelOpen) {
-        // Not in fullscreen — bring up the sidebar to show the agent browsing.
-        // The sidebar browser is a session-scoped tab: open it on the ACTIVE
-        // session (the rail's "+" menu does the same).
-        st.openSessionRightTab("browser");
-        st.setRightOpen(true);
+      if (msg.type === "agentOpened") {
+        const p = (msg.payload as { url?: string; title?: string; device?: BrowserDevicePreset }) ?? {};
+        const st = useSessionStore.getState();
+        st.markAgentBrowsing(msg.browserId);
+        const createdNew = st.adoptAgentBrowserTab(msg.browserId, p);
+        // Only auto-open the device toolbar for a brand-new agent tab, so the
+        // requested emulation is visible. For an existing tab, preserve the
+        // user's toolbar state — reopening it over their collapsed choice would
+        // be surprising, and the user's device/size selection is preserved by
+        // adoptAgentBrowserTab regardless.
+        if (createdNew) {
+          st.setBrowserDeviceToolbarOpen(true);
+        }
+        return;
       }
-      // Only auto-open the device toolbar for a brand-new agent tab, so the
-      // requested emulation is visible. For an existing tab, preserve the
-      // user's toolbar state — reopening it over their collapsed choice would
-      // be surprising, and the user's device/size selection is preserved by
-      // adoptAgentBrowserTab regardless.
-      if (createdNew) {
-        st.setBrowserDeviceToolbarOpen(true);
+      if (msg.type === "tabOpened") {
+        const st = useSessionStore.getState();
+        if (browserContainerActive(st)) return; // active container consumes it
+        const p = (msg.payload as { url?: string; title?: string }) ?? {};
+        st.markAgentBrowsing(msg.browserId);
+        st.adoptAgentBrowserTab(msg.browserId, p);
       }
     });
     return off;

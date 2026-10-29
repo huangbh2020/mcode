@@ -2247,7 +2247,7 @@ function Collapsible({
         // it scrolls internally instead. The left border marks this as an
         // expanded body, visually nested under its header.
         <div className="max-h-80 overflow-y-auto border-l border-edge py-2 pl-2 text-content-muted">
-          <p className="whitespace-pre-wrap break-words">{children as unknown as string}</p>
+          <p className="whitespace-pre-wrap break-words leading-relaxed">{children as unknown as string}</p>
         </div>
       )}
     </div>

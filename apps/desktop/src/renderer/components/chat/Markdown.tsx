@@ -817,10 +817,10 @@ function buildComponents(): Components {
     );
   },
   th({ children }) {
-    return <th className="max-w-[32ch] border border-edge bg-surface-muted/50 px-2 py-1 text-left font-semibold text-content">{children}</th>;
+    return <th className="max-w-[32ch] border border-edge bg-surface-muted/50 px-2 py-1.5 text-left font-semibold text-content">{children}</th>;
   },
   td({ children }) {
-    return <td className="max-w-[32ch] border border-edge px-2 py-1 text-content-muted">{children}</td>;
+    return <td className="max-w-[32ch] border border-edge px-2 py-1.5 text-content-muted">{children}</td>;
   },
   h1({ children }) {
     return <h1 className="mb-[var(--chat-md-gap-md)] mt-[var(--chat-md-gap-lg)] font-bold text-content [font-size:var(--chat-fs-lg)]">{children}</h1>;

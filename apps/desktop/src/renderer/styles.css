@@ -1476,25 +1476,28 @@ button.chat-ledger-head:hover {
  *
  * The active preset is selected by the `data-chat-density` attribute on <html>,
  * written by lib/appearance.ts from the persisted `ui.chatDensity` setting.
- * The :root block below is the "comfortable" default (= the old hardcoded
- * `mt-3` / `mt-5` / `space-y-2` / `my-1.5`), so the uncustomized state and any
- * consumer outside [data-chat-density] resolve unchanged. The explicit
- * selectors cover all three modes for clarity.
+ * The :root block below is the "comfortable" default — originally the old
+ * hardcoded `mt-3` / `mt-5` / `space-y-2` / `my-1.5`, retuned on 2026-10-29
+ * for looser prose rhythm, so the uncustomized state and any
+ * consumer outside [data-chat-density] resolve to the retuned values. The
+ * explicit selectors cover all three modes for clarity.
  *
  * The three presets are spread wide enough that switching is immediately
  * perceptible: compact packs messages tightly, comfortable is the balanced
  * default, cozy gives generous breathing room between turns. */
 :root,
 [data-chat-density="comfortable"] {
-  --chat-row-gap-assistant: 0.75rem; /* 12px (was mt-3) */
-  --chat-row-gap-user: 1.25rem;      /* 20px (was mt-5) */
+  /* 2026-10-29 retune: looser prose rhythm (leading 1.6→1.7, paragraph gap
+   * 6→10px) for reading comfort; compact keeps the old packed values. */
+  --chat-row-gap-assistant: 1rem;    /* 16px */
+  --chat-row-gap-user: 1.25rem;      /* 20px */
   --chat-row-gap-turn-lead: 100px;   /* 明显的下一轮对话起始间距（缩小一半后为 100px） */
-  --chat-block-gap: 0.5rem;          /* 8px  (was space-y-2) */
-  --chat-md-gap-xs: 0.25rem;         /* 4px  */
-  --chat-md-gap-sm: 0.375rem;        /* 6px  */
-  --chat-md-gap-md: 0.5rem;          /* 8px  */
-  --chat-md-gap-lg: 0.75rem;         /* 12px */
-  --chat-md-leading: 1.6;            /* = --chat-line-height default */
+  --chat-block-gap: 0.625rem;        /* 10px */
+  --chat-md-gap-xs: 0.375rem;        /* 6px  */
+  --chat-md-gap-sm: 0.625rem;        /* 10px */
+  --chat-md-gap-md: 0.75rem;         /* 12px */
+  --chat-md-gap-lg: 1.125rem;        /* 18px */
+  --chat-md-leading: 1.7;
 }
 [data-chat-density="compact"] {
   --chat-row-gap-assistant: 0.25rem; /* 4px */
