@@ -9,7 +9,6 @@ import {
   IconAlertTriangle,
   IconRobot,
   IconClipboard,
-  IconCheck,
   IconFile,
   IconPhoto,
   // Tool-kind icons (left glyph of each action card).
@@ -677,27 +676,18 @@ function AttachmentRow({ blocks }: { blocks: Extract<Block, { kind: "attachment"
 }
 
 /** Status icon for tool calls. Error → red X (the only state that always
- *  deserves a glyph on its own). 方案A「脉络」adds the live two-state glyph:
- *  while the owning turn is streaming (`live`), a row shows a spinning arc
- *  while its tool runs and CROSS-FADES to a checkmark (with a slight bounce)
- *  the moment it completes — both glyphs stay in the DOM and CSS swaps their
- *  opacity, so the running→done transition is continuous instead of a swap.
- *  Rows of COMPLETED turns keep the old quiet behavior (no glyph unless
- *  error): historical panels would otherwise carry a wall of checkmarks. */
+ *  deserves a glyph on its own). 方案A「脉络」live glyph: while the owning turn
+ *  is streaming (`live`) and the tool is still running, the row shows a spinning
+ *  arc. Completion is silent — no checkmark (2026-10-29 用户反馈：活跃回合里
+ *  成排的完成对勾是视觉噪音), so busy turns no longer accumulate a wall of
+ *  green checks; rows of COMPLETED turns keep the same quiet behavior. */
 function StatusIcon({ status, live }: { status: "running" | "done" | "error"; live?: boolean }) {
-  // Error indicator moved to after filename in each tool card — no leading icon.
-  if (status === "error") {
-    return null;
-  }
-  if (!live) {
+  if (status !== "running" || !live) {
     return null;
   }
   return (
-    <span className="chat-st" data-status={status} aria-hidden="true">
+    <span className="chat-st" aria-hidden="true">
       <span className="chat-st-run" />
-      <span className="chat-st-done">
-        <IconCheck size={11} />
-      </span>
     </span>
   );
 }

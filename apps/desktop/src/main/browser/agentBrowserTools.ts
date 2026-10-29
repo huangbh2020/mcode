@@ -505,11 +505,12 @@ export async function browserNavigate(
   // The view the agent just navigated becomes its implicit target.
   activeBrowserId = browserId;
 
-  // Tell the renderer to surface the browser panel + adopt this view as a tab.
-  // The renderer's BrowserPanel takes over showing the view at precise bounds
-  // (measured from its placeholder div). We DON'T show() here: a pre-show with
-  // default bounds would briefly cover the icon rail before BrowserPanel syncs.
-  // If the renderer is slow to adopt, screenshot's own temp-show covers capture.
+  // Adopt this view as a renderer tab + raise the rail's attention dot (when
+  // the user isn't already watching a browser container). The renderer does
+  // NOT switch panels anymore — an agent browsing in the background must not
+  // yank the user's current tab. We DON'T show() here either: the agent's
+  // tools work on hidden views (offscreen CDP capture / synthetic input), and
+  // the user opens the panel themselves when they want to watch.
   BrowserManager.notifyAgentOpened(browserId, { device });
 
   const res = BrowserManager.loadUrl(browserId, url);
@@ -873,8 +874,9 @@ export async function browserFind(args: {
 }
 
 /** `browser_switch_tab` — point the agent's implicit target (browserId-less
- *  calls) at another live view. Read-only targeting aid; the panel also
- *  surfaces the tab so the user sees what the agent is working on. */
+ *  calls) at another live view. Read-only targeting aid; the renderer adopts
+ *  the view (if needed) and raises the rail's attention dot when the user
+ *  isn't watching — no panel switch. */
 export async function browserSwitchTab(args: { browserId: string }): Promise<ToolResult> {
   const resolved = resolveBrowserId(args.browserId);
   if (!resolved.ok) {

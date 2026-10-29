@@ -33,8 +33,10 @@ import {
   IconArrowsMaximize,
   IconArrowsMinimize,
   IconCheck,
+  IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
+  IconChevronUp,
   IconCopy,
   IconDownload,
   IconFolderOpen,
@@ -53,12 +55,6 @@ export type MediaItem =
   | { kind: "image"; src: string; alt: string }
   | { kind: "video"; src: string; name: string; filePath: string };
 
-/** Tile geometry — matches the ceilings the old single-image/gallery paths
- *  used (maxThumbnailWidth 300 × maxThumbnailHeight 200, fixed frame), so
- *  media renders at one constant size whether it shows up alone or in a run. */
-const TILE_W = 300;
-const TILE_H = 200;
-
 /** Resolve the video element's source for one absolute file path, per
  *  transport. Desktop windows stream via the guarded `app-resource://`
  *  protocol (Electron-main registered). The phone's browser can't see that
@@ -70,12 +66,14 @@ function videoSrcFor(filePath: string): string {
   return authenticatedMediaUrl(filePath) ?? "";
 }
 
-function toMediaItem(b: MediaBlock, t: (key: MessageId) => string): MediaItem {
+function toMediaItem(b: MediaBlock, t: (key: MessageId) => string, index?: number): MediaItem {
   if (b.kind === "image") {
+    const baseName = b.toolCallId ? t("chatStream.image.browserScreenshot") : t("chatStream.image.userImage");
+    const alt = typeof index === "number" ? `${baseName} ${index + 1}` : baseName;
     return {
       kind: "image",
       src: `data:${b.mimeType};base64,${b.data}`,
-      alt: b.toolCallId ? t("chatStream.image.browserScreenshot") : t("chatStream.image.userImage"),
+      alt,
     };
   }
   const name = b.filePath.split(/[\\/]/).pop() ?? b.filePath;
@@ -89,82 +87,113 @@ function formatDuration(seconds: number): string | null {
   return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
-/** One fixed-frame media tile. Images show the bitmap; videos show the
- *  first frame with a play badge + duration chip. A video Chromium can't
- *  decode (codec/container) degrades to a broken-media chip that names the
- *  file — click does nothing rather than opening a dead lightbox. */
-function MediaTile({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
+/** Single media item: a clean, inline pill. */
+function SingleMediaItem({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
   const { t } = useI18n();
-  const [failed, setFailed] = useState(false);
-  const [duration, setDuration] = useState<string | null>(null);
-
-  // Broken tile: Chromium can't decode the file, OR the web client has no
-  // device token (empty src — unpaired phone). Either way the media is
-  // unwatchable here; name it and stop.
-  if (item.kind === "video" && (failed || !item.src)) {
-    return (
-      <div
-        className="flex shrink-0 flex-col items-center justify-center gap-1.5 rounded-lg border border-edge bg-surface-muted/60 px-3 text-center"
-        style={{ width: TILE_W, height: TILE_H }}
-        title={item.filePath}
-      >
-        <IconVideo size={24} className="text-content-subtle" />
-        <span className="max-w-full truncate text-[11px] font-medium text-content-muted">{item.name}</span>
-        <span className="text-[10px] text-content-subtle">{t("chatStream.video.unplayable")}</span>
-      </div>
-    );
-  }
+  const isVideo = item.kind === "video";
+  const displayName = isVideo ? item.name : item.alt;
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      title={item.kind === "image" ? item.alt : item.name}
-      className="group relative block shrink-0 overflow-hidden rounded-lg border border-edge bg-surface-muted/60 shadow-sm transition-all hover:border-accent/60 hover:shadow-md"
-      style={{ width: TILE_W, height: TILE_H }}
-    >
-      {item.kind === "image" ? (
-        <img
-          src={item.src}
-          alt={item.alt}
-          loading="lazy"
-          draggable={false}
-          className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-[1.03]"
-        />
-      ) : (
-        <>
-          <video
-            // #t=0.1: forces Chromium to seek-paint the first frame as the
-            // poster under preload="metadata" (metadata alone leaves some
-            // containers blank until play).
-            src={`${item.src}#t=0.1`}
-            preload="metadata"
-            muted
-            playsInline
-            draggable={false}
-            onLoadedMetadata={(e) => setDuration(formatDuration(e.currentTarget.duration))}
-            onError={() => setFailed(true)}
-            className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-[1.03]"
-          />
-          {/* Play affordance + duration — video tiles read as playable at a
-              glance, mirroring how every video surface marks itself. */}
-          <span className="pointer-events-none absolute inset-0 grid place-items-center">
-            <span className="grid h-10 w-10 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm">
-              <IconPlayerPlay size={18} />
-            </span>
-          </span>
-          {duration && (
-            <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white">
-              {duration}
-            </span>
-          )}
-        </>
-      )}
-      <span className="pointer-events-none absolute right-1.5 top-1.5 flex items-center gap-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
-        <IconArrowsMaximize size={12} />
-        {t("layout.image.view")}
+    <div className="my-1.5 inline-flex max-w-full items-center gap-2 rounded-lg border border-edge bg-surface-muted/60 py-1.5 pl-2.5 pr-2 transition-colors hover:border-accent/40 hover:bg-surface-hover">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-accent/10 text-accent">
+        {isVideo ? <IconPlayerPlay size={12} /> : <IconPhoto size={12} />}
       </span>
-    </button>
+      <span className="truncate text-xs font-medium text-content-strong max-w-[320px]">
+        {displayName}
+      </span>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="ml-1 inline-flex shrink-0 items-center gap-1 rounded bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent hover:text-white"
+      >
+        <IconArrowsMaximize size={11} />
+        <span>{t("layout.image.view")}</span>
+      </button>
+    </div>
+  );
+}
+
+/** Multiple media items: a structured, collapsible media deck.
+ *  Aggregates dozens of screenshots / videos into a single clean drawer
+ *  instead of sprawling messy pills across the conversation stream. */
+function MediaDeck({
+  items,
+  kind,
+  onOpenItem,
+}: {
+  items: MediaItem[];
+  kind: "image" | "video";
+  onOpenItem: (idx: number) => void;
+}) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const isVideo = kind === "video";
+  const count = items.length;
+
+  const title = isVideo
+    ? t("chatStream.media.videosTotal", { n: count })
+    : t("chatStream.media.screenshotsTotal", { n: count });
+
+  return (
+    <div className="my-1.5 w-full max-w-xl overflow-hidden rounded-xl border border-edge/80 bg-surface-muted/40 shadow-xs transition-colors hover:border-edge">
+      {/* Deck Header */}
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent/15 text-accent">
+            {isVideo ? <IconPlayerPlay size={13} /> : <IconPhoto size={13} />}
+          </span>
+          <span className="truncate text-xs font-semibold text-content-strong">
+            {title}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => onOpenItem(0)}
+            className="inline-flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90 active:opacity-100"
+          >
+            <IconArrowsMaximize size={12} />
+            <span>{t("chatStream.media.previewAll")}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            title={expanded ? t("chatStream.media.collapseList") : t("chatStream.media.expandList")}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-content-subtle transition-colors hover:bg-surface-hover hover:text-content"
+          >
+            {expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+          </button>
+        </div>
+      </div>
+
+      {/* Expanded item selector */}
+      {expanded && (
+        <div className="border-t border-edge/60 bg-surface/50 p-2.5">
+          <div className="flex flex-wrap gap-1.5">
+            {items.map((item, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => onOpenItem(i)}
+                title={item.kind === "video" ? item.name : item.alt}
+                className="group inline-flex items-center gap-1 rounded-md border border-edge/80 bg-surface-base px-2 py-1 text-xs font-medium text-content transition-all hover:border-accent/60 hover:bg-accent/10 hover:text-accent"
+              >
+                <span className="text-[11px] tabular-nums font-semibold text-content-subtle group-hover:text-accent">
+                  #{i + 1}
+                </span>
+                {item.kind === "video" && (
+                  <span className="max-w-[120px] truncate text-[11px] font-normal text-content-muted group-hover:text-accent">
+                    {item.name}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -575,121 +604,70 @@ export function MediaLightbox({
   );
 }
 
-/** A compact tabbed media card for a run of image/video blocks.
- *
- *  ONE fixed-size tile is visible at a time (the stream stays compact —
- *  media runs must not sprawl). When the run contains BOTH kinds, a small
- *  tab strip splits them: 视频(n) / 图片(n), defaulting to the video tab
- *  (script renders are the finale); with a single kind there is no tab bar
- *  and the card is exactly the old gallery's footprint. Within a tab,
- *  ◀ ▶ overlay arrows + counter + dots page through the items; clicking the
- *  tile opens the lightbox positioned at that item, navigating within the
- *  active tab's list. */
+/** A compact media gallery: clean single-line pill for 1 item, or a structured
+ *  collapsible deck for multiple items with one-click preview all. */
 export function MediaGallery({ blocks }: { blocks: MediaBlock[] }) {
   const { t } = useI18n();
-  const videos = useMemo(
-    () => blocks.filter((b): b is Extract<MediaBlock, { kind: "video" }> => b.kind === "video").map((b) => toMediaItem(b, t)),
-    [blocks, t],
-  );
-  const images = useMemo(
-    () => blocks.filter((b): b is Extract<MediaBlock, { kind: "image" }> => b.kind === "image").map((b) => toMediaItem(b, t)),
-    [blocks, t],
-  );
-  const both = videos.length > 0 && images.length > 0;
-  // Default to the video tab when videos exist (the rendered clip is the
-  // result the user is waiting for); a media run seen mid-stream may start
-  // on images and keep that tab once videos land — the tab badge shows the
-  // count either way.
-  const [tab, setTab] = useState<"video" | "image">(videos.length > 0 ? "video" : "image");
-  const [idx, setIdx] = useState(0);
   const [openIdx, setOpenIdx] = useState<number | null>(null);
 
-  const active = tab === "video" ? (videos.length > 0 ? videos : images) : images.length > 0 ? images : videos;
-  const curIdx = Math.min(idx, active.length - 1);
-  const cur = active[Math.max(0, curIdx)];
-  const go = (delta: number) => setIdx((i) => Math.max(0, Math.min(active.length - 1, i + delta)));
+  const allItems = useMemo<MediaItem[]>(
+    () => blocks.map((b, i) => toMediaItem(b, t, blocks.length > 1 ? i : undefined)),
+    [blocks, t],
+  );
+
+  const videoItems = useMemo(() => allItems.filter((m) => m.kind === "video"), [allItems]);
+  const imageItems = useMemo(() => allItems.filter((m) => m.kind === "image"), [allItems]);
+
+  if (allItems.length === 0) return null;
+
+  // Single item fast-path: clean inline pill
+  if (allItems.length === 1) {
+    return (
+      <>
+        <SingleMediaItem item={allItems[0]} onOpen={() => setOpenIdx(0)} />
+        {openIdx !== null && (
+          <MediaLightbox
+            items={allItems}
+            index={openIdx}
+            onNavigate={setOpenIdx}
+            onClose={() => setOpenIdx(null)}
+          />
+        )}
+      </>
+    );
+  }
 
   return (
-    <div className="my-1 flex w-fit max-w-full flex-col overflow-hidden rounded-lg border border-edge bg-surface-muted/50">
-      {both && (
-        <div className="flex items-center gap-0.5 border-b border-edge/60 px-1.5 pt-1">
-          {(
-            [
-              { key: "video" as const, label: t("chatStream.media.tabVideos"), count: videos.length, icon: <IconVideo size={12} /> },
-              { key: "image" as const, label: t("chatStream.media.tabImages"), count: images.length, icon: <IconPhoto size={12} /> },
-            ]
-          ).map((tb) => (
-            <button
-              key={tb.key}
-              type="button"
-              onClick={() => {
-                setTab(tb.key);
-                setIdx(0);
-              }}
-              className={cn(
-                "flex items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
-                tab === tb.key ? "border-accent text-content" : "border-transparent text-content-subtle hover:text-content-muted",
-              )}
-            >
-              {tb.icon}
-              {tb.label}
-              <span className="tabular-nums opacity-70">{tb.count}</span>
-            </button>
-          ))}
-        </div>
+    <div className="space-y-1.5">
+      {videoItems.length > 0 && (
+        <MediaDeck
+          items={videoItems}
+          kind="video"
+          onOpenItem={(subIdx) => {
+            const target = videoItems[subIdx];
+            const realIdx = allItems.indexOf(target);
+            setOpenIdx(realIdx >= 0 ? realIdx : 0);
+          }}
+        />
       )}
-      <div className="p-1.5">
-        <div className="relative">
-          <MediaTile item={cur} onOpen={() => setOpenIdx(curIdx)} />
-          {active.length > 1 && (
-            <>
-              <button
-                type="button"
-                onClick={() => go(-1)}
-                disabled={curIdx <= 0}
-                title={t("chatStream.gallery.prev")}
-                className="absolute left-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
-              >
-                <IconChevronLeft size={18} />
-              </button>
-              <button
-                type="button"
-                onClick={() => go(1)}
-                disabled={curIdx >= active.length - 1}
-                title={t("chatStream.gallery.next")}
-                className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
-              >
-                <IconChevronRight size={18} />
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-      {active.length > 1 && (
-        <div className="flex items-center justify-center gap-1 pb-1.5 text-[11px] text-content-subtle">
-          <span className="tabular-nums">
-            {curIdx + 1} / {active.length}
-          </span>
-          {active.length <= 12 && (
-            <span className="ml-1.5 flex items-center gap-1">
-              {active.map((_, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => setIdx(i)}
-                  title={`${i + 1}`}
-                  className={cn(
-                    "h-1.5 rounded-full transition-all",
-                    i === curIdx ? "w-3 bg-accent" : "w-1.5 bg-content-subtle/40 hover:bg-content-subtle/70",
-                  )}
-                />
-              ))}
-            </span>
-          )}
-        </div>
+      {imageItems.length > 0 && (
+        <MediaDeck
+          items={imageItems}
+          kind="image"
+          onOpenItem={(subIdx) => {
+            const target = imageItems[subIdx];
+            const realIdx = allItems.indexOf(target);
+            setOpenIdx(realIdx >= 0 ? realIdx : 0);
+          }}
+        />
       )}
-      {openIdx != null && (
-        <MediaLightbox items={active} index={openIdx} onNavigate={setOpenIdx} onClose={() => setOpenIdx(null)} />
+      {openIdx !== null && (
+        <MediaLightbox
+          items={allItems}
+          index={openIdx}
+          onNavigate={setOpenIdx}
+          onClose={() => setOpenIdx(null)}
+        />
       )}
     </div>
   );

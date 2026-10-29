@@ -219,6 +219,8 @@ export const zh = {
   "ide.git.unstageAll": "全部取消",
   "ide.git.stageAll": "全部暂存",
   "ide.git.discardAllHint": "放弃 {group} 组内所有文件的本地更改",
+  "ide.git.moreFilesTruncated": "还有 {count} 个文件未展开（防止界面卡顿）",
+  "ide.git.showAllFiles": "展开全部",
   "ide.git.discardQ": "放弃更改?",
   "ide.git.discardDesc": "将放弃 {n} 个文件的本地更改,此操作不可撤销。",
   "ide.git.discardEllipsis": "放弃更改…",

@@ -219,6 +219,8 @@ export const en = {
   "ide.git.unstageAll": "Unstage all",
   "ide.git.stageAll": "Stage all",
   "ide.git.discardAllHint": "Discard local changes of all files in {group}",
+  "ide.git.moreFilesTruncated": "{count} more files hidden (to prevent lag)",
+  "ide.git.showAllFiles": "Show all",
   "ide.git.discardQ": "Discard changes?",
   "ide.git.discardDesc": "Local changes in {n} files will be discarded. This can't be undone.",
   "ide.git.discardEllipsis": "Discard changes…",

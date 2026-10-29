@@ -341,7 +341,17 @@ function isSessionChatOnScreen(
   if (s.displayMode === "single" && s.splitSessionIds.includes(sid)) return true;
   if (s.displayMode === "tabs" && s.activeSessionId) {
     const group = activeTabsModeSplitGroup(s);
-    if (group) return group.includes(sid);
+    if (group) {
+      if (!group.includes(sid)) return false;
+      // The grid only shows while the chat owns the center — when a file
+      // open handed the center to the editor (centerTabFocus "editor"),
+      // the members are hidden again and must badge/toast normally.
+      return !(
+        s.tabsFilePreviewPlacement !== "sidebar" &&
+        s.centerTabFocus === "editor" &&
+        !s.widePanelOpen
+      );
+    }
   }
   if (sid !== s.activeSessionId) return false;
   return !(
@@ -919,6 +929,13 @@ export interface SessionState {
    *  focused session is the "active tab" for strip highlighting and
    *  center rendering; see activeTabsModeSplitRoot). */
   splitGroupsBySession: Record<string, string[]>;
+  /** Measured width (px) of the split grid area, written by SplitChatArea's
+   *  ResizeObserver. Drives the width-adaptive capacity (splitCapacityForWidth)
+   *  that gates addToSplit. Null until the first measure (capacity 4,
+   *  optimistic); zero-size reports (hidden grids) are ignored by the
+   *  writer. UI-only, not persisted. */
+  splitAreaWidth: number | null;
+  setSplitAreaWidth: (width: number) => void;
   /** In `tabs` displayMode: whether file previews open in the center unified
    *  tab bar ("center", default) or in the right sidebar's dual-column preview ("sidebar").
    *  Persisted in the `settings` table under `ui.tabsFilePreviewPlacement`. */
@@ -3507,6 +3524,33 @@ export function parseSplitSessionIds(
   return valid.length >= 2 ? valid : [];
 }
 
+/** Minimum width (px) a split pane must keep — the defining invariant of
+ *  the width-adaptive split: how many panes the grid accepts is decided by
+ *  the measured area width divided by this floor. */
+export const SPLIT_PANE_MIN_WIDTH = 360;
+
+/** Adaptive split capacity (2..4) for a measured grid-area width: how many
+ *  panes fit side-by-side while every pane keeps ≥ SPLIT_PANE_MIN_WIDTH.
+ *  Unknown/unmeasured width (the grid hasn't rendered yet — e.g. the very
+ *  first drop starts from the plain single view) → optimistic 4; a narrow
+ *  area floors at 2 (a split is ≥ 2 by definition; the two panes may run
+ *  below the floor at extreme narrowness — graceful degradation). Existing
+ *  members are NEVER evicted when the width shrinks: the capacity only
+ *  gates new additions while the layout recomputes its column count. */
+export function splitCapacityForWidth(width: number | null | undefined): number {
+  if (width == null || width <= 0) return 4;
+  return Math.max(2, Math.min(4, Math.floor(width / SPLIT_PANE_MIN_WIDTH)));
+}
+
+/** Column count for N panes in a measured area: as many equal columns as
+ *  fit while keeping the pane floor (clamped to N — no empty columns).
+ *  Unmeasured width falls back to the legacy 2-column grid. */
+export function splitColumnsForWidth(n: number, width: number | null | undefined): number {
+  if (width == null || width <= 0) return Math.min(n, 2);
+  const fit = Math.max(1, Math.floor(width / SPLIT_PANE_MIN_WIDTH));
+  return Math.max(1, Math.min(n, fit));
+}
+
 /** Look up a session's kind across every list cache (project windows, pinned,
  *  archived, stream, orch workers). Returns undefined for unknown ids —
  *  callers treat that as "not a terminal session". Exported for App.tsx's
@@ -5859,6 +5903,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Per-tab split groups (tabs displayMode) — see the field docs. Empty
   // until the user drags a session onto an open tab; in-memory only.
   splitGroupsBySession: {},
+  // Measured split-grid area width (adaptive pane capacity) — null until
+  // SplitChatArea's first ResizeObserver report.
+  splitAreaWidth: null,
   tabsFilePreviewPlacement: "center",
   // Tab strips wrap onto multiple rows instead of horizontal scrolling.
   // Persisted under `ui.tabBarMultiRow`; init() overwrites from the DB.
@@ -7869,7 +7916,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         await get().selectSession(sessionId);
         return;
       }
-      if (group.length >= 4) return; // full grid: silent reject
+      // Width-adaptive capacity: reject beyond what the measured area fits
+      // while every pane keeps its minimum width (full grid: silent reject).
+      if (group.length >= splitCapacityForWidth(s.splitAreaWidth)) return;
       const next = [...group, sessionId];
       set({
         splitGroupsBySession: { ...s.splitGroupsBySession, [root]: next },
@@ -7881,7 +7930,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     // ── single displayMode: the global persisted grid ──
-    if (s.splitSessionIds.length >= 4) return;
+    if (s.splitSessionIds.length >= splitCapacityForWidth(s.splitAreaWidth)) return;
     // A split needs a partner: dropping the FOCUSED session itself (or any
     // drop while nothing is open) onto an empty grid can't form one —
     // degrade to a plain focus and keep the 0-or-≥2 invariant.
@@ -7946,6 +7995,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const successor = next[idx] ?? next[idx - 1] ?? null;
       if (successor) await get().selectSession(successor);
     }
+  },
+
+  setSplitAreaWidth: (width) => {
+    // Zero-size reports arrive when the grid host is display:none (tab
+    // switched away) — they'd collapse the capacity; ignore them.
+    if (width <= 0) return;
+    if (get().splitAreaWidth === width) return;
+    set({ splitAreaWidth: width });
   },
 
   openSessionFromSidebar: async (sessionId) => {

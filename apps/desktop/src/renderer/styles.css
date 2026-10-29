@@ -1132,9 +1132,9 @@ button.chat-ledger-head:hover {
   }
 }
 
-/* 工具行状态图标：运行中圆弧 ↔ 完成对勾在同一格内交叉淡换（error 仍是红
- * 叉，由组件层直接渲染）。两态 glyph 常驻 DOM，靠 data-status 切换透明度，
- * transition 保证 running→done 是一次交叉淡换 + 轻微回弹。 */
+/* 工具行状态图标：仅运行中的工具显示圆弧，完成即消失（2026-10-29 起不再
+ * 渲染完成对勾——活跃回合里成排绿勾是视觉噪音；error 红叉由组件层直接
+ * 渲染，不经过这里）。 */
 .chat-st {
   position: relative;
   display: inline-grid;
@@ -1144,14 +1144,6 @@ button.chat-ledger-head:hover {
   flex: none;
 }
 
-.chat-st > span {
-  grid-area: 1 / 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 0.24s ease, transform 0.32s var(--chat-spring);
-}
-
 .chat-st-run {
   width: 10px;
   height: 10px;
@@ -1159,22 +1151,6 @@ button.chat-ledger-head:hover {
   border: 1.6px solid rgb(var(--accent) / 0.26);
   border-top-color: rgb(var(--accent));
   animation: chat-st-spin 0.72s linear infinite;
-}
-
-.chat-st-done {
-  opacity: 0;
-  transform: scale(0.5);
-  color: rgb(var(--accent));
-}
-
-.chat-st[data-status="done"] .chat-st-run {
-  opacity: 0;
-  animation: none;
-}
-
-.chat-st[data-status="done"] .chat-st-done {
-  opacity: 1;
-  transform: none;
 }
 
 @keyframes chat-st-spin {
@@ -1201,7 +1177,6 @@ button.chat-ledger-head:hover {
     border-top-color: rgb(var(--accent));
   }
 
-  .chat-st > span,
   .chat-fold,
   .chat-fold-inner,
   .chat-ledger,

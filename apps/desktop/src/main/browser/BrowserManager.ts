@@ -1680,13 +1680,13 @@ class BrowserManagerImpl {
     const wc = live.view.webContents;
     if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
 
-    // Real input needs the view on the visible surface — park it onscreen if
-    // the user has another panel tab active (same trade-off as screenshot's
-    // temp-show, minus the restore: the agent keeps browsing visibly). While
-    // the renderer has the view suppressed for an open overlay, force-showing
-    // would fight the user's dialog: skip the real-mouse path entirely and
-    // use the programmatic click below (works offscreen).
-    if (!live.visible && !this.rendererSuppressed) this.show(id);
+    // Real input lands through Electron's input pipeline when the user is
+    // watching (view visible). When the view is HIDDEN (agent browsing in the
+    // background), do not surface it over the user's workspace — the same
+    // real mouse pair is dispatched through the CDP debugger instead (synthetic
+    // Input events land in the page without an onscreen surface; same
+    // mechanism as clickAt). If the debugger slot is busy (DevTools open),
+    // degrade to the programmatic el.click() script below (works offscreen).
     if (live.visible) {
       try {
         const center = (await wc.executeJavaScript(buildElementCenterScript(selector), true)) as {
@@ -1709,6 +1709,37 @@ class BrowserManagerImpl {
         }
         // center.fallback (no layout box) or a thrown/injected-script failure →
         // fall through to the programmatic click below.
+      } catch {
+        /* CSP-strict pages can reject executeJavaScript — fall back below */
+      }
+    } else {
+      try {
+        const center = (await wc.executeJavaScript(buildElementCenterScript(selector), true)) as {
+          ok?: boolean;
+          error?: string;
+          fallback?: boolean;
+          x?: number;
+          y?: number;
+          obscured?: { tag: string; text: string };
+        };
+        if (center && center.error) return { ok: false, error: center.error };
+        if (center && center.ok && typeof center.x === "number" && typeof center.y === "number") {
+          const cx = Math.round(center.x);
+          const cy = Math.round(center.y);
+          const cdp = await this.withDebugger(id, async (dbg) => {
+            const base = { x: cx, y: cy, button: "left", clickCount: 1 };
+            await dbg.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", ...base });
+            await dbg.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", ...base });
+            return true;
+          });
+          if (cdp.ok) {
+            // Give page handlers/navigation a beat to react before we report state.
+            await new Promise((r) => setTimeout(r, 250));
+            return { ok: true, url: wc.getURL(), title: wc.getTitle(), obscured: center.obscured ?? undefined };
+          }
+          log.warn(`browser click CDP unavailable on hidden view, degrading to programmatic click: ${id}`);
+        }
+        // center.fallback (no layout box) → programmatic click below.
       } catch {
         /* CSP-strict pages can reject executeJavaScript — fall back below */
       }
@@ -1742,13 +1773,15 @@ class BrowserManagerImpl {
     }
     const wc = live.view.webContents;
     if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
-    // While the renderer suppressed the view for an open overlay, dispatch the
-    // click through the CDP debugger instead of force-showing: synthetic CDP
-    // Input events land in the page without an onscreen surface. No
-    // programmatic fallback exists for raw coordinates, so if the debugger
-    // slot is busy (DevTools open) degrade to the old force-show — the click
-    // must land.
-    if (!live.visible && this.rendererSuppressed) {
+    // Hidden view (agent browsing in the background): dispatch the click
+    // through the CDP debugger — synthetic Input events land in the page
+    // without an onscreen surface. NEVER force-show: surfacing the view over
+    // whatever the user is reading is the bug this replaces (the old
+    // force-show existed because the panel was always switched, so the click
+    // "landed in" the user's own browser view). No programmatic fallback
+    // exists for raw coordinates, so if the debugger slot is busy (DevTools
+    // open) fail the call with actionable guidance instead.
+    if (!live.visible) {
       const cdp = await this.withDebugger(id, async (dbg) => {
         const base = { x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1 };
         await dbg.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", ...base });
@@ -1759,9 +1792,12 @@ class BrowserManagerImpl {
         await new Promise((r) => setTimeout(r, 250));
         return { ok: true, url: wc.getURL(), title: wc.getTitle() };
       }
-      log.warn(`browser clickAt CDP unavailable while suppressed, force-showing: ${id}`);
+      log.warn(`browser clickAt CDP unavailable on hidden view: ${id}`);
+      return {
+        ok: false,
+        error: "浏览器视图处于后台,无法投递坐标点击(CDP 调试器不可用,可能 DevTools 已打开)。可改用 browser_click 按 selector 点击,或打开浏览器面板后重试。",
+      };
     }
-    if (!live.visible) this.show(id);
     wc.focus();
     const base = { x: Math.round(x), y: Math.round(y), button: "left" as const, clickCount: 1 };
     wc.sendInputEvent({ type: "mouseDown", ...base });
@@ -2089,32 +2125,51 @@ class BrowserManagerImpl {
       log.warn(`browser full-page capture unavailable, falling back to viewport: ${id}`);
     }
 
-    // If the view is offscreen/hidden (user switched panels, or it was never
-    // measured), temporarily bring it on-screen so capturePage gets real pixels.
-    // capturePage on a hidden/1x1 view returns an empty 0-byte image. The brief
-    // on-screen flash is the known trade-off: offscreen capture either yields
-    // incomplete output (wrong viewport size) or changes the page layout
-    // (resizing to scrollHeight triggers reflow), so we prioritize capture
-    // correctness over avoiding the flash.
-    const needsTempShow = !live.visible || live.lastBounds.width <= 1;
-    // ...UNLESS the renderer has the view suppressed for an open overlay — the
-    // on-screen flash would fight the user's dialog. CDP Page.captureScreenshot
-    // with a viewport-sized clip renders offscreen (same mechanism as
-    // captureFullPage), so try that first and degrade to the temp-show only
-    // when the debugger slot is unavailable.
-    if (needsTempShow && this.rendererSuppressed) {
-      const clipRect = this.emulationCaptureRect(live) ?? {
-        width: live.lastBounds.width,
-        height: live.lastBounds.height,
-      };
+    // Hidden view (user switched panels away from the browser, or the
+    // renderer never measured it — the agent can browse without the panel
+    // ever having been opened): capture OFFSCREEN and NEVER surface the view
+    // over the user's workspace. Two offscreen mechanisms, in order:
+    //   1. CDP Page.captureScreenshot with a viewport-sized clip — renders
+    //      without touching visibility (same mechanism as captureFullPage and
+    //      the suppressed-only branch this generalizes).
+    //   2. capturePage on the parked view — hide() preserves dimensions so
+    //      the backing store stays valid (only a never-measured 1x1 view
+    //      lacks one).
+    // When both fail (debugger slot busy + empty backing store) the tool
+    // FAILS with actionable guidance instead of flashing the page on-screen —
+    // an on-screen flash over whatever the user is doing is the bug this
+    // replaces (the old temp-show existed because the panel was always
+    // force-switched, so the flash landed in "the user's" browser panel).
+    if (!live.visible || live.lastBounds.width <= 1) {
+      const emuRect = this.emulationCaptureRect(live);
+      const capW = emuRect?.width ?? (live.lastBounds.width > 1 ? live.lastBounds.width : 1280);
+      const capH = emuRect?.height ?? (live.lastBounds.height > 1 ? live.lastBounds.height : 800);
+      // A never-measured view sits at 1x1 and the page layout collapsed with
+      // it — re-size it OFFSCREEN first (same park position hide() uses; x/y
+      // stay at -9999 so nothing is ever composited over the window) so the
+      // layout reflows to real dimensions before capturing. lastBounds is
+      // deliberately left alone: show() still falls back to
+      // defaultOnscreenBounds() when the panel next opens, and the renderer
+      // re-syncs precise bounds from its placeholder from there.
+      const dimsChanged =
+        Math.abs(live.lastBounds.width - capW) > 2 || Math.abs(live.lastBounds.height - capH) > 2;
+      if (dimsChanged) {
+        try {
+          live.view.setBounds({ x: -9999, y: -9999, width: capW, height: capH });
+        } catch (err) {
+          log.warn(`browser screenshot offscreen resize failed: ${id} ${err instanceof Error ? err.message : String(err)}`);
+        }
+        // Give the reflow + compositor a beat to paint the new size.
+        await new Promise((r) => setTimeout(r, 150));
+      }
       const shot = await this.withDebugger<{ data?: string }>(id, (dbg) =>
         dbg.sendCommand("Page.captureScreenshot", {
           format: "png",
           clip: {
             x: 0,
             y: 0,
-            width: Math.max(1, clipRect.width),
-            height: Math.max(1, clipRect.height),
+            width: Math.max(1, capW),
+            height: Math.max(1, capH),
             scale: 1,
           },
         }),
@@ -2122,24 +2177,32 @@ class BrowserManagerImpl {
       if (shot.ok && shot.value?.data) {
         return { ok: true, data: shot.value.data, mimeType: "image/png" };
       }
-      log.warn(`browser screenshot CDP unavailable while suppressed, degrading to temp-show: ${id}`);
+      log.warn(`browser screenshot hidden view: CDP unavailable, trying offscreen capturePage: ${id}`);
+      const img = await wc.capturePage().catch(() => null);
+      const png = img && !img.isEmpty() ? img.toPNG().toString("base64") : null;
+      if (png) {
+        return { ok: true, data: png, mimeType: "image/png" };
+      }
+      log.warn(`browser screenshot hidden view: offscreen capture failed, giving up without surfacing: ${id}`);
+      return {
+        ok: false,
+        error: "浏览器视图处于后台,无法离屏截图(CDP 调试器不可用,可能 DevTools 已打开)。可改用 browser_snapshot 读取页面内容,或打开浏览器面板后重试。",
+      };
     }
-    const savedVisible = live.visible;
-    const savedBounds = live.lastBounds;
-    // Device emulation active: the capture rect must match the emulated
-    // viewport (see the note above). Compute it from the stored viewport;
-    // null when desktop (no emulation) — then defaultOnscreenBounds applies.
+    // Visible view: capturePage reads the live composite. Device emulation
+    // active: the physical bounds must match the emulated viewport or
+    // capturePage returns black frames — resize IN PLACE (the user is
+    // watching this view; the swap is just the panel's own content resizing).
     const emuRect = this.emulationCaptureRect(live);
     const boundsMatchEmu =
       emuRect != null &&
       Math.abs(live.lastBounds.width - emuRect.width) <= 2 &&
       Math.abs(live.lastBounds.height - emuRect.height) <= 2;
-    const tempShown = needsTempShow || (emuRect != null && !boundsMatchEmu);
-    if (tempShown) {
-      const b = emuRect ?? defaultOnscreenBounds();
-      live.view.setBounds(b);
-      live.lastBounds = b;
-      live.visible = true;
+    const savedBounds = live.lastBounds;
+    const tempResized = emuRect != null && !boundsMatchEmu;
+    if (tempResized) {
+      live.view.setBounds(emuRect);
+      live.lastBounds = emuRect;
       // Give the compositor a frame to paint before capturing.
       await new Promise((r) => setTimeout(r, 100));
     }
@@ -2164,18 +2227,12 @@ class BrowserManagerImpl {
       result = await capture();
     }
 
-    // Restore the hidden/offscreen state if we temporarily showed/resized the
-    // view. Bounds changes during capture are reverted so the renderer's next
-    // syncBounds (or the user's next show) isn't fighting a stale rect.
-    if (tempShown) {
-      if (savedVisible) {
-        live.view.setBounds(savedBounds);
-      } else {
-        // Keep offscreen but preserve dimensions (consistent with hide()).
-        live.view.setBounds({ x: -9999, y: -9999, width: savedBounds.width, height: savedBounds.height });
-      }
+    // Revert the in-place emulation resize so the renderer's next syncBounds
+    // (or the user's next show) isn't fighting a stale rect. (The hidden-view
+    // path above returned early and never touched on-screen state.)
+    if (tempResized) {
+      live.view.setBounds(savedBounds);
       live.lastBounds = savedBounds;
-      live.visible = savedVisible;
     }
 
     if ("error" in result) {

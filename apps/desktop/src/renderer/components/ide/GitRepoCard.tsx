@@ -1686,6 +1686,8 @@ function OperationLog({
 
 /* ───────────────────────── file group ───────────────────────── */
 
+const MAX_VISIBLE_GIT_FILES = 100;
+
 function FileGroup({
   labelKey,
   files,
@@ -1720,6 +1722,11 @@ function FileGroup({
   const { t } = useI18n();
   const label = t(labelKey);
   const [collapsed, setCollapsed] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+
+  const visibleFiles = showAll ? files : files.slice(0, MAX_VISIBLE_GIT_FILES);
+  const hiddenCount = files.length - visibleFiles.length;
+
   return (
     <div>
       <div className="group mb-1 flex items-center gap-1">
@@ -1756,7 +1763,7 @@ function FileGroup({
       </div>
       {!collapsed && (
         <div className="space-y-0.5">
-          {files.map((f) => (
+          {visibleFiles.map((f) => (
             <FileRow
               key={f.path}
               file={f}
@@ -1769,6 +1776,18 @@ function FileGroup({
               onSingleDiscard={onSingleDiscard}
             />
           ))}
+          {hiddenCount > 0 && (
+            <div className="mt-1 flex items-center justify-between rounded bg-surface-muted/50 px-2 py-1 text-content-subtle [font-size:var(--rp-fs-xxs)]">
+              <span>{t("ide.git.moreFilesTruncated", { count: hiddenCount })}</span>
+              <button
+                type="button"
+                onClick={() => setShowAll(true)}
+                className="font-medium text-accent underline hover:opacity-80"
+              >
+                {t("ide.git.showAllFiles")}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
