@@ -1,5 +1,6 @@
-import { BrowserWindow, shell, session, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, shell, session, type WebContents } from "electron";
 import { join } from "node:path";
+import { freemem, totalmem } from "node:os";
 import { is } from "@main/utils.js";
 import { getEffectiveTheme, getThemeStylePreference } from "@main/lib/theme.js";
 import { log } from "@main/lib/logger.js";
@@ -53,6 +54,21 @@ function overlayColors() {
 export function updateTitleBarOverlay(): void {
   if (process.platform === "darwin") return;
   mainWindow?.setTitleBarOverlay(overlayColors());
+}
+
+/** V8 old-space ceiling for the renderer, applied via `--js-flags` on the
+ *  renderer process command line (webPreferences.additionalArguments).
+ *  ~25% of physical RAM clamped to [2GB, 6GB]. Without a cap the V8 heap grows
+ *  until the OS kills the process — and on a memory-starved machine it drags
+ *  system-wide commit down with it (2026-10-30 03:01: renderer OOM while git,
+ *  netstat and PowerShell were simultaneously failing to allocate). A capped
+ *  heap turns the failure inward: this renderer dies alone instead of starving
+ *  the whole machine. The transcript store is the growth driver (single
+ *  sessions up to ~55MB raw text, parsed into several× that in JS objects), so
+ *  the 2GB floor is a generous working set, not a straitjacket. */
+function rendererHeapCapMb(): number {
+  const quarterOfRamMb = Math.round(totalmem() / 4 / (1024 * 1024));
+  return Math.min(6144, Math.max(2048, quarterOfRamMb));
 }
 
 /** Grant the renderer access to the microphone (voice input).
@@ -130,6 +146,7 @@ export function createMainWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      additionalArguments: [`--js-flags=--max-old-space-size=${rendererHeapCapMb()}`],
     },
   });
 
@@ -171,23 +188,136 @@ export function createMainWindow(): BrowserWindow {
     if (tag === "ERROR") log.error(line2);
     else if (tag === "WARN") log.warn(line2);
   });
+  // ── Crash auto-reload, with an OOM-specific guard ──────────────────────────
+  // Any non-clean renderer death reloads the page (the original behavior).
+  // OOM deaths are different: an immediate reload re-parses the full session
+  // store (445 sessions, transcripts up to ~55MB raw text each) into a machine
+  // that just proved it has no memory to spare — on 2026-10-30 the immediate
+  // reload OOM'd again 26 seconds later, while git/netstat were failing to
+  // allocate. So OOM reloads wait for os.freemem() to recover, back off per
+  // consecutive attempt, and after OOM_MAX_CRASHES stop auto-reloading and ask
+  // the user instead of crash-looping. The renderer i18n system is dead at
+  // that point, so the dialog copy is hardcoded bilingual.
+  const CRASH_RELOAD_DELAY_MS = 500;
+  const OOM_BACKOFF_MS = [2_000, 5_000, 15_000];
+  const OOM_FREEMEM_MIN_BYTES = 1536 * 1024 * 1024;
+  const OOM_FREEMEM_POLL_MS = 2_000;
+  const OOM_FREEMEM_MAX_WAIT_MS = 90_000;
+  const OOM_STABLE_RESET_MS = 5 * 60_000;
+  const OOM_MAX_CRASHES = 3;
+
   let crashReloadTimer: NodeJS.Timeout | null = null;
+  let oomWaitTimer: NodeJS.Timeout | null = null;
+  let oomStableTimer: NodeJS.Timeout | null = null;
+  let consecutiveOomCrashes = 0;
+
+  function clearCrashReloadTimers(): void {
+    if (crashReloadTimer) {
+      clearTimeout(crashReloadTimer);
+      crashReloadTimer = null;
+    }
+    if (oomWaitTimer) {
+      clearTimeout(oomWaitTimer);
+      oomWaitTimer = null;
+    }
+    if (oomStableTimer) {
+      clearTimeout(oomStableTimer);
+      oomStableTimer = null;
+    }
+  }
+
+  function reloadRenderer(reason: string): void {
+    const win = mainWindow;
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+    // Alive for OOM_STABLE_RESET_MS after this reload → the OOMs were one bad
+    // episode, not a chronic condition; a fresh OOM starts counting at 1.
+    if (oomStableTimer) clearTimeout(oomStableTimer);
+    oomStableTimer = setTimeout(() => {
+      oomStableTimer = null;
+      consecutiveOomCrashes = 0;
+    }, OOM_STABLE_RESET_MS);
+    log.warn(`reloading renderer after crash (${reason})...`);
+    win.webContents.reload();
+  }
+
+  /** OOM path: back off, then hold the reload until the machine shows real
+   *  free memory again (polling, capped — after the cap we still try once; the
+   *  consecutive-attempt cap below bounds the loop when the signal lies).
+   *  freemem() is available-physical, not commit headroom — on Windows a dead
+   *  process's pages return to the standby list while commit stays tight. It
+   *  is still the right cheap gate (a machine deep in commit thrash shows
+   *  near-zero available too); deliberately NOT a PowerShell perf-counter
+   *  commit probe — those were among the commands failing to spawn during the
+   *  incident. */
+  function scheduleOomReload(attempt: number): void {
+    const backoff = OOM_BACKOFF_MS[Math.min(attempt - 1, OOM_BACKOFF_MS.length - 1)];
+    const deadline = Date.now() + backoff + OOM_FREEMEM_MAX_WAIT_MS;
+    const step = (): void => {
+      oomWaitTimer = null;
+      const win = mainWindow;
+      if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+      if (freemem() >= OOM_FREEMEM_MIN_BYTES || Date.now() >= deadline) {
+        reloadRenderer("oom");
+        return;
+      }
+      oomWaitTimer = setTimeout(step, OOM_FREEMEM_POLL_MS);
+    };
+    oomWaitTimer = setTimeout(step, backoff);
+  }
+
+  function showOomGiveUpDialog(): void {
+    const options: Electron.MessageBoxOptions = {
+      type: "error",
+      title: "Mcode",
+      message: "渲染进程内存不足 (Renderer out of memory)",
+      detail:
+        "渲染进程已连续 3 次因内存耗尽崩溃,自动恢复已暂停。\n" +
+        "请关闭其他占用内存的程序(IDE、浏览器标签页、语言服务器等)后重试。\n\n" +
+        "The renderer crashed 3 times in a row from memory exhaustion; auto-reload is paused.\n" +
+        "Close other memory-heavy programs (IDEs, browser tabs, language servers) and retry.",
+      buttons: ["重新加载 (Reload)", "退出 (Quit)"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    const win = mainWindow;
+    const shown =
+      win && !win.isDestroyed()
+        ? dialog.showMessageBox(win, options)
+        : dialog.showMessageBox(options);
+    void shown.then(({ response }) => {
+      if (response === 0) {
+        consecutiveOomCrashes = 0;
+        scheduleOomReload(1);
+      } else {
+        log.warn("quitting from OOM recovery dialog");
+        app.quit();
+      }
+    });
+  }
+
   mainWindow.webContents.on("render-process-gone", (_e, details) => {
     const line = `[renderer:GONE] ${JSON.stringify(details)}`;
     process.stderr.write(`${line}\n`);
     log.error(line);
+    clearCrashReloadTimers();
+    if (details.reason === "clean-exit") return;
 
-    // Auto-reload the renderer if it crashed or ran out of memory (OOM),
-    // rather than leaving a dead, unresponsive white screen.
-    if (details.reason !== "clean-exit" && mainWindow && !mainWindow.isDestroyed()) {
-      if (crashReloadTimer) clearTimeout(crashReloadTimer);
-      crashReloadTimer = setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-          log.warn(`reloading renderer after crash (${details.reason})...`);
-          mainWindow.webContents.reload();
-        }
-      }, 500);
+    // Non-OOM deaths (crashed/killed/…) mean the renderer got to run and died
+    // of other causes — the immediate reload is safe and expected.
+    if (details.reason !== "oom") {
+      consecutiveOomCrashes = 0;
+      crashReloadTimer = setTimeout(() => reloadRenderer(details.reason), CRASH_RELOAD_DELAY_MS);
+      return;
     }
+
+    consecutiveOomCrashes += 1;
+    if (consecutiveOomCrashes >= OOM_MAX_CRASHES) {
+      log.error(`renderer OOM ${consecutiveOomCrashes} times in a row — stopping auto-reload`);
+      showOomGiveUpDialog();
+      return;
+    }
+    scheduleOomReload(consecutiveOomCrashes);
   });
   mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
     const line = `[renderer:FAIL_LOAD] ${code} ${desc} ${url}`;

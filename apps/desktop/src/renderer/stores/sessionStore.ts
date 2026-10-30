@@ -334,7 +334,11 @@ function currentNavEntryFor(get: () => SessionState): NavEntry | null {
  *  (membership ≥2 renders the grid), in `tabs` while their per-tab group
  *  owns the center (the active tab's group) — a group of an INACTIVE tab
  *  is not visible and its members still badge/toast. */
-function isSessionChatOnScreen(
+/** Exported for ChatPane's cold-eviction self-heal effect: a pane that
+ *  re-appears without an activation action (editor-focus overlay exit,
+ *  split-grid re-show) must re-fetch if its transcript was evicted while it
+ *  was hidden. Boolean result → stable Zustand selector. */
+export function isSessionChatOnScreen(
   sid: string,
   s: Pick<SessionState, "activeSessionId" | "displayMode" | "tabsFilePreviewPlacement" | "centerTabFocus" | "widePanelOpen" | "splitSessionIds" | "splitGroupsBySession">,
 ): boolean {
@@ -1255,6 +1259,10 @@ export interface SessionState {
    *  rightPanelTab is deliberately NOT snapshotted — tab switches the user
    *  makes while in wide mode are respected on exit. */
   widePanelSnapshot: { leftOpen: boolean; rightOpen: boolean; rightWidth: number } | null;
+  /** Right IDE panel maximized state: takes 100% of the workbench space below Titlebar.
+   *  NOT persisted (pure in-memory layout state). */
+  rightPanelMaximized: boolean;
+  rightPanelMaximizedSnapshot: { leftOpen: boolean; rightOpen: boolean } | null;
   /** Number of open browser tabs (mirrors BrowserPanel's local tabs state so
    *  the Titlebar toggle button can show a count badge). Updated by the panel
    *  via setBrowserTabCount. NOT persisted. */
@@ -2092,6 +2100,9 @@ export interface SessionState {
    *  any open browser overlay and snapshots the pre-enter layout; exiting
    *  restores leftOpen / rightOpen / rightWidth from that snapshot. */
   setWidePanelOpen: (open: boolean) => void;
+  /** Maximize/restore the right IDE panel. NOT persisted. */
+  setRightPanelMaximized: (maximized: boolean) => void;
+  toggleRightPanelMaximized: () => void;
   /** Apply an incremental delta to the wide-panel percentage (the right
    *  panel's share of the chat|right split). Divider sits left of the right
    *  column, so a right drag (positive delta) shrinks it — same sign convention
@@ -4060,7 +4071,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   // the focus jumps to the previous tab (openTab logic replicated
   // inline since we're already inside a `set` callback).
   const idx = s.openTabs.indexOf(id);
-  const openTabs = idx === -1 ? s.openTabs : s.openTabs.filter((sid) => sid !== id);
+  const baseOpenTabs = idx === -1 ? s.openTabs : s.openTabs.filter((sid) => sid !== id);
   const wasActive = s.activeSessionId === id;
   // Split-view membership cleanup, both modes:
   //  - single: a deleted pane leaves the global grid; a remainder below 2
@@ -4095,6 +4106,16 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     }
   }
   const groupsPatch = nextGroups ? { splitGroupsBySession: nextGroups } : {};
+  // A dissolved tabs-mode group hands focus to `deletedGroupSuccessor`, which
+  // may be a non-tab member (split members never join the strip) — promote it
+  // to a real tab in the same pass so the focused session actually has a
+  // mounted surface (sync reducer; mirrors removeFromSplit's openTab
+  // promotion). deletedGroupSuccessor is only set when the deleted row was
+  // the active session, so the !wasActive return below is unaffected.
+  let openTabs = baseOpenTabs;
+  if (deletedGroupSuccessor != null && !openTabs.includes(deletedGroupSuccessor)) {
+    openTabs = [...openTabs, deletedGroupSuccessor];
+  }
   if (!wasActive) {
     return {
       sessionsByProject,
@@ -5642,6 +5663,11 @@ function flushDeltas(): void {
   // during this flush start a fresh accumulation rather than being lost.
   const entries = Array.from(deltaBuf.values());
   deltaBuf.clear();
+  // Sessions that just received stream content are provably "hot" — stamp the
+  // eviction activity clock and let the debounced check ride along. (Function
+  // is declared later in the module; hoisting makes the order irrelevant.)
+  for (const e of entries) evictActivityAt.set(e.sessionId, Date.now());
+  scheduleEvictionCheck();
 
   useSessionStore.setState((s) => {
     // Group entries by sessionId so we only iterate each session's messages
@@ -5704,27 +5730,33 @@ function flushDeltas(): void {
           // Message already exists — we'll replace it below.
         }
 
-        // Apply the buffered segments in arrival order (see DeltaEntry.segs —
-        // a window straddling a text↔thinking boundary must not swap them).
+        // Apply all buffered segments in arrival order in a single batch,
+        // avoiding repeated full-array maps for every segment.
+        const msgIndex = next.findIndex((m) => m.id === e.messageId);
+        if (msgIndex === -1) continue;
+        const cur = next[msgIndex];
+        const blocks = [...cur.blocks];
         for (const seg of e.segs) {
-          const cur = findMsg(next, e.messageId);
-          if (!cur) break;
-          const blocks = cur.blocks;
           const lastBlock = blocks[blocks.length - 1];
-          let updatedMsg: ChatMessage;
           if (seg.k === "text") {
-            updatedMsg =
-              lastBlock && lastBlock.kind === "text"
-                ? { ...cur, blocks: [...blocks.slice(0, -1), { ...lastBlock, text: lastBlock.text + seg.text }] }
-                : { ...cur, blocks: [...blocks, { kind: "text", text: seg.text } as Block] };
+            if (lastBlock && lastBlock.kind === "text") {
+              blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + seg.text };
+            } else {
+              blocks.push({ kind: "text", text: seg.text } as Block);
+            }
           } else {
-            updatedMsg =
-              lastBlock && lastBlock.kind === "thinking"
-                ? { ...cur, blocks: [...blocks.slice(0, -1), { ...lastBlock, text: lastBlock.text + seg.text }] }
-                : { ...cur, blocks: [...blocks, { kind: "thinking", text: seg.text } as Block] };
+            if (lastBlock && lastBlock.kind === "thinking") {
+              blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + seg.text };
+            } else {
+              blocks.push({ kind: "thinking", text: seg.text } as Block);
+            }
           }
-          next = next.map((m) => (m.id === cur.id ? updatedMsg : m));
         }
+        const updatedMsg: ChatMessage = { ...cur, blocks };
+        next =
+          msgIndex === next.length - 1
+            ? [...next.slice(0, -1), updatedMsg]
+            : [...next.slice(0, msgIndex), updatedMsg, ...next.slice(msgIndex + 1)];
       }
 
       // Write back only if the session changed — avoid touching unrelated sessions.
@@ -5770,6 +5802,240 @@ function clearSessionDeltas(sessionId: string): void {
   for (const [key, entry] of deltaBuf) {
     if (entry.sessionId === sessionId) deltaBuf.delete(key);
   }
+}
+
+/* ─── Transcript memory eviction ─────────────────────────────────────────────
+ *
+ * messagesBySession holds the PARSED transcript of every session opened this
+ * uptime, forever. Long-running installs accumulate: single sessions reach
+ * 55MB+ of raw text (≈100-250MB as JS objects — strings, blocks, tool inputs),
+ * and dozens of them push the renderer heap past the V8 cap set in main
+ * (window.ts rendererHeapCapMb) — near the cap GC pressure degrades the UI,
+ * past it V8 dies. Transcripts are DB-backed at turn boundaries, so the parsed
+ * copy of an idle, off-screen session is a cache — and caches can be dropped.
+ *
+ * evictColdSessions walks all buckets, and when the estimated total exceeds
+ * EVICT_BUDGET_BYTES drops the biggest COLD sessions until under
+ * EVICT_TARGET_BYTES (hysteresis keeps the sweep from thrashing). "Cold" = the
+ * intersection of every guard below; the drop goes through the SAME
+ * pruneSessionHistory action the tab-close and single-mode drivers use, so
+ * eviction semantics stay identical everywhere. Re-entry is the normal
+ * first-page path: clearing historyLoadedBySession makes
+ * selectSession/openTab/selectSideChat re-fetch (prefetchSessionMessages
+ * merges any live-only partial bucket back in), and ChatPane's on-screen
+ * effect re-fetches for panes that re-appear WITHOUT an activation action
+ * (editor-focus overlay exit, split-grid re-show).
+ *
+ * Relationship to the existing drivers: closeTab prunes immediately and the
+ * single-mode grace window prunes on every switch — but OPEN TABS (their
+ * buckets grow unbounded across a long uptime: streaming + loadOlder merges),
+ * side chats and background partial buckets had no bound at all. This sweep
+ * is the byte-budget backstop over all of them. */
+
+const EVICT_BUDGET_BYTES = 192 * 1024 * 1024;
+const EVICT_TARGET_BYTES = 128 * 1024 * 1024;
+/** Idle grace: a session this recently active is never evicted, even
+ *  off-screen — covers the "turn just ended, user is about to rewind/read"
+ *  window and the transient chat-hidden states (editor overlay). */
+const EVICT_IDLE_MS = 10 * 60_000;
+const EVICT_CHECK_MIN_INTERVAL_MS = 5_000;
+const EVICT_SWEEP_INTERVAL_MS = 60_000;
+
+/** sessionId → wall-clock ms of the last stream/turn/load activity. Absence
+ *  means "cold since forever" (eligible once off-screen). Written by
+ *  flushDeltas (delta application), the ingest turn-end block, and the
+ *  first-page/older fetches — the moments a bucket provably has a consumer. */
+const evictActivityAt = new Map<string, number>();
+
+let evictCheckTimer: ReturnType<typeof setTimeout> | null = null;
+let evictLastCheckAt = 0;
+let evictSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Weak cache mapping immutable message arrays to their computed byte footprint.
+ *  Avoids re-measuring thousands of blocks on cold sessions across sweeps. */
+const sessionBytesCache = new WeakMap<ChatMessage[], number>();
+
+/** Fast, non-recursive size estimate for tool_use `input`/`result` payloads.
+ *  Large footprints in tool blocks come from strings (diffs, command output,
+ *  file dumps). A single-level property scan captures >98% of payload weight
+ *  without deep recursion, object allocations, or main-thread stalls. */
+function estimateUnknownBytes(v: unknown): number {
+  if (v == null) return 0;
+  const t = typeof v;
+  if (t === "string") return (v as string).length * 2 + 24;
+  if (t === "number" || t === "boolean") return 8;
+  if (t === "object") {
+    if (Array.isArray(v)) {
+      let n = 40;
+      for (const item of v) {
+        if (typeof item === "string") n += item.length * 2 + 24;
+        else if (item && typeof item === "object") n += 48;
+        else n += 8;
+      }
+      return n;
+    }
+    let n = 48;
+    const obj = v as Record<string, unknown>;
+    for (const k in obj) {
+      n += k.length * 2;
+      const val = obj[k];
+      if (typeof val === "string") n += val.length * 2 + 24;
+      else if (Array.isArray(val)) n += val.length * 32;
+      else if (val && typeof val === "object") n += 48;
+      else n += 8;
+    }
+    return n;
+  }
+  return 0;
+}
+
+/** Heap-ish footprint of one transcript block. Strings count as length×2 —
+ *  the UTF-16 upper bound (V8 stores ASCII-only strings one-byte, so this
+ *  over-estimates ASCII-heavy content ~2×). Over-estimating is the SAFE
+ *  direction for a budget: it evicts earlier, never later. */
+function estimateBlockBytes(b: Block): number {
+  switch (b.kind) {
+    case "text":
+      return b.text.length * 2 + (b.skillNames?.length ?? 0) * 32 + 64;
+    case "thinking":
+      return b.text.length * 2 + 64;
+    case "tool_use":
+      return estimateUnknownBytes(b.input) + estimateUnknownBytes(b.result) + 96;
+    case "error":
+      return b.message.length * 2 + 48;
+    case "turn-incomplete":
+      return 96;
+    case "attachment":
+      return (b.preview.length + b.content.length) * 2 + 64;
+    case "plan":
+      return b.plan.length * 2 + 96;
+    case "turn-files":
+      return b.files.length * 256 + 64;
+    case "compact-summary":
+      return 64;
+    case "image":
+      return b.data.length * 2 + 64;
+    case "video":
+      return b.filePath.length * 2 + 64;
+    case "orch-canvas":
+    case "orch-synth":
+      return 192;
+  }
+}
+
+function estimateMessagesBytes(messages: ChatMessage[] | undefined): number {
+  if (!messages || messages.length === 0) return 0;
+  const cached = sessionBytesCache.get(messages);
+  if (cached !== undefined) return cached;
+  let n = 0;
+  for (const m of messages) {
+    n += 96; // message shell (id/sessionId/role/createdAt/turnMeta ≈ flat)
+    for (const b of m.blocks) n += estimateBlockBytes(b);
+  }
+  sessionBytesCache.set(messages, n);
+  return n;
+}
+
+/** A bucket may only be dropped when ALL of these hold: turn not running, no
+ *  pending question dialog (the same two guards every existing prune path
+ *  uses), not on screen (any display mode — isSessionChatOnScreen is the same
+ *  predicate the badge/toast machinery uses), not the open side chat, no
+ *  buffered deltas, no in-flight history fetch, and idle beyond the grace
+ *  window. */
+function isEvictionEligible(sid: string, s: SessionState, now: number): boolean {
+  if (s.runningBySession[sid] === true) return false;
+  if (s.pendingQuestionBySession[sid]) return false;
+  if (isSessionChatOnScreen(sid, s)) return false;
+  if (s.activeSideChatId === sid) return false;
+  if (s.loadingMessagesBySession[sid] || s.loadingOlderBySession[sid]) return false;
+  if (s.streamRateBySession[sid]) return false;
+  for (const entry of deltaBuf.values()) {
+    if (entry.sessionId === sid) return false;
+  }
+  const lastActive = evictActivityAt.get(sid);
+  if (lastActive !== undefined && now - lastActive < EVICT_IDLE_MS) return false;
+  return true;
+}
+
+function evictColdSessions(): void {
+  const s = useSessionStore.getState();
+  const buckets = s.messagesBySession;
+  const ids = Object.keys(buckets);
+  if (ids.length === 0) return;
+
+  const sizes = new Map<string, number>();
+  let total = 0;
+  for (const id of ids) {
+    const n = estimateMessagesBytes(buckets[id]);
+    sizes.set(id, n);
+    total += n;
+  }
+  if (total <= EVICT_BUDGET_BYTES) return;
+
+  const now = Date.now();
+  const candidates = ids
+    .filter((id) => isEvictionEligible(id, s, now))
+    .sort((a, b) => (sizes.get(b) ?? 0) - (sizes.get(a) ?? 0));
+  const drop: string[] = [];
+  let freed = 0;
+  for (const id of candidates) {
+    if (total - freed <= EVICT_TARGET_BYTES) break;
+    drop.push(id);
+    freed += sizes.get(id) ?? 0;
+  }
+  if (drop.length === 0) return;
+
+  // console.warn (not info) so the console-message bridge persists the event
+  // into main.log — this line is the forensic anchor when diagnosing a past
+  // memory episode ("was eviction running, and what did it drop?").
+  const mb = (n: number) => `${(n / 1048576).toFixed(1)}MB`;
+  console.warn(
+    `[sessionStore] transcript eviction: dropping ${drop.length} cold session(s) ` +
+      `(~${mb(freed)} of ~${mb(total)} resident): ` +
+      drop.map((id) => `${id} (${mb(sizes.get(id) ?? 0)})`).join(", "),
+  );
+
+  // Reuse the same drop action the tab-close / single-mode drivers use, so
+  // eviction semantics stay identical (turn-files cards, usage history and
+  // subagent transcripts all re-hydrate from the session row on next open).
+  const prune = useSessionStore.getState().pruneSessionHistory;
+  for (const id of drop) {
+    prune(id);
+    delete prefetchRetries[id];
+  }
+}
+
+/** Trigger-based check, debounced to at most one sweep per interval. Also
+ *  arms the periodic safety-net sweep on first use (no import-time timers). */
+function scheduleEvictionCheck(): void {
+  if (!evictSweepTimer) {
+    evictSweepTimer = setInterval(() => {
+      try {
+        evictColdSessions();
+      } catch (err) {
+        console.error("eviction sweep failed:", err);
+      }
+    }, EVICT_SWEEP_INTERVAL_MS);
+  }
+  if (evictCheckTimer) return;
+  const elapsed = Date.now() - evictLastCheckAt;
+  const delay = elapsed >= EVICT_CHECK_MIN_INTERVAL_MS ? 0 : EVICT_CHECK_MIN_INTERVAL_MS - elapsed;
+  evictCheckTimer = setTimeout(() => {
+    evictCheckTimer = null;
+    evictLastCheckAt = Date.now();
+    try {
+      evictColdSessions();
+    } catch (err) {
+      console.error("eviction check failed:", err);
+    }
+  }, delay);
+}
+
+/** Stamp recent activity (defers eviction) and schedule a check. Called from
+ *  the transcript's consumer moments: delta flush, turn end, history fetch. */
+function noteTranscriptActivity(sessionId: string): void {
+  evictActivityAt.set(sessionId, Date.now());
+  scheduleEvictionCheck();
 }
 
 /* ─── Orchestrator planner stream(已退役) ───
@@ -6027,6 +6293,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   widePanelOpen: false,
   widePanelPct: WIDE_PANEL_PCT_DEFAULT,
   widePanelSnapshot: null,
+  rightPanelMaximized: false,
+  rightPanelMaximizedSnapshot: null,
   // Mobile-shell fullscreen viewer (file/diff/plan) - closed by default.
   mobileViewer: null,
   browserTabCount: 0,
@@ -7973,13 +8241,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const nextGroups = { ...s.splitGroupsBySession };
       // Below 2 members the group dissolves — the tab reverts to its plain
       // root pane.
-      if (next.length < 2 || !next.includes(root)) delete nextGroups[root];
+      const dissolved = next.length < 2 || !next.includes(root);
+      if (dissolved) delete nextGroups[root];
       else nextGroups[root] = next;
       set({ splitGroupsBySession: nextGroups });
-      if (s.activeSessionId === sessionId) {
+      // Focus handoff. A dissolved group's surviving member is NOT a tab
+      // (split members never join the strip) — selectSession alone would
+      // leave activeSessionId pointing at a session with no open tab and no
+      // mounted surface (blank center). openTab promotes it to a real tab;
+      // an already-open successor just takes the plain focus flip.
+      const wasFocused = s.activeSessionId === sessionId;
+      const focusedSurvivor =
+        !wasFocused && s.activeSessionId != null && next.includes(s.activeSessionId)
+          ? s.activeSessionId
+          : null;
+      if (wasFocused || focusedSurvivor != null) {
         // Focus a neighboring survivor; a dissolved group lands on its root.
-        const successor = next[idx] ?? next[idx - 1] ?? root;
-        await get().selectSession(successor);
+        const successor = focusedSurvivor ?? next[idx] ?? next[idx - 1] ?? root;
+        // Only a DISSOLVED group promotes its survivor to a tab — while the
+        // grid lives, members stay panes (they never join the strip).
+        if (dissolved && !get().openTabs.includes(successor)) await get().openTab(successor);
+        else if (successor !== s.activeSessionId) await get().selectSession(successor);
       }
       return;
     }
@@ -8090,6 +8372,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: false },
       }));
       delete prefetchRetries[sessionId];
+      // Freshly (re-)hydrated transcript: mark hot so the sweep can't drop it
+      // again while its reader is still looking at it, and ride the budget
+      // check (this page may have been the one that crossed the watermark).
+      noteTranscriptActivity(sessionId);
     } catch (err) {
       // Never leave the skeleton stuck up on a failed fetch — fall back to
       // the regular (empty) view so the composer stays usable. The hydration
@@ -8151,6 +8437,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           loadingOlderBySession: { ...s.loadingOlderBySession, [sessionId]: false },
         };
       });
+      // The user is actively reading history right now — stamp hot (and let
+      // the debounced budget check ride along with the newly merged page).
+      noteTranscriptActivity(sessionId);
     } catch (err) {
       console.error("loadOlderMessages failed:", err);
       set((s) => ({
@@ -8192,6 +8481,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // in-memory, keyed by the tab's root session).
       const splitGroupsBySession = { ...s.splitGroupsBySession };
       delete splitGroupsBySession[sessionId];
+      // The closed tab may ALSO sit as a member pane of another tab's grid
+      // (it was a tab before being dragged into that grid — addToSplit in
+      // tabs mode never removes it from the strip). Scrub it there too, or
+      // the owning grid keeps rendering a ghost pane for a closed tab.
+      for (const [gRoot, gMembers] of Object.entries(splitGroupsBySession)) {
+        if (!gMembers.includes(sessionId)) continue;
+        const gNext = gMembers.filter((m) => m !== sessionId);
+        if (gNext.length < 2 || !gNext.includes(gRoot)) delete splitGroupsBySession[gRoot];
+        else splitGroupsBySession[gRoot] = gNext;
+      }
       const hadGroup = splitGroupsBySession !== s.splitGroupsBySession;
       // Unified center bar focus: only the ACTIVE tab's closure moves it —
       // closing a background session tab must not yank the editor away.
@@ -9423,6 +9722,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // turn-end event so no content is lost when the stream closes.
     if (e.type === "turn.done" || e.type === "error") {
       forceDeltaFlush();
+      // The transcript just grew by a full turn and its reader is about to
+      // read it (rewind / final answer) — stamp hot + run the eviction check
+      // (the budget may now be breached by this very turn's content).
+      noteTranscriptActivity(sid);
     }
     // A tool.use must land AFTER any narration text that has already
     // streamed. The text is still sitting in the rAF delta buffer — flush it
@@ -11165,7 +11468,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Pinning the panel (open or closed) always dismisses the hover-peek
     // drawer — the floating and in-flow presentations must never stack
     // (mirror of setLeftOpen).
-    set({ rightOpen: open, rightPeekOpen: false });
+    const s = get();
+    set({
+      rightOpen: open,
+      rightPeekOpen: false,
+      ...(open === false && s.rightPanelMaximized ? { rightPanelMaximized: false, rightPanelMaximizedSnapshot: null } : {}),
+    });
   },
   setRightPeekOpen: (open) => set({ rightPeekOpen: open }),
   setBottomTerminalOpen: (open) => set({ bottomTerminalOpen: open }),
@@ -11218,6 +11526,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         rightWidth: snap?.rightWidth ?? s.rightWidth,
       });
     }
+  },
+  setRightPanelMaximized: (maximized) => {
+    const s = get();
+    if (maximized === s.rightPanelMaximized) return;
+    if (maximized) {
+      set({
+        rightPanelMaximizedSnapshot: {
+          leftOpen: s.leftOpen,
+          rightOpen: s.rightOpen,
+        },
+        rightPanelMaximized: true,
+        rightOpen: true,
+        leftPeekOpen: false,
+        rightPeekOpen: false,
+        browserPanelOpen: false,
+      });
+    } else {
+      const snap = s.rightPanelMaximizedSnapshot;
+      set({
+        rightPanelMaximized: false,
+        rightPanelMaximizedSnapshot: null,
+        leftOpen: snap?.leftOpen ?? s.leftOpen,
+        rightOpen: snap?.rightOpen ?? true,
+      });
+    }
+  },
+  toggleRightPanelMaximized: () => {
+    get().setRightPanelMaximized(!get().rightPanelMaximized);
   },
   setBrowserTabCount: (count) => set({ browserTabCount: Math.max(0, count) }),
   markAgentBrowsing: (browserId) => {

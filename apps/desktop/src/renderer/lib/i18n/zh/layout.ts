@@ -175,6 +175,8 @@ export const zh = {
   /* ── side chat (right-panel ask tab) ── */
   "layout.tabSideChat": "子会话",
   "layout.rightPanelAddTab": "添加面板",
+  "layout.rightPanelMaximize": "最大化面板",
+  "layout.rightPanelRestore": "还原面板",
   "layout.rightPanelCloseTab": "关闭面板",
   "layout.rightPanelSessionHint": "面板跟随当前会话,各会话独立记忆",
   "sideChat.open": "打开子会话（不影响当前会话）",

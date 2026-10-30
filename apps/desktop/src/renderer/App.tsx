@@ -282,6 +282,7 @@ export function App() {
   const widePanelPct = useSessionStore((s) => s.widePanelPct);
   const adjustWidePanelPct = useSessionStore((s) => s.adjustWidePanelPct);
   const resetWidePanelPct = useSessionStore((s) => s.resetWidePanelPct);
+  const rightPanelMaximized = useSessionStore((s) => s.rightPanelMaximized);
 
   /** Draggable pane sizes + resize actions (from the store; persisted). */
   const leftWidthPct = useSessionStore((s) => s.leftWidthPct);
@@ -392,7 +393,7 @@ export function App() {
         over dismissal (click = close; the drawer also closes on mouse-leave
         with a grace period).
       */}
-      {leftDrawer && !leftPeekOpen && !browserPanelOpen && (
+      {leftDrawer && !leftPeekOpen && !browserPanelOpen && !rightPanelMaximized && (
         <LeftEdgePeekTrigger onActivate={openLeftPeek} />
       )}
       {leftDrawer && <PeekScrim active={leftPeekOpen} onClose={() => setLeftPeekOpen(false)} />}
@@ -401,7 +402,7 @@ export function App() {
           a side peek is open, the browser overlay owns the workspace, or a
           fullscreen page covers the row. The right drawer itself is the
           layout's right aside in drawer mode (ThreePaneLayout props below). */}
-      {rightDrawer && !rightPeekOpen && !browserPanelOpen && (
+      {rightDrawer && !rightPeekOpen && !browserPanelOpen && !rightPanelMaximized && (
         <RightEdgePeekTrigger onActivate={openRightPeek} />
       )}
       {rightDrawer && (
@@ -433,7 +434,7 @@ export function App() {
                 ? "pointer-events-auto translate-x-0 opacity-100 shadow-[12px_0_48px_-12px_rgba(0,0,0,0.45)]"
                 : "pointer-events-none -translate-x-full opacity-0",
             ),
-          (settingsOpen || schedPageOpen) && "hidden",
+          (settingsOpen || schedPageOpen || rightPanelMaximized) && "hidden",
         )}
         style={
           leftDrawer
@@ -448,7 +449,7 @@ export function App() {
           {leftBarMode === "stream" ? <StreamSidebar /> : <LeftBar />}
         </div>
       </aside>
-      {leftOpen && !settingsOpen && !schedPageOpen && (
+      {leftOpen && !settingsOpen && !schedPageOpen && !rightPanelMaximized && (
         <Divider
           orientation="vertical"
           hideLine
@@ -514,6 +515,7 @@ export function App() {
             leftOpen={false}
             rightOpen={rightOpen}
             rightWidth={rightWidth}
+            rightMaximized={rightPanelMaximized}
             rightWidthPct={widePanelOpen ? widePanelPct : undefined}
             rightPeekDrawer={rightDrawer}
             rightPeekArmed={rightDrawerArmed}

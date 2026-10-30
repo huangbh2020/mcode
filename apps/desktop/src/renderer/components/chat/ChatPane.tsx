@@ -32,7 +32,7 @@ import {
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, STREAM_RATE_STALE_MS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, resolveTurnModel, isSessionChatOnScreen, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, STREAM_RATE_STALE_MS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api, isWebTransport } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
@@ -2350,6 +2350,21 @@ function ChatPaneForSession({
     clearPendingBookmarkJump();
     jumpToMessage(pendingBookmarkJump.messageId, pendingBookmarkJump.excerpt);
   }, [pendingBookmarkJump, messages, historyLoaded, sessionId, clearPendingBookmarkJump, jumpToMessage]);
+
+  // Cold-eviction self-heal: the store's byte-budget sweep (sessionStore
+  // evictColdSessions) may drop this session's parsed transcript while the
+  // pane is off-screen. Keep-alive means this component stays mounted hidden,
+  // so an off→on screen flip without an activation action (editor-focus
+  // overlay exit, split-grid re-show) must re-run the first-page prefetch —
+  // otherwise the pane comes back to a permanently empty thread. The prefetch
+  // self-dedupes (loading flag) and merges any live-only partial bucket the
+  // stream re-created while we were evicted.
+  const prefetchSessionMessages = useSessionStore((s) => s.prefetchSessionMessages);
+  const onScreen = useSessionStore((s) => isSessionChatOnScreen(sessionId, s));
+  useEffect(() => {
+    if (!onScreen || historyLoaded) return;
+    void prefetchSessionMessages(sessionId);
+  }, [onScreen, historyLoaded, sessionId, prefetchSessionMessages]);
 
   /** mouseup on the message stream: capture the finished text selection and
    *  open the floating [copy | add bookmark] toolbar. Runs after a tick so

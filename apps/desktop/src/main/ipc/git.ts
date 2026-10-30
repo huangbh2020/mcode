@@ -12,6 +12,17 @@
  *
  * Every handler degrades gracefully: errors return `{ ok: false, error }` (or
  * empty results) rather than throwing into the renderer.
+ *
+ * CONCURRENCY (lib/gitQueue.ts): all mutating handlers AND `git status` run
+ * inside `runGitOp(repoPath, …)` — a per-repo mutex with stale-index.lock
+ * recovery. Status must queue too: with submodules, `git status` refreshes
+ * the parent index stat-cache and each submodule's index, so it needs the
+ * same `.git/modules/<sub>/index.lock` a concurrent add/commit needs
+ * (unqueued, the toolbar's 10s poll kills in-flight commits — 2026-10-30).
+ * Pure object reads (log/show/diff/fileBlob/listBranches/mergePreview) stay
+ * unqueued so a slow push never freezes browsing. When adding a handler:
+ * wrap the whole operation in `runGitOp` ONCE — helpers invoked inside a
+ * queued op must not re-acquire (self-deadlock).
  */
 import type { IpcMain } from "electron";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -72,6 +83,7 @@ import type { ApiConfig } from "@contracts/customModel";
 import { broadcastGitChanged } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
 import { stripCommitAttributionTrailers } from "@main/lib/commitTrailers.js";
+import { runGitOp } from "@main/lib/gitQueue.js";
 
 // Lazy-load simple-git so the CJS module stays out of the main-process startup
 // path. Git operations only happen when the user opens the git panel - well
@@ -175,66 +187,74 @@ export async function listBranchesForRepo(repoPath: string): Promise<GitBranchLi
 /** Switch the working tree to another ref. `newBranch` (when set) creates a
  *  local branch from `branch` first (`git checkout -b`). Shared by the
  *  desktop `git:checkout` IPC handler and the mobile git RPC whitelist.
- *  Never throws — failures come back as `{ ok: false, error }`. */
+ *  Never throws — failures come back as `{ ok: false, error }`. The whole
+ *  checkout is one queued git op (checkout rewrites the index; running it
+ *  against a concurrent status/commit is what the queue exists to prevent),
+ *  so the mutex lives HERE — both surfaces call this helper as their entire
+ *  operation and no caller wraps it again (double-acquire = self-deadlock). */
 export async function checkoutRef(
   repoPath: string,
   branch: string,
   newBranch?: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const git = (await loadSimpleGit())(repoPath);
-    if (newBranch) {
-      // `git checkout -b <newBranch> <branch>` - create + switch.
-      await git.checkoutBranch(newBranch, branch);
-      log.info(`git.checkout created ${newBranch} from ${branch} in ${repoPath}`);
-    } else {
-      await git.checkout(branch);
-      log.info(`git.checkout switched to ${branch} in ${repoPath}`);
+  return runGitOp(repoPath, async () => {
+    try {
+      const git = (await loadSimpleGit())(repoPath);
+      if (newBranch) {
+        // `git checkout -b <newBranch> <branch>` - create + switch.
+        await git.checkoutBranch(newBranch, branch);
+        log.info(`git.checkout created ${newBranch} from ${branch} in ${repoPath}`);
+      } else {
+        await git.checkout(branch);
+        log.info(`git.checkout switched to ${branch} in ${repoPath}`);
+      }
+      broadcastGitChanged(repoPath);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.checkout failed for ${repoPath}: ${msg}`);
+      return { ok: false, error: msg };
     }
-    broadcastGitChanged(repoPath);
-    return { ok: true };
-  } catch (err) {
-    const msg = (err as Error).message;
-    log.warn(`git.checkout failed for ${repoPath}: ${msg}`);
-    return { ok: false, error: msg };
-  }
+  });
 }
 
 /** Delete a local branch (`git branch -d`; `-D` when `force`). Only local
  *  branches are deletable from the picker — remote rows would require pushing
  *  a ref deletion to the remote. Never throws — failures come back as
- *  `{ ok: false, error }`. */
+ *  `{ ok: false, error }`. Queued like checkoutRef (see the mutex note there). */
 export async function deleteLocalBranchForRepo(
   repoPath: string,
   branch: string,
   force?: boolean,
 ): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const git = (await loadSimpleGit())(repoPath);
-    const flag = force ? "-D" : "-d";
-    // Capture git's own message (e.g. "not fully merged") for the dialog.
-    let rawOut = "";
+  return runGitOp(repoPath, async () => {
     try {
-      rawOut = await git.raw(["branch", flag, branch]);
+      const git = (await loadSimpleGit())(repoPath);
+      const flag = force ? "-D" : "-d";
+      // Capture git's own message (e.g. "not fully merged") for the dialog.
+      let rawOut = "";
+      try {
+        rawOut = await git.raw(["branch", flag, branch]);
+      } catch (err) {
+        rawOut = (err as Error).message;
+      }
+      // simple-git's raw() can swallow non-zero exits (same lesson as the
+      // merge-base probe) — verify the ref is really gone before claiming ok.
+      const local = await git.branchLocal();
+      if (local.all.includes(branch)) {
+        const msg = rawOut.trim() || `git branch ${flag} ${branch} failed`;
+        log.warn(`git.deleteBranch failed for ${repoPath}: ${msg}`);
+        return { ok: false, error: msg };
+      }
+      log.info(`git.deleteBranch removed ${branch} in ${repoPath}`);
+      broadcastGitChanged(repoPath);
+      return { ok: true };
     } catch (err) {
-      rawOut = (err as Error).message;
-    }
-    // simple-git's raw() can swallow non-zero exits (same lesson as the
-    // merge-base probe) — verify the ref is really gone before claiming ok.
-    const local = await git.branchLocal();
-    if (local.all.includes(branch)) {
-      const msg = rawOut.trim() || `git branch ${flag} ${branch} failed`;
+      const msg = (err as Error).message;
       log.warn(`git.deleteBranch failed for ${repoPath}: ${msg}`);
       return { ok: false, error: msg };
     }
-    log.info(`git.deleteBranch removed ${branch} in ${repoPath}`);
-    broadcastGitChanged(repoPath);
-    return { ok: true };
-  } catch (err) {
-    const msg = (err as Error).message;
-    log.warn(`git.deleteBranch failed for ${repoPath}: ${msg}`);
-    return { ok: false, error: msg };
-  }
+  });
 }
 
 /** Max recursion depth for repo discovery. Keeps the scan fast on deep trees
@@ -601,6 +621,82 @@ async function mergePreview(
   };
 }
 
+/**
+ * Detect whether an error message from `git push` indicates that the branch has
+ * no configured upstream branch, or its configured upstream branch name does not
+ * match the current local branch name (e.g. initial push of a new branch, or
+ * checked out from another branch with auto-setup-merge).
+ */
+export function isUpstreamMissingOrMismatched(errMsg: string): boolean {
+  const lower = errMsg.toLowerCase();
+  return (
+    lower.includes("has no upstream branch") ||
+    lower.includes("no upstream") ||
+    lower.includes("set-upstream") ||
+    lower.includes("does not match the name of your current branch") ||
+    lower.includes("upstream branch of your current branch does not match") ||
+    lower.includes("no tracking information") ||
+    (lower.includes("upstream") && lower.includes("does not match"))
+  );
+}
+
+/**
+ * Push local commits to upstream remote. Automatically handles new branches and
+ * upstream branch mismatches by discovering the remote and retrying with
+ * `--set-upstream <remote> <currentBranch>`.
+ */
+export async function pushRepo(
+  repoPath: string,
+  opts?: { branch?: string; setUpstream?: boolean },
+): Promise<{ ok: boolean; error?: string }> {
+  if (!findContainingProject(repoPath)) {
+    return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+  }
+  try {
+    await runGitOp(repoPath, async () => {
+      const git = (await loadSimpleGit())(repoPath);
+      const remotes = await git.getRemotes();
+      const remoteName = remotes.find((r) => r.name === "origin")?.name || remotes[0]?.name || "origin";
+
+      if (opts?.setUpstream && opts?.branch) {
+        // Explicit first push requested with named branch
+        await git.push(["--set-upstream", remoteName, opts.branch]);
+        return;
+      }
+
+      try {
+        await git.push();
+      } catch (pushErr) {
+        const errMsg = (pushErr as Error).message || "";
+        // If plain push fails because the current branch has no upstream branch (e.g. initial commit),
+        // or the upstream does not match the current branch (e.g. branched from another remote branch),
+        // automatically detect the remote and retry with --set-upstream.
+        if (isUpstreamMissingOrMismatched(errMsg)) {
+          if (remotes.length > 0) {
+            const currentBranch =
+              opts?.branch || (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
+            if (currentBranch && currentBranch !== "HEAD") {
+              log.info(
+                `git.push: no upstream or upstream mismatch, retrying with --set-upstream ${remoteName} ${currentBranch}`,
+              );
+              await git.push(["--set-upstream", remoteName, currentBranch]);
+              return;
+            }
+          }
+        }
+        throw pushErr;
+      }
+    });
+    log.info(`git.push succeeded in ${repoPath}`);
+    broadcastGitChanged(repoPath);
+    return { ok: true };
+  } catch (err) {
+    const msg = (err as Error).message;
+    log.warn(`git.push failed for ${repoPath}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
 /* ───────────────────────── handler registration ───────────────────────── */
 
 export function registerGitHandlers(ipcMain: IpcMain): void {
@@ -645,9 +741,16 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { status: { branch: "", ahead: 0, behind: 0, files: [] } };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      const status = await git.status();
-      return { status: mapStatus(status) };
+      // status is QUEUED, not just because it races mutators: with submodules,
+      // `git status` opportunistically refreshes the parent index stat-cache
+      // AND each submodule's index — it needs the same index.lock commit does.
+      // Unqueued, the 10s toolbar poll collides with a concurrent add/commit
+      // inside `.git/modules/<sub>/` and kills the commit (2026-10-30).
+      return await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        const status = await git.status();
+        return { status: mapStatus(status) };
+      });
     } catch (err) {
       log.warn(`git.status failed for ${input.repoPath}: ${(err as Error).message}`);
       return { status: { branch: "", ahead: 0, behind: 0, files: [] } };
@@ -661,8 +764,10 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      await git.add(input.filePaths);
+      await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        await git.add(input.filePaths);
+      });
       broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
@@ -679,9 +784,11 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      // `git reset HEAD -- <files>` unstages without touching working tree.
-      await git.reset(input.filePaths.length > 0 ? ["--", ...input.filePaths] : []);
+      await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        // `git reset HEAD -- <files>` unstages without touching working tree.
+        await git.reset(input.filePaths.length > 0 ? ["--", ...input.filePaths] : []);
+      });
       broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
@@ -698,8 +805,10 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      await git.commit(input.message);
+      await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        await git.commit(input.message);
+      });
       log.info(`git.commit succeeded in ${input.repoPath}`);
       broadcastGitChanged(input.repoPath);
       return { ok: true };
@@ -713,54 +822,10 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
   /* ── git:push — push to upstream ── */
   ipcMain.handle(IPC.GIT_PUSH, async (_evt, raw) => {
     const input = GitPushSchema.parse(raw);
-    if (!findContainingProject(input.repoPath)) {
-      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
-    }
-    try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      if (input.setUpstream && input.branch) {
-        // First push of a new branch: plain `git push` fails with "no
-        // upstream" — the create-PR flow needs the branch on the remote first.
-        await git.push(["--set-upstream", "origin", input.branch]);
-      } else {
-        try {
-          await git.push();
-        } catch (pushErr) {
-          const errMsg = (pushErr as Error).message || "";
-          // If plain push fails because the current branch has no upstream branch (e.g. initial commit),
-          // automatically detect the remote and retry with --set-upstream.
-          if (
-            errMsg.includes("has no upstream branch") ||
-            errMsg.includes("no upstream") ||
-            errMsg.includes("set-upstream")
-          ) {
-            const remotes = await git.getRemotes();
-            if (remotes.length > 0) {
-              const remoteName = remotes.find((r) => r.name === "origin")?.name || remotes[0].name;
-              const currentBranch =
-                input.branch || (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
-              if (currentBranch && currentBranch !== "HEAD") {
-                log.info(`git.push: no upstream, retrying with --set-upstream ${remoteName} ${currentBranch}`);
-                await git.push(["--set-upstream", remoteName, currentBranch]);
-              } else {
-                throw pushErr;
-              }
-            } else {
-              throw pushErr;
-            }
-          } else {
-            throw pushErr;
-          }
-        }
-      }
-      log.info(`git.push succeeded in ${input.repoPath}`);
-      broadcastGitChanged(input.repoPath);
-      return { ok: true };
-    } catch (err) {
-      const msg = (err as Error).message;
-      log.warn(`git.push failed for ${input.repoPath}: ${msg}`);
-      return { ok: false, error: msg };
-    }
+    return pushRepo(input.repoPath, {
+      branch: input.branch,
+      setUpstream: input.setUpstream,
+    });
   });
 
   /* ── git:pull — pull from upstream ── */
@@ -770,37 +835,42 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      // `git.pull()` resolves a merge conflict by throwing, OR (for some merge
-      // strategies) returns with the working tree left in a conflicted state.
-      // We re-check `git.status().conflicted` so both paths are reported.
-      try {
-        await git.pull();
-      } catch (pullErr) {
-        // A conflict during merge surfaces as an error here. Inspect status to
-        // decide whether this is a conflict (ok:true + conflict flag, so the UI
-        // can offer AI resolution) vs. a genuine failure (ok:false).
+      const res = await runGitOp(input.repoPath, async (): Promise<{
+        ok: true;
+        conflict?: boolean;
+        conflictedFiles?: string[];
+      }> => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        // `git.pull()` resolves a merge conflict by throwing, OR (for some merge
+        // strategies) returns with the working tree left in a conflicted state.
+        // We re-check `git.status().conflicted` so both paths are reported.
+        try {
+          await git.pull();
+        } catch (pullErr) {
+          // A conflict during merge surfaces as an error here. Inspect status to
+          // decide whether this is a conflict (ok:true + conflict flag, so the UI
+          // can offer AI resolution) vs. a genuine failure (ok:false).
+          const st = await git.status().catch(() => null);
+          const conflicted = st?.conflicted ?? [];
+          if (conflicted.length > 0) {
+            log.warn(`git.pull produced ${conflicted.length} conflict(s) in ${input.repoPath}`);
+            return { ok: true, conflict: true, conflictedFiles: conflicted };
+          }
+          throw pullErr;
+        }
+        // Pull succeeded without throwing — still verify there's no lingering
+        // conflicted state (some auto-merge strategies leave markers silently).
         const st = await git.status().catch(() => null);
         const conflicted = st?.conflicted ?? [];
         if (conflicted.length > 0) {
-          log.warn(`git.pull produced ${conflicted.length} conflict(s) in ${input.repoPath}`);
-          broadcastGitChanged(input.repoPath);
+          log.warn(`git.pull left ${conflicted.length} conflict(s) in ${input.repoPath}`);
           return { ok: true, conflict: true, conflictedFiles: conflicted };
         }
-        throw pullErr;
-      }
-      // Pull succeeded without throwing — still verify there's no lingering
-      // conflicted state (some auto-merge strategies leave markers silently).
-      const st = await git.status().catch(() => null);
-      const conflicted = st?.conflicted ?? [];
-      if (conflicted.length > 0) {
-        log.warn(`git.pull left ${conflicted.length} conflict(s) in ${input.repoPath}`);
-        broadcastGitChanged(input.repoPath);
-        return { ok: true, conflict: true, conflictedFiles: conflicted };
-      }
-      log.info(`git.pull succeeded in ${input.repoPath}`);
+        log.info(`git.pull succeeded in ${input.repoPath}`);
+        return { ok: true };
+      });
       broadcastGitChanged(input.repoPath);
-      return { ok: true };
+      return res;
     } catch (err) {
       const msg = (err as Error).message;
       log.warn(`git.pull failed for ${input.repoPath}: ${msg}`);
@@ -856,27 +926,29 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      // Separate tracked (modified/staged/deleted) from untracked files:
-      // tracked → git checkout -- <file> (restore to index)
-      // untracked → git clean -f -- <file> (remove)
-      const status = await git.status();
-      const untrackedSet = new Set(
-        status.files.filter((f) => f.working_dir === "?" || f.index === "?").map((f) => f.path),
-      );
-      const tracked: string[] = [];
-      const untracked: string[] = [];
-      for (const fp of input.filePaths) {
-        if (untrackedSet.has(fp)) untracked.push(fp);
-        else tracked.push(fp);
-      }
-      if (tracked.length > 0) {
-        await git.checkout(["--", ...tracked]);
-      }
-      if (untracked.length > 0) {
-        await git.clean("f", ["-d", "--", ...untracked]);
-      }
-      log.info(`git.discard succeeded in ${input.repoPath} (${tracked.length} tracked, ${untracked.length} untracked)`);
+      await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        // Separate tracked (modified/staged/deleted) from untracked files:
+        // tracked → git checkout -- <file> (restore to index)
+        // untracked → git clean -f -- <file> (remove)
+        const status = await git.status();
+        const untrackedSet = new Set(
+          status.files.filter((f) => f.working_dir === "?" || f.index === "?").map((f) => f.path),
+        );
+        const tracked: string[] = [];
+        const untracked: string[] = [];
+        for (const fp of input.filePaths) {
+          if (untrackedSet.has(fp)) untracked.push(fp);
+          else tracked.push(fp);
+        }
+        if (tracked.length > 0) {
+          await git.checkout(["--", ...tracked]);
+        }
+        if (untracked.length > 0) {
+          await git.clean("f", ["-d", "--", ...untracked]);
+        }
+        log.info(`git.discard succeeded in ${input.repoPath} (${tracked.length} tracked, ${untracked.length} untracked)`);
+      });
       broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
@@ -1045,63 +1117,72 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
+      return await runGitOp(input.repoPath, async (): Promise<{
+        ok: boolean;
+        error?: string;
+        upToDate?: boolean;
+        conflict?: boolean;
+        conflictedFiles?: string[];
+        fastForward?: boolean;
+      }> => {
+        const git = (await loadSimpleGit())(input.repoPath);
 
-      // Refuse when a merge is already in flight — a second `git merge` with
-      // MERGE_HEAD present would fail confusingly or nest state.
-      if (await mergeInProgress(git)) {
-        log.warn(`git.merge refused - merge already in progress in ${input.repoPath}`);
-        return { ok: false, error: "已有进行中的合并,请先解决冲突或放弃本次合并" };
-      }
+        // Refuse when a merge is already in flight — a second `git merge` with
+        // MERGE_HEAD present would fail confusingly or nest state.
+        if (await mergeInProgress(git)) {
+          log.warn(`git.merge refused - merge already in progress in ${input.repoPath}`);
+          return { ok: false, error: "已有进行中的合并,请先解决冲突或放弃本次合并" };
+        }
 
-      // No-op guard: HEAD already contains everything `source` has. Skipped by
-      // the UI in the common path (it previews first), but the merge must stay
-      // side-effect-free if invoked directly.
-      const preview = await mergePreview(git, input.source);
-      if (!preview.ok) {
-        return { ok: false, error: preview.error };
-      }
-      if (preview.upToDate) {
-        log.info(`git.merge no-op (already up to date) in ${input.repoPath}`);
-        return { ok: true, upToDate: true };
-      }
+        // No-op guard: HEAD already contains everything `source` has. Skipped by
+        // the UI in the common path (it previews first), but the merge must stay
+        // side-effect-free if invoked directly.
+        const preview = await mergePreview(git, input.source);
+        if (!preview.ok) {
+          return { ok: false, error: preview.error };
+        }
+        if (preview.upToDate) {
+          log.info(`git.merge no-op (already up to date) in ${input.repoPath}`);
+          return { ok: true, upToDate: true };
+        }
 
-      const sourceTip = (await git.revparse([input.source])).trim();
-      try {
-        // --no-edit keeps git from trying to open an editor for the merge
-        // commit message (there is no TTY here); it uses the default
-        // "Merge branch 'x'" message.
-        await git.raw(["merge", "--no-edit", input.source]);
-      } catch (mergeErr) {
-        // A merge conflict surfaces as a non-zero exit. Inspect status to tell
-        // a conflict (ok:true + conflict flag, so the UI can offer AI
-        // resolution / abort) apart from a genuine failure (ok:false).
+        const sourceTip = (await git.revparse([input.source])).trim();
+        try {
+          // --no-edit keeps git from trying to open an editor for the merge
+          // commit message (there is no TTY here); it uses the default
+          // "Merge branch 'x'" message.
+          await git.raw(["merge", "--no-edit", input.source]);
+        } catch (mergeErr) {
+          // A merge conflict surfaces as a non-zero exit. Inspect status to tell
+          // a conflict (ok:true + conflict flag, so the UI can offer AI
+          // resolution / abort) apart from a genuine failure (ok:false).
+          const st = await git.status().catch(() => null);
+          const conflicted = st?.conflicted ?? [];
+          if (conflicted.length > 0) {
+            log.warn(`git.merge produced ${conflicted.length} conflict(s) in ${input.repoPath}`);
+            return { ok: true, conflict: true, conflictedFiles: conflicted };
+          }
+          throw mergeErr;
+        }
+        // Merge exited cleanly — still verify no silent conflicted state remains
+        // (same double-check the pull handler does).
         const st = await git.status().catch(() => null);
         const conflicted = st?.conflicted ?? [];
         if (conflicted.length > 0) {
-          log.warn(`git.merge produced ${conflicted.length} conflict(s) in ${input.repoPath}`);
-          broadcastGitChanged(input.repoPath);
+          log.warn(`git.merge left ${conflicted.length} conflict(s) in ${input.repoPath}`);
           return { ok: true, conflict: true, conflictedFiles: conflicted };
         }
-        throw mergeErr;
-      }
-      // Merge exited cleanly — still verify no silent conflicted state remains
-      // (same double-check the pull handler does).
-      const st = await git.status().catch(() => null);
-      const conflicted = st?.conflicted ?? [];
-      if (conflicted.length > 0) {
-        log.warn(`git.merge left ${conflicted.length} conflict(s) in ${input.repoPath}`);
-        broadcastGitChanged(input.repoPath);
-        return { ok: true, conflict: true, conflictedFiles: conflicted };
-      }
-      // Fast-forward ⟺ HEAD now sits exactly on `source`'s tip (no merge
-      // commit was created). Comparing hashes is exact even when the tip
-      // itself is a merge commit.
-      const headAfter = (await git.revparse(["HEAD"])).trim();
-      const fastForward = headAfter === sourceTip;
-      log.info(`git.merge succeeded in ${input.repoPath} (${fastForward ? "fast-forward" : "merge commit"})`);
-      broadcastGitChanged(input.repoPath);
-      return { ok: true, fastForward };
+        // Fast-forward ⟺ HEAD now sits exactly on `source`'s tip (no merge
+        // commit was created). Comparing hashes is exact even when the tip
+        // itself is a merge commit.
+        const headAfter = (await git.revparse(["HEAD"])).trim();
+        const fastForward = headAfter === sourceTip;
+        log.info(`git.merge succeeded in ${input.repoPath} (${fastForward ? "fast-forward" : "merge commit"})`);
+        return { ok: true, fastForward };
+      }).then((res) => {
+        if (res.ok !== false) broadcastGitChanged(input.repoPath);
+        return res;
+      });
     } catch (err) {
       const msg = (err as Error).message;
       log.warn(`git.merge failed for ${input.repoPath}: ${msg}`);
@@ -1116,14 +1197,18 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      if (!(await mergeInProgress(git))) {
-        return { ok: false, error: "当前没有进行中的合并" };
-      }
-      await git.raw(["merge", "--abort"]);
-      log.info(`git.mergeAbort succeeded in ${input.repoPath}`);
-      broadcastGitChanged(input.repoPath);
-      return { ok: true };
+      return await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        if (!(await mergeInProgress(git))) {
+          return { ok: false as const, error: "当前没有进行中的合并" };
+        }
+        await git.raw(["merge", "--abort"]);
+        log.info(`git.mergeAbort succeeded in ${input.repoPath}`);
+        return { ok: true as const };
+      }).then((res) => {
+        if (res.ok) broadcastGitChanged(input.repoPath);
+        return res;
+      });
     } catch (err) {
       const msg = (err as Error).message;
       log.warn(`git.mergeAbort failed for ${input.repoPath}: ${msg}`);
@@ -1169,9 +1254,13 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     if (!findContainingProject(input.repoPath)) {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
-    const res = await mergeBackWorktree(input.repoPath, input.worktreePath, {
-      message: input.message,
-    });
+    // mergeBackWorktree commits into the MAIN repo — queue it against the
+    // panel's status/commit traffic like any other mutating op.
+    const res = await runGitOp(input.repoPath, () =>
+      mergeBackWorktree(input.repoPath, input.worktreePath, {
+        message: input.message,
+      }),
+    );
     if (res.ok) broadcastGitChanged(input.repoPath);
     return res;
   });
@@ -1181,10 +1270,13 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     if (!findContainingProject(input.repoPath)) {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
-    const res = await removeWorktree(input.repoPath, input.worktreePath, {
-      force: input.force,
-      exportPatch: input.exportPatch,
-    });
+    // removeWorktree prunes the main repo's worktree admin files — queued too.
+    const res = await runGitOp(input.repoPath, () =>
+      removeWorktree(input.repoPath, input.worktreePath, {
+        force: input.force,
+        exportPatch: input.exportPatch,
+      }),
+    );
     if (res.ok) broadcastGitChanged(input.repoPath);
     return res;
   });

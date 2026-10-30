@@ -33,12 +33,14 @@ import {
   cancelCommitMessageGeneration,
   listBranchesForRepo,
   checkoutRef,
+  pushRepo,
   MAX_SCAN_DEPTH,
 } from "@main/ipc/git.js";
 import { registerMobileRpcHandlers, type RpcHandler } from "./mobileRpc.js";
 import { broadcastGitChanged } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
 import { isKnownWorkspaceRoot } from "@main/lib/pathGuard.js";
+import { runGitOp } from "@main/lib/gitQueue.js";
 
 const REFUSE = "仓库路径不在任何已添加的项目内";
 
@@ -75,9 +77,13 @@ const handlers: Record<string, RpcHandler> = {
       return { status: { branch: "", ahead: 0, behind: 0, files: [] } };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      const status = await git.status();
-      return { status: mapStatus(status) };
+      // Queued like the desktop handler — status shares the submodule
+      // index.lock a concurrent commit needs (see ipc/git.ts header note).
+      return await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        const status = await git.status();
+        return { status: mapStatus(status) };
+      });
     } catch (err) {
       log.warn(`mobile git.status failed for ${input.repoPath}: ${(err as Error).message}`);
       return { status: { branch: "", ahead: 0, behind: 0, files: [] } };
@@ -102,8 +108,10 @@ const handlers: Record<string, RpcHandler> = {
     const input = GitStageSchema.parse(raw);
     if (!findContainingProject(input.repoPath)) return { ok: false, error: REFUSE };
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      await git.add(input.filePaths);
+      await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        await git.add(input.filePaths);
+      });
       broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
@@ -115,8 +123,10 @@ const handlers: Record<string, RpcHandler> = {
     const input = GitUnstageSchema.parse(raw);
     if (!findContainingProject(input.repoPath)) return { ok: false, error: REFUSE };
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      await git.reset(input.filePaths.length > 0 ? ["--", ...input.filePaths] : []);
+      await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        await git.reset(input.filePaths.length > 0 ? ["--", ...input.filePaths] : []);
+      });
       broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
@@ -128,8 +138,10 @@ const handlers: Record<string, RpcHandler> = {
     const input = GitCommitSchema.parse(raw);
     if (!findContainingProject(input.repoPath)) return { ok: false, error: REFUSE };
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      await git.commit(input.message);
+      await runGitOp(input.repoPath, async () => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        await git.commit(input.message);
+      });
       broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
@@ -139,41 +151,38 @@ const handlers: Record<string, RpcHandler> = {
 
   "git:push": async (raw) => {
     const input = GitRepoPathSchema.parse(raw);
-    if (!findContainingProject(input.repoPath)) return { ok: false, error: REFUSE };
-    try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      await git.push();
-      broadcastGitChanged(input.repoPath);
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: (err as Error).message };
-    }
+    return pushRepo(input.repoPath);
   },
 
   "git:pull": async (raw) => {
     const input = GitRepoPathSchema.parse(raw);
     if (!findContainingProject(input.repoPath)) return { ok: false, error: REFUSE };
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      try {
-        await git.pull();
-      } catch (pullErr) {
+      const res = await runGitOp(input.repoPath, async (): Promise<{
+        ok: true;
+        conflict?: boolean;
+        conflictedFiles?: string[];
+      }> => {
+        const git = (await loadSimpleGit())(input.repoPath);
+        try {
+          await git.pull();
+        } catch (pullErr) {
+          const st = await git.status().catch(() => null);
+          const conflicted = st?.conflicted ?? [];
+          if (conflicted.length > 0) {
+            return { ok: true, conflict: true, conflictedFiles: conflicted };
+          }
+          throw pullErr;
+        }
         const st = await git.status().catch(() => null);
         const conflicted = st?.conflicted ?? [];
         if (conflicted.length > 0) {
-          broadcastGitChanged(input.repoPath);
           return { ok: true, conflict: true, conflictedFiles: conflicted };
         }
-        throw pullErr;
-      }
-      const st = await git.status().catch(() => null);
-      const conflicted = st?.conflicted ?? [];
-      if (conflicted.length > 0) {
-        broadcastGitChanged(input.repoPath);
-        return { ok: true, conflict: true, conflictedFiles: conflicted };
-      }
+        return { ok: true };
+      });
       broadcastGitChanged(input.repoPath);
-      return { ok: true };
+      return res;
     } catch (err) {
       return { ok: false, error: (err as Error).message };
     }

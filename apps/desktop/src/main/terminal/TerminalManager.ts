@@ -53,6 +53,9 @@ interface LiveTerminal {
   id: string;
   pty: IPty;
   info: TerminalInfo;
+  outputBuffer: string[];
+  bufferedChars: number;
+  flushTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /** Lazy-load node-pty so a missing native binary doesn't crash app boot —
@@ -111,6 +114,15 @@ function ensureSpawnHelperExecutable(): void {
  *  PowerShell profile/prompt paint on cold start, short enough to feel
  *  instant. */
 const INIT_COMMAND_SETTLE_MS = 300;
+
+/** Batching window for forwarding PTY output over IPC to renderer (~60 FPS).
+ *  Collapses high-throughput streams (e.g. build logs, find/cat bursts) so
+ *  the IPC channel and xterm render engine aren't flooded by micro-chunks. */
+const TERMINAL_OUTPUT_FLUSH_INTERVAL_MS = 16;
+
+/** Max characters buffered before forcing an immediate IPC flush, ensuring
+ *  both high throughput and bounded latency during massive bursts. */
+const TERMINAL_OUTPUT_MAX_BUFFERED_CHARS = 65536;
 
 class TerminalManagerImpl {
   private readonly terminals = new Map<string, LiveTerminal>();
@@ -204,7 +216,14 @@ class TerminalManagerImpl {
       projectPath: opts.projectPath,
     };
 
-    const live: LiveTerminal = { id, pty, info };
+    const live: LiveTerminal = {
+      id,
+      pty,
+      info,
+      outputBuffer: [],
+      bufferedChars: 0,
+      flushTimer: null,
+    };
     this.terminals.set(id, live);
 
     let initInjected = false;
@@ -231,14 +250,23 @@ class TerminalManagerImpl {
       }
       // Drop if already removed (race with kill/exit).
       if (!this.terminals.has(id)) return;
-      sendToRenderer(IPC.TERMINAL_DATA, {
-        channel: IPC.TERMINAL_DATA,
-        terminalId: id,
-        data,
-      });
+
+      live.outputBuffer.push(data);
+      live.bufferedChars += data.length;
+      if (live.bufferedChars >= TERMINAL_OUTPUT_MAX_BUFFERED_CHARS) {
+        this.flushOutput(live);
+      } else if (!live.flushTimer) {
+        live.flushTimer = setTimeout(() => {
+          if (this.terminals.has(id)) {
+            this.flushOutput(live);
+          }
+        }, TERMINAL_OUTPUT_FLUSH_INTERVAL_MS);
+      }
     });
 
     pty.onExit(({ exitCode }) => {
+      // Flush any lingering buffered output before notifying renderer of exit.
+      this.flushOutput(live);
       // onExit may fire after kill() already deleted the entry — still notify
       // renderer so UI can flip to "exited" if it hasn't already.
       this.terminals.delete(id);
@@ -258,6 +286,22 @@ class TerminalManagerImpl {
       cwd: opts.cwd,
       shell: resolved.label,
     };
+  }
+
+  private flushOutput(live: LiveTerminal): void {
+    if (live.flushTimer) {
+      clearTimeout(live.flushTimer);
+      live.flushTimer = null;
+    }
+    if (live.outputBuffer.length === 0) return;
+    const data = live.outputBuffer.join("");
+    live.outputBuffer = [];
+    live.bufferedChars = 0;
+    sendToRenderer(IPC.TERMINAL_DATA, {
+      channel: IPC.TERMINAL_DATA,
+      terminalId: live.id,
+      data,
+    });
   }
 
   write(terminalId: string, data: string): boolean {
@@ -287,6 +331,7 @@ class TerminalManagerImpl {
   kill(terminalId: string): boolean {
     const live = this.terminals.get(terminalId);
     if (!live) return false;
+    this.flushOutput(live);
     this.terminals.delete(terminalId);
     try {
       live.pty.kill();

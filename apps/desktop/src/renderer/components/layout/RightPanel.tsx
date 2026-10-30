@@ -14,6 +14,8 @@ import {
   IconCheck,
   IconTerminal2,
   IconBrandGithub,
+  IconMaximize,
+  IconMinimize,
 } from "@renderer/lib/icons.js";
 import { useSessionStore, type SessionRightPanelTabId } from "@renderer/stores/sessionStore.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
@@ -67,6 +69,8 @@ export function RightPanel() {
   const { t } = useI18n();
   const sessionId = useSessionStore((s) => s.activeSessionId);
   const rightOpen = useSessionStore((s) => s.rightOpen);
+  const rightPanelMaximized = useSessionStore((s) => s.rightPanelMaximized);
+  const toggleRightPanelMaximized = useSessionStore((s) => s.toggleRightPanelMaximized);
   const globalTab = useSessionStore((s) => s.rightPanelTab);
   // This session's session-scoped tabs (open set + which one is showing).
   const sessionTabs = useSessionStore((s) => (sessionId ? s.sessionRightTabsBySession[sessionId] : undefined));
@@ -247,9 +251,26 @@ export function RightPanel() {
             </RailButton>
           );
         })}
-        {/* Right end: the "+" menu that opens the session-scoped tabs.
+        {/* Right end: maximize toggle + the "+" menu that opens the session-scoped tabs.
             Pushed to the rail's far right with ml-auto. */}
         <div className="ml-auto flex items-center gap-1">
+          <button
+            type="button"
+            onClick={toggleRightPanelMaximized}
+            className={cn(
+              "flex h-7 w-7 items-center justify-center rounded-md outline-none transition-colors",
+              "text-content-muted hover:bg-surface-hover hover:text-content",
+              rightPanelMaximized && "text-accent bg-surface-hover",
+            )}
+            title={rightPanelMaximized ? t("layout.rightPanelRestore") : t("layout.rightPanelMaximize")}
+            aria-label={rightPanelMaximized ? t("layout.rightPanelRestore") : t("layout.rightPanelMaximize")}
+          >
+            {rightPanelMaximized ? (
+              <IconMinimize size={16} className="shrink-0" />
+            ) : (
+              <IconMaximize size={16} className="shrink-0" />
+            )}
+          </button>
           <Menu.Root open={addOpen} onOpenChange={setAddOpen}>
             <Menu.Trigger
               className={cn(

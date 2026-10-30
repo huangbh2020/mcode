@@ -20,6 +20,8 @@ interface Props {
    *  Optional — SettingsPage reuses this shell without drag handles. */
   leftWidth?: number;
   rightWidth?: number;
+  /** Right panel is maximized to fill the workspace below titlebar. */
+  rightMaximized?: boolean;
   /** Wide-panel mode: the right panel's share as a percentage of the layout
    *  row. When set it overrides rightWidth — wide mode keeps the SAME
    *  RightPanel instance in this aside (no unmount/remount) and only
@@ -75,6 +77,7 @@ export function ThreePaneLayout({
   bottomTerminalOpen = false,
   leftWidth,
   rightWidth,
+  rightMaximized = false,
   rightWidthPct,
   rightPeekDrawer = false,
   rightPeekArmed,
@@ -125,7 +128,12 @@ export function ThreePaneLayout({
          behind the arc. Non-scrolling overflow-hidden is xterm-safe (see the
          note on the right sidebar).
          Stacks the center content above an optional bottom terminal bar. */}
-      <main className="relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden rounded-tl-2xl rounded-bl-2xl border-t border-edge-panel bg-surface">
+      <main
+        className={cn(
+          "relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden rounded-tl-2xl rounded-bl-2xl border-t border-edge-panel bg-surface",
+          rightMaximized && "hidden",
+        )}
+      >
 
         <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
         {/* Bottom terminal bar — keep-alive: always rendered, height collapses
@@ -154,7 +162,7 @@ export function ThreePaneLayout({
         )}
       </main>
 
-      {rightOpen && onResizeRight && (
+      {rightOpen && !rightMaximized && onResizeRight && (
         <Divider
           orientation="vertical"
           onResize={onResizeRight}
@@ -208,15 +216,22 @@ export function ThreePaneLayout({
               : cn(
                   "border-t border-edge-panel",
                   !rightOpen && "hidden",
+                  rightMaximized && "w-full flex-1",
                   !isDraggingRight && "transition-[width] duration-200 ease-out",
                 ),
           )}
-          style={{ width: rightWidthPct !== undefined ? `${rightWidthPct}%` : rightWidth }}
+          style={{
+            width: rightMaximized
+              ? "100%"
+              : rightWidthPct !== undefined
+                ? `${rightWidthPct}%`
+                : rightWidth,
+          }}
         >
           <div
             className={cn(
               "min-h-0 flex-1 overflow-hidden",
-              !rightPeekDrawer && "border-l border-edge-panel",
+              !rightPeekDrawer && !rightMaximized && "border-l border-edge-panel",
             )}
           >
             {right}

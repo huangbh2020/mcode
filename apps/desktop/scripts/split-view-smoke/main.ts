@@ -15,6 +15,13 @@
  *    single view and persists [].
  * 3. setDisplayMode("tabs") clears the arrangement; addToSplit arriving
  *    from tabs mode switches to single first.
+ * 3b. tabs-mode dissolve handoff — closing the ROOT pane of a 2-member
+ *    group dissolves onto the surviving member and must PROMOTE it to a
+ *    tab (members never join the strip; a bare selectSession leaves
+ *    activeSessionId pointing at a session with no mounted surface — the
+ *    blank-center regression). A living grid never promotes. A tab that is
+ *    also a grid member leaves the grid when its tab closes (no ghost
+ *    pane). Deleting the root takes the same promotion (sync reducer).
  * 4. openSessionFromSidebar — split member click = focus; non-member click
  *    REPLACES the focused pane's slot (VS Code active-group semantics).
  * 5. Unread gating — a question.ask for a split member is on-screen (no
@@ -269,6 +276,48 @@ async function main(): Promise<void> {
   await useSessionStore.getState().removeFromSplit("A");
   check("root close dissolves the group", useSessionStore.getState().splitGroupsBySession["A"] === undefined);
   check("dissolve lands focus on the survivor", useSessionStore.getState().activeSessionId === "D");
+  // The surviving member is NOT a tab (split members never join the strip) —
+  // a bare selectSession would leave activeSessionId pointing at a session
+  // with no open tab and no mounted surface (blank center — the "closing a
+  // split pane white-screens" regression). It must be promoted to a tab.
+  check(
+    "dissolved survivor promoted to a tab (mountable surface)",
+    useSessionStore.getState().openTabs.includes("D"),
+  );
+  check("promotion keeps tabs mode", useSessionStore.getState().displayMode === "tabs");
+  // While the grid LIVES, closing a pane must NOT promote its successor to a
+  // tab — members stay panes.
+  seed([A, B, C, D], "A");
+  await useSessionStore.getState().setDisplayMode("tabs");
+  await useSessionStore.getState().addToSplit("B");
+  await useSessionStore.getState().addToSplit("C");
+  await useSessionStore.getState().removeFromSplit("C");
+  check("living grid keeps the survivor a pane (no tab)", !useSessionStore.getState().openTabs.includes("B"));
+  eq("living grid membership intact", useSessionStore.getState().splitGroupsBySession["A"], ["A", "B"]);
+  // A tab that also sits as a member of another tab's grid (it was a tab
+  // before being dragged in) leaves the grid when its tab is closed — no
+  // ghost pane for a closed tab.
+  seed([A, B, C], "A");
+  await useSessionStore.getState().setDisplayMode("tabs");
+  await useSessionStore.getState().openTab("C");
+  await useSessionStore.getState().selectSession("A");
+  await useSessionStore.getState().addToSplit("B");
+  await useSessionStore.getState().addToSplit("C");
+  check("C kept its tab on joining the grid", useSessionStore.getState().openTabs.includes("C"));
+  eq("grid now three panes", useSessionStore.getState().splitGroupsBySession["A"], ["A", "B", "C"]);
+  useSessionStore.getState().closeTab("C");
+  eq("tab close scrubs the member from the grid", useSessionStore.getState().splitGroupsBySession["A"], ["A", "B"]);
+  // Deleting the ROOT of a 2-member group hands focus to the surviving
+  // member — and must promote it to a tab (same blank-center hazard as the
+  // pane-close dissolve; the delete path is a sync reducer).
+  seed([A, B], "A");
+  await useSessionStore.getState().setDisplayMode("tabs");
+  await useSessionStore.getState().addToSplit("B");
+  await useSessionStore.getState().selectSession("A");
+  await useSessionStore.getState().deleteSession("A");
+  check("root delete dissolves onto the member", useSessionStore.getState().splitGroupsBySession["A"] === undefined);
+  check("member focused after root delete", useSessionStore.getState().activeSessionId === "B");
+  check("member promoted to a tab after root delete", useSessionStore.getState().openTabs.includes("B"));
   // Closing the tab itself removes its group with it.
   seed([A, B, C], "A");
   await useSessionStore.getState().setDisplayMode("tabs");

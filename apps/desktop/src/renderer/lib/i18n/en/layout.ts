@@ -172,6 +172,8 @@ export const en = {
   /* ── side chat (right-panel ask tab) ── */
   "layout.tabSideChat": "Sub-sessions",
   "layout.rightPanelAddTab": "Add panel",
+  "layout.rightPanelMaximize": "Maximize panel",
+  "layout.rightPanelRestore": "Restore panel",
   "layout.rightPanelCloseTab": "Close panel",
   "layout.rightPanelSessionHint": "Panels follow the active session",
   "sideChat.open": "Open sub-sessions (won't interrupt the running session)",
