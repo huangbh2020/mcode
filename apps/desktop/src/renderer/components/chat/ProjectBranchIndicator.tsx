@@ -209,7 +209,9 @@ export function ProjectBranchIndicator({
             )}
             title={t("chat.branch.switchTitle")}
           >
-            <IconGitBranch size={12} className="shrink-0 text-accent" />
+            {/* Neutral icon: green is reserved for attention signals in the
+                chrome — the branch name itself is identity, not a warning. */}
+            <IconGitBranch size={12} className="shrink-0 text-content-muted" />
             <span className="max-w-[140px] truncate font-medium text-content">
               {status?.branch || "HEAD"}
             </span>

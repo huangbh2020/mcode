@@ -310,7 +310,7 @@ export function ToolbarGitCommit() {
   return (
     <div
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-      className="inline-flex h-7 shrink-0 items-center rounded-lg border border-edge/80 bg-surface px-1 py-0.5 shadow-xs transition-all hover:border-accent/40 hover:shadow-sm"
+      className="inline-flex h-7 shrink-0 items-center rounded-lg border border-edge/80 bg-surface px-1 py-0.5 shadow-xs transition-all hover:border-edge hover:shadow-sm"
     >
       {/* Left segment: Branch button */}
       <ProjectBranchIndicator
@@ -325,13 +325,16 @@ export function ToolbarGitCommit() {
       {/* Hairline divider */}
       <div className="mx-1 h-3.5 w-[1px] shrink-0 bg-edge/70" />
 
-      {/* Right segment: Change-count or Clean status trigger */}
+      {/* Right segment: Change-count or Clean status trigger. The +/-/~ counts
+          carry the semantic success/danger colors (deliberately NOT accent —
+          see tokens); the trigger chrome itself stays neutral so the titlebar's
+          green budget is spent only on attention signals. */}
       <Popover.Root open={open} onOpenChange={setOpen}>
         <Popover.Trigger
           className={cn(
             "flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[11px] tabular-nums transition-all select-none cursor-pointer active:scale-[0.98]",
             totalChanges > 0
-              ? "bg-accent/5 hover:bg-accent/15 text-content hover:text-content"
+              ? "bg-surface-hover/60 hover:bg-surface-hover text-content hover:text-content"
               : "text-content-muted hover:bg-surface-hover/80 hover:text-content",
           )}
           title={
@@ -346,7 +349,7 @@ export function ToolbarGitCommit() {
         >
           {totalChanges > 0 ? (
             <div className="flex items-center gap-1.5">
-              <IconGitCommit size={12} className="text-accent shrink-0" />
+              <IconGitCommit size={12} className="text-content-muted shrink-0" />
               <div className="flex items-center gap-1">
                 {counts.added > 0 && (
                   <span className="font-semibold text-success">+{counts.added}</span>

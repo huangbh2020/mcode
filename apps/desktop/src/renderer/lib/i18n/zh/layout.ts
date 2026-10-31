@@ -138,6 +138,11 @@ export const zh = {
   "layout.showEditor": "显示编辑器",
   "layout.hideEditor": "隐藏编辑器",
   "layout.noOpenFiles": "无打开的文件",
+  // 标题栏内嵌标签条(single-row merge 后 UnifiedTabsBar 挂在 Titlebar 里)
+  "layout.tabStripAria": "会话与编辑器标签",
+  "layout.tabUnknownSession": "(未知会话)",
+  "layout.closeTab": "关闭标签页",
+  "layout.showAllTabs": "显示全部标签",
   "layout.tabFiles": "文件",
   "layout.tabGithub": "GitHub PR/议题",
   "layout.tabTerminal": "终端",

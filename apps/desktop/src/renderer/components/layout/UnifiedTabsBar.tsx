@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState , useMemo } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState , useMemo } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -11,15 +11,25 @@ import {
 import {
   SortableContext,
   horizontalListSortingStrategy,
-  rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import { basename } from "@renderer/lib/path.js";
 import { cn } from "@renderer/lib/cn.js";
-import { IconClipboard, IconX, IconLayoutSidebarRight } from "@renderer/lib/icons.js";
+import {
+  IconChevronRight,
+  IconClipboard,
+  IconLayoutColumns,
+  IconLayoutSidebarRight,
+  IconStack2,
+  IconX,
+} from "@renderer/lib/icons.js";
+import { Menu } from "@base-ui/react/menu";
+import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
 import { TabBarChevronButton, TabBarOverflowMenu } from "./TabBarChrome.js";
 import { SortableSessionTab, findSession } from "./SessionTabs.js";
 import {
+  MENU_ITEM_CLASS,
+  MENU_POPUP_CLASS,
   PLAN_TAB_KEY,
   SortableFileTab,
   FileTabContextMenu,
@@ -32,24 +42,35 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
  *  Object.is rule — a new [] every render causes an infinite loop). */
 const EMPTY_OPEN_FILES: string[] = [];
 
-/** The unified center tab bar (`tabs` displayMode): ONE strip holding the
- *  open session tabs AND the editor's file tabs (+ the per-session plan
- *  pseudo-tab) side by side. Both kinds share the same chip style; a
- *  vertical divider separates the session group from the editor group (plus
- *  the provider icon vs file-type icon as a secondary cue). Clicking a
- *  session tab
- *  shows that session's chat full-width; clicking a file / plan tab shows
- *  the editor full-width (the `centerTabFocus` store flag — see
- *  UnifiedTabbedPane in App.tsx). This replaces the split
- *  chat-column|editor-column layout used in `single` mode and gives
- *  whichever view is active the whole center width.
+/** The unified tab strip: ONE row holding the open session tabs AND the
+ *  editor's file tabs (+ the per-session plan pseudo-tab) side by side. Both
+ *  kinds share the same chip style; a vertical divider separates the session
+ *  group from the editor group (plus the provider icon vs file-type icon as
+ *  a secondary cue). Clicking a session tab shows that session's chat
+ *  full-width; clicking a file / plan tab shows the editor full-width (the
+ *  `centerTabFocus` store flag — see UnifiedTabbedPane in App.tsx).
  *
- *  Interaction model mirrors SessionTabs / OpenTabsBar (VS Code /
- *  browser-style): drag to reorder (within the same kind — a session can't
- *  be dropped among files and vice versa), chevrons + wheel scroll on
- *  overflow, a `⋯` overflow menu listing every tab, middle-click close.
- *  File tabs additionally keep their right-click context menu and dirty
- *  dots; session tabs keep their running spinners and unread badges. */
+ *  EMBEDDED IN THE TITLEBAR (2026-10-31): this is no longer a standalone
+ *  strip below the titlebar — it renders as the flexible middle region of
+ *  the single-row titlebar (Titlebar.tsx), so the bar is 40px total and the
+ *  session title appears exactly once (on its tab). Consequences:
+ *   - No strip chrome of its own (no bg/border — the titlebar provides it).
+ *   - Single-row ONLY: the 40px titlebar cannot grow for the multi-row wrap
+ *     (the native overlay controls would misalign), so `tabBarMultiRow` is
+ *     ignored here — the right panel's OpenTabsBar still honors it.
+ *   - Interactive children opt out of the window-drag region individually
+ *     (`WebkitAppRegion: "no-drag"`); empty track space stays draggable,
+ *     like a browser tab strip.
+ *   - Wide-panel mode hides the file/plan tabs and the placement toggle
+ *     (the editor has no surface there — same contract as the old
+ *     SessionTabs swap in UnifiedTabbedPane).
+ *
+ *  Interaction model mirrors OpenTabsBar (VS Code / browser-style): drag to
+ *  reorder (within the same kind — a session can't be dropped among files
+ *  and vice versa), chevrons + wheel scroll on overflow, a `⋯` overflow menu
+ *  listing every tab, middle-click close. File tabs additionally keep their
+ *  right-click context menu and dirty dots; session tabs keep their running
+ *  spinners and unread badges. */
 export function UnifiedTabsBar() {
   const { t } = useI18n();
   // ── Session tabs ──
@@ -89,17 +110,19 @@ export function UnifiedTabsBar() {
     },
     [activeId, splitGroupsBySession],
   );
-  // Multi-row wrapping (toggled from the ⋯ overflow menu) vs the classic
-  // single horizontally-scrolling row.
-  const multiRow = useSessionStore((s) => s.tabBarMultiRow);
-  const setTabBarMultiRow = useSessionStore((s) => s.setTabBarMultiRow);
+  // Multi-row wrapping is a right-panel OpenTabsBar feature only — the 40px
+  // titlebar cannot grow for wrapped rows (native overlay misalignment), so
+  // this strip is always single-row regardless of the store flag.
 
   // ── File tabs (scoped to the active project) ──
+  // Hidden in wide-panel mode: the editor has no surface there (file tabs
+  // would be dead controls) — same contract as the old SessionTabs swap.
+  const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
   const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
   const toggleTabsFilePreviewPlacement = useSessionStore((s) => s.toggleTabsFilePreviewPlacement);
   const pid = useSessionStore((s) => s.activeProjectId);
   const openFiles = useSessionStore((s) => {
-    if (s.tabsFilePreviewPlacement === "sidebar") return EMPTY_OPEN_FILES;
+    if (s.tabsFilePreviewPlacement === "sidebar" || s.widePanelOpen) return EMPTY_OPEN_FILES;
     const p = s.activeProjectId;
     return p ? s.ideOpenFilesByProject[p] ?? EMPTY_OPEN_FILES : EMPTY_OPEN_FILES;
   });
@@ -130,14 +153,18 @@ export function UnifiedTabsBar() {
   // The editor owns the content area only while focused AND it has content
   // (an active file or an active plan tab) — matches UnifiedTabbedPane's
   // visibility gate so the bar's active highlighting never disagrees with
-  // what's on screen.
+  // what's on screen. Never in wide mode: the editor has no surface there,
+  // so a stale editor focus must not gray out every session tab.
   const editorFocused =
+    !widePanelOpen &&
     centerTabFocus === "editor" &&
     ((!!activeFile && tabsFilePreviewPlacement !== "sidebar") || planTabActive);
 
   // Right-click context menu state for file tabs (lifted to the bar level,
   // same pattern as OpenTabsBar).
   const [ctxMenu, setCtxMenu] = useState<{ path: string; x: number; y: number } | null>(null);
+  // Right-click context menu state for SESSION tabs (close family + split).
+  const [sessionCtx, setSessionCtx] = useState<{ id: string; x: number; y: number } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Maps a tab key (session id | file path | PLAN_TAB_KEY) → its DOM node,
@@ -165,6 +192,15 @@ export function UnifiedTabsBar() {
     return () => ro.disconnect();
   }, [tabs.length, openFiles.length, hasPlanTab, recomputeScrollState]);
 
+  // Layout-effect recompute on ANY tab-list mutation (identity, not just
+  // count): a renamed tab / different title lengths change the track's
+  // scrollWidth without changing counts, and the arrows must appear in the
+  // same commit the overflow appears — a post-paint useEffect would show one
+  // frame where the strip overflows with no arrows.
+  useLayoutEffect(() => {
+    recomputeScrollState();
+  }, [tabs, openFiles, recomputeScrollState]);
+
   // Scroll the active tab FULLY into view whenever it changes — works for
   // all three tab kinds. Double-rAF so React's commit + the browser's layout
   // both settle before measuring (the active-state classes change tab
@@ -179,12 +215,6 @@ export function UnifiedTabsBar() {
       const node = tabNodes.current.get(activeTabKey);
       const el = scrollRef.current;
       if (!node || !el) return;
-      // Multi-row layout has no horizontal overflow — just reveal the tab's
-      // row vertically (the track scrolls vertically past the ~3-row cap).
-      if (multiRow) {
-        node.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-        return;
-      }
       const nodeRect = node.getBoundingClientRect();
       const viewRect = el.getBoundingClientRect();
       const BUFFER = 10; // px - keep the close button clear of the edge fade
@@ -210,7 +240,7 @@ export function UnifiedTabsBar() {
       cancelAnimationFrame(raf2);
       if (t) clearTimeout(t);
     };
-  }, [activeTabKey, tabs.length, openFiles.length, hasPlanTab, multiRow, recomputeScrollState]);
+  }, [activeTabKey, tabs.length, openFiles.length, hasPlanTab, recomputeScrollState]);
 
   const scrollByPage = useCallback((dir: 1 | -1) => {
     const el = scrollRef.current;
@@ -222,15 +252,13 @@ export function UnifiedTabsBar() {
     (e: React.WheelEvent) => {
       // Translate vertical wheel into horizontal scroll so a plain mouse
       // wheel can navigate the strip. Trackpad horizontal is already deltaX.
-      // In multi-row mode the wheel scrolls rows natively instead.
-      if (multiRow) return;
       const el = scrollRef.current;
       if (!el) return;
       if (e.deltaY !== 0 && e.deltaX === 0) {
         el.scrollLeft += e.deltaY;
       }
     },
-    [multiRow],
+    [],
   );
 
   // ── Drag-and-drop (reorder, within the same tab kind) ─────────────────
@@ -264,22 +292,43 @@ export function UnifiedTabsBar() {
     [tabs, openFiles, reorderTab, reorderIdeFile],
   );
 
-  if (tabs.length === 0 && openFiles.length === 0 && !hasPlanTab) return null;
-  // The ⋯ overflow menu doubles as the multi-row toggle's home, so it stays
-  // mounted in multi-row mode even though nothing scrolls horizontally.
-  const showOverflowMenu = multiRow || canScrollLeft || canScrollRight;
-  // rectSortingStrategy understands wrapped 2-D layouts; the horizontal
-  // strategy would drag tabs along a single axis only.
-  const sortStrategy = multiRow ? rectSortingStrategy : horizontalListSortingStrategy;
+  // ── Session tab context-menu actions (browser-style close family).
+  // closeTab intentionally does NOT cancel an in-flight turn, so the bulk
+  // closes are safe against running sessions — they leave the tab strip,
+  // the session keeps living (sidebar, badges). ──
+  const closeSessionTabs = useCallback(
+    (ids: readonly string[]) => {
+      for (const id of ids) void closeTab(id);
+    },
+    [closeTab],
+  );
+  const sessionCtxActions = useMemo<SessionTabContextMenuActions>(
+    () => ({
+      close: (id) => void closeTab(id),
+      closeOthers: (id) => closeSessionTabs(tabs.filter((x) => x !== id)),
+      closeRight: (id) => closeSessionTabs(tabs.slice(tabs.indexOf(id) + 1)),
+      closeAll: () => closeSessionTabs([...tabs]),
+      openInSplit: (id) => void useSessionStore.getState().addToSplit(id),
+    }),
+    [tabs, closeTab, closeSessionTabs],
+  );
+
+  // Plan tab surface: hidden in wide-panel mode (the WidePlanDialog overlay
+  // owns the plan there — same contract as the old SessionTabs swap).
+  const showPlanTab = hasPlanTab && !widePanelOpen;
+
+  if (tabs.length === 0 && openFiles.length === 0 && !showPlanTab) return null;
+  const showOverflowMenu = canScrollLeft || canScrollRight;
 
   return (
     <div
       role="tablist"
-      aria-label="Unified navigation and editor tabs"
-      className={cn(
-        "flex shrink-0 items-center gap-1 border-b border-edge/60 bg-surface-muted/40 dark:bg-surface/50 backdrop-blur-md px-1.5",
-        multiRow ? "min-h-8 py-0.5" : "h-8",
-      )}
+      aria-label={t("layout.tabStripAria")}
+      // overflow-hidden: hard containment — every level of the flex chain is
+      // min-w-0 and the track scrolls, but if the strip is ever squeezed
+      // below its own chrome (shrink-0 chevrons/⋯), clipping HERE beats
+      // spilling over the git pill and workbench toggles to its right.
+      className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden"
     >
       {/* Left chevron — only when there's content scrolled off the left edge. */}
       {canScrollLeft && (
@@ -291,27 +340,23 @@ export function UnifiedTabsBar() {
       )}
 
       {/* Scrollable tab track: sessions, then files, then the plan tab — one
-          seamless strip, no grouping divider. */}
+          seamless strip, no grouping divider. The track itself stays inside
+          the titlebar's drag region: dragging empty track space moves the
+          window (browser convention); every interactive child opts out
+          individually with WebkitAppRegion: "no-drag". */}
       <div className="relative min-w-0 flex-1">
         <div
           ref={scrollRef}
           onScroll={recomputeScrollState}
           onWheel={onWheel}
-          className={cn(
-            "no-scrollbar flex items-center gap-1 py-0.5",
-            multiRow
-              ? // Wrapped rows, capped at ~3 rows — beyond that the track
-                // scrolls vertically.
-                "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
-              : "overflow-x-auto",
-          )}
+          className="no-scrollbar flex items-center gap-1 overflow-x-auto"
         >
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
             onDragEnd={onDragEnd}
           >
-            <SortableContext items={tabs} strategy={sortStrategy}>
+            <SortableContext items={tabs} strategy={horizontalListSortingStrategy}>
               {tabs.map((id) => {
                 const displayId = displayedIdFor(id);
                 const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, displayId, orchWorkersById);
@@ -324,13 +369,16 @@ export function UnifiedTabsBar() {
                     running={!!runningBySession[displayId] || orchAnchors[displayId] != null}
                     unreadCount={unreadBySession[displayId] ?? 0}
                     sessionCount={splitGroupsBySession[id]?.length}
-                    multiRow={multiRow}
                     registerNode={(node) => {
                       if (node) tabNodes.current.set(id, node);
                       else tabNodes.current.delete(id);
                     }}
                     onActivate={() => void selectSession(id)}
                     onClose={() => closeTab(id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setSessionCtx({ id, x: e.clientX, y: e.clientY });
+                    }}
                   />
                 );
               })}
@@ -339,18 +387,17 @@ export function UnifiedTabsBar() {
             {/* Group divider: session tabs on the left, editor tabs (files +
                 the plan pseudo-tab) on the right. Only rendered when both
                 groups have content. */}
-            {tabs.length > 0 && (openFiles.length > 0 || hasPlanTab) && (
+            {tabs.length > 0 && (openFiles.length > 0 || showPlanTab) && (
               <div aria-hidden className="mx-1 h-3.5 w-px shrink-0 self-center bg-edge/70" />
             )}
 
-            <SortableContext items={openFiles} strategy={sortStrategy}>
+            <SortableContext items={openFiles} strategy={horizontalListSortingStrategy}>
               {openFiles.map((path) => (
                 <SortableFileTab
                   key={path}
                   path={path}
                   isActive={path === activeFile && editorFocused && !planTabActive}
                   dirty={dirtySet.has(path)}
-                  multiRow={multiRow}
                   registerNode={(node) => {
                     if (node) tabNodes.current.set(path, node);
                     else tabNodes.current.delete(path);
@@ -376,7 +423,7 @@ export function UnifiedTabsBar() {
               activates the plan view (clears activeFile, sets planTabActive,
               which flips the unified focus to the editor); the × closes the
               plan tab entirely. */}
-          {hasPlanTab && (
+          {showPlanTab && (
             <div
               ref={(node) => {
                 if (node) tabNodes.current.set(PLAN_TAB_KEY, node);
@@ -391,11 +438,10 @@ export function UnifiedTabsBar() {
                   setPlanTabActive(activeId, true);
                 }
               }}
+              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               className={cn(
                 // Apple-style Compact Integrated Card Plan Tab (方案 1)
-                "group flex h-[27px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-lg px-2.5 text-[11px] transition-all duration-150",
-                // Same flexible/natural split as the file tabs above.
-                multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
+                "group flex h-[27px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-lg px-2.5 text-[11px] transition-all duration-150 min-w-0 shrink-0",
                 planTabActive && editorFocused
                   ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
                   : "text-content-muted hover:text-content hover:bg-surface-hover/50 border border-transparent",
@@ -414,10 +460,12 @@ export function UnifiedTabsBar() {
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className={cn(
-                  "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
+                  // Always in flow (opacity swap) — same hover-jump fix as
+                  // the session/file chips.
+                  "ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-all hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
                   planTabActive && editorFocused
-                    ? "inline-flex"
-                    : "hidden group-hover:inline-flex",
+                    ? "opacity-100"
+                    : "opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100",
                 )}
                 title={t("common.close")}
               >
@@ -428,12 +476,13 @@ export function UnifiedTabsBar() {
         </div>
 
         {/* Edge fades — overlay only, pointer-events disabled so they never
-          intercept tab clicks. Shown per-direction based on scroll state. */}
+          intercept tab clicks. Shown per-direction based on scroll state.
+          Fade from the titlebar's own bg so the fade blends into the bar. */}
         {canScrollLeft && (
-          <div className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-surface to-transparent" />
+          <div className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-surface-muted to-transparent" />
         )}
         {canScrollRight && (
-          <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-surface to-transparent" />
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-surface-muted to-transparent" />
         )}
       </div>
 
@@ -446,43 +495,46 @@ export function UnifiedTabsBar() {
         />
       )}
 
-      {/* Placement toggle: switch between center tabs and sidebar preview */}
-      <button
-        type="button"
-        onClick={toggleTabsFilePreviewPlacement}
-        title={
-          tabsFilePreviewPlacement === "center"
-            ? t("ide.files.placementCenterHint")
-            : t("ide.files.placementSidebarHint")
-        }
-        aria-label={
-          tabsFilePreviewPlacement === "center"
-            ? t("ide.files.placementCenterHint")
-            : t("ide.files.placementSidebarHint")
-        }
-        className={cn(
-          "mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/5 dark:hover:bg-white/10 hover:text-content",
-          tabsFilePreviewPlacement === "sidebar" && "bg-accent/15 text-accent hover:bg-accent/20",
-        )}
-      >
-        <IconLayoutSidebarRight size={14} />
-      </button>
+      {/* Placement toggle: switch between center tabs and sidebar preview.
+          Neutral active state — green is reserved for attention signals
+          (running spinner / worktree merge-back / unread), not layout
+          toggles. Hidden in wide-panel mode (no editor surface). */}
+      {!widePanelOpen && (
+        <button
+          type="button"
+          onClick={toggleTabsFilePreviewPlacement}
+          title={
+            tabsFilePreviewPlacement === "center"
+              ? t("ide.files.placementCenterHint")
+              : t("ide.files.placementSidebarHint")
+          }
+          aria-label={
+            tabsFilePreviewPlacement === "center"
+              ? t("ide.files.placementCenterHint")
+              : t("ide.files.placementSidebarHint")
+          }
+          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+          className={cn(
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-hover hover:text-content",
+            tabsFilePreviewPlacement === "sidebar" && "bg-surface-hover text-content",
+          )}
+        >
+          <IconLayoutSidebarRight size={14} />
+        </button>
+      )}
 
       {/* Overflow menu — lists every tab (sessions first, then files, then
-          the plan tab) for quick jumping. Shown when the strip overflows,
-          and always in multi-row mode (it hosts the layout toggle). */}
+          the plan tab) for quick jumping. Shown when the strip overflows. */}
       {showOverflowMenu && (
         <TabBarOverflowMenu
           heading={t("ide.editor.openTabs")}
-          multiRow={multiRow}
-          onToggleMultiRow={setTabBarMultiRow}
           items={[
             ...tabs.map((id) => {
               const displayId = displayedIdFor(id);
               const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, displayId, orchWorkersById);
               return {
                 key: id,
-                label: sess?.title ?? "(unknown)",
+                label: sess?.title ?? t("layout.tabUnknownSession"),
                 active: isTabActive(id) && !editorFocused,
                 dotClass: runningBySession[displayId] || orchAnchors[displayId] != null
                   ? "bg-accent animate-pulse"
@@ -496,7 +548,7 @@ export function UnifiedTabsBar() {
               active: path === activeFile && editorFocused && !planTabActive,
               dotClass: dirtySet.has(path) ? "bg-accent animate-pulse" : undefined,
             })),
-            ...(hasPlanTab
+            ...(showPlanTab
               ? [{
                   key: PLAN_TAB_KEY,
                   label: t("ide.editor.planTab"),
@@ -539,8 +591,106 @@ export function UnifiedTabsBar() {
         }}
       />
 
+      {/* Right-click context menu for session tabs (browser-style close
+          family + the split-view opener). */}
+      <SessionTabContextMenu
+        ctxMenu={sessionCtx}
+        onClose={() => setSessionCtx(null)}
+        actions={sessionCtxActions}
+        total={tabs.length}
+        isLast={sessionCtx != null && tabs.indexOf(sessionCtx.id) === tabs.length - 1}
+      />
+
       {/* Unsaved-changes confirm for close requests that touch dirty files. */}
       {closeGuard.dialog}
     </div>
+  );
+}
+
+/* ───────────────────────── session tab context menu ───────────────────────── */
+
+/** Actions available from the session-tab context menu. Passed in from the
+ *  strip so the menu component stays presentational. */
+export interface SessionTabContextMenuActions {
+  close: (id: string) => void;
+  closeOthers: (id: string) => void;
+  closeRight: (id: string) => void;
+  closeAll: () => void;
+  openInSplit: (id: string) => void;
+}
+
+/** Cursor-anchored right-click menu for session tabs — the browser tab-bar
+ *  family (close / close others / close to the right / close all) plus the
+ *  split-view opener: the split gesture otherwise has NO menu entry anywhere
+ *  (drag or sidebar context menu only), so this is also its discoverability
+ *  fix. Presentational, same form as FileTabContextMenu; the strip owns
+ *  state and actions. Bulk closes are safe against running sessions —
+ *  closeTab never cancels an in-flight turn. */
+export function SessionTabContextMenu({
+  ctxMenu,
+  onClose,
+  actions,
+  total,
+  isLast,
+}: {
+  ctxMenu: { id: string; x: number; y: number } | null;
+  onClose: () => void;
+  actions: SessionTabContextMenuActions;
+  /** Open session-tab count — gates 关闭其他 (meaningless with ≤1 tab). */
+  total: number;
+  /** Whether the right-clicked tab is the strip's last — gates 关闭右侧. */
+  isLast: boolean;
+}) {
+  const { t } = useI18n();
+  const anchor = useCursorAnchor(ctxMenu);
+  const id = ctxMenu?.id;
+
+  return (
+    <Menu.Root open={!!ctxMenu} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <Menu.Portal>
+        <Menu.Positioner anchor={anchor} side="bottom" align="start" sideOffset={4}>
+          <Menu.Popup className={MENU_POPUP_CLASS}>
+            <Menu.Item
+              onClick={() => { if (id) actions.close(id); }}
+              className={MENU_ITEM_CLASS}
+            >
+              <IconX size={14} className="shrink-0" />
+              <span>{t("common.close")}</span>
+            </Menu.Item>
+            <Menu.Item
+              disabled={total <= 1}
+              onClick={() => { if (id) actions.closeOthers(id); }}
+              className={MENU_ITEM_CLASS}
+            >
+              <IconX size={14} className="shrink-0 opacity-50" />
+              <span>{t("ide.editor.closeOthers")}</span>
+            </Menu.Item>
+            <Menu.Item
+              disabled={isLast}
+              onClick={() => { if (id) actions.closeRight(id); }}
+              className={MENU_ITEM_CLASS}
+            >
+              <IconChevronRight size={14} className="shrink-0 opacity-50" />
+              <span>{t("ide.editor.closeRight")}</span>
+            </Menu.Item>
+            <Menu.Item
+              onClick={() => actions.closeAll()}
+              className={MENU_ITEM_CLASS}
+            >
+              <IconStack2 size={14} className="shrink-0" />
+              <span>{t("ide.editor.closeAll")}</span>
+            </Menu.Item>
+            <Menu.Separator className="my-1 h-px bg-edge" />
+            <Menu.Item
+              onClick={() => { if (id) actions.openInSplit(id); }}
+              className={MENU_ITEM_CLASS}
+            >
+              <IconLayoutColumns size={14} className="shrink-0" />
+              <span>{t("layout.openInSplitView")}</span>
+            </Menu.Item>
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   );
 }

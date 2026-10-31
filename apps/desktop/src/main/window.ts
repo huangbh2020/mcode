@@ -38,7 +38,11 @@ function overlayColors() {
   const dark = getEffectiveTheme() === "dark";
   const sketch = getThemeStylePreference() === "sketch";
   return {
-    color: dark ? (sketch ? "#332a20" : "#2c313c") : sketch ? "#f6f2e7" : "#f4f4f5",
+    // Light default #f0f2f6 = --surface-muted (240 242 246) so the native
+    // controls' backdrop is the SAME color as the Titlebar's bg-surface-muted
+    // — the old zinc-100 (#f4f4f5) left a visible tone seam where the overlay
+    // met the React bar. Dark default already matches (#2c313c = 44 49 60).
+    color: dark ? (sketch ? "#332a20" : "#2c313c") : sketch ? "#f6f2e7" : "#f0f2f6",
     symbolColor: dark ? (sketch ? "#aca089" : "#9ea2ab") : sketch ? "#8d8371" : "#71717a",
     height: 40,
   };

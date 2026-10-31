@@ -44,15 +44,16 @@ const EMPTY_OPEN_FILES: string[] = [];
 export const PLAN_TAB_KEY = "__plan__";
 
 /** Shared menu styling constants - match FileTree's context menu for visual
- *  consistency across all right-click menus in the app. */
-const MENU_POPUP_CLASS = cn(
+ *  consistency across all right-click menus in the app. Exported for the
+ *  session-tab context menu (UnifiedTabsBar), which shares the look. */
+export const MENU_POPUP_CLASS = cn(
   "z-50 min-w-[180px] rounded-md border border-edge bg-surface py-1 shadow-2xl",
   "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
   "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
   "transition-[transform,opacity] duration-100",
 );
-const MENU_ITEM_CLASS =
-  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted";
+export const MENU_ITEM_CLASS =
+  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[disabled]:pointer-events-none data-[disabled]:opacity-40";
 
 /**
  * Open-tabs bar — the horizontal strip of open files above the Monaco editor,
@@ -507,12 +508,16 @@ export function SortableFileTab({
   );
 
   // The sortable transform reorders visually during a drag; while dragging
-  // the source tab is dimmed and lifted slightly.
+  // the source tab is dimmed and lifted slightly. no-drag: when hosted in
+  // the titlebar's unified strip (UnifiedTabsBar) the chip must opt out of
+  // the window-drag region so dnd reorder wins; harmless in the standalone
+  // OpenTabsBar (right panel), which isn't inside a drag region.
   const style: React.CSSProperties = {
+    WebkitAppRegion: "no-drag",
     transform: CSS.Transform.toString(transform),
     transition,
     ...(isDragging ? { zIndex: 10, opacity: 0.6 } : undefined),
-  };
+  } as React.CSSProperties;
 
   const handleClose = useCallback(
     (e: React.MouseEvent) => {
@@ -596,8 +601,15 @@ export function SortableFileTab({
           onClick={handleClose}
           onPointerDown={(e) => e.stopPropagation()}
           className={cn(
-            "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
-            isActive ? "inline-flex" : "hidden group-hover:inline-flex",
+            // Always in flow — opacity swap, never display swap. A hover-
+            // appearing button shifts the title on every hover ("hover
+            // jump"); the slot is reserved and the glyph fades in instead.
+            // Invisible state also opts out of clicks so it can't swallow a
+            // tap meant for the tab body.
+            "ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-all hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
+            isActive
+              ? "opacity-100"
+              : "opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100",
           )}
           title={t("common.close")}
         >

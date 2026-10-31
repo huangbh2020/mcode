@@ -135,6 +135,12 @@ export const en = {
   "layout.showEditor": "Show editor",
   "layout.hideEditor": "Hide editor",
   "layout.noOpenFiles": "No open files",
+  // Titlebar-embedded tab strip (UnifiedTabsBar lives in the Titlebar since
+  // the single-row merge)
+  "layout.tabStripAria": "Session and editor tabs",
+  "layout.tabUnknownSession": "(unknown session)",
+  "layout.closeTab": "Close tab",
+  "layout.showAllTabs": "Show all tabs",
   "layout.tabFiles": "Files",
   "layout.tabGithub": "GitHub PRs/issues",
   "layout.tabTerminal": "Terminal",

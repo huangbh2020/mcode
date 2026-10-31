@@ -22,7 +22,9 @@ interface ChevronButtonProps {
 }
 
 /** Paging arrow that scrolls the tab track by ~80% of its width. Rendered
- *  only on the side(s) where content is scrolled out of view. */
+ *  only on the side(s) where content is scrolled out of view. no-drag: the
+ *  strip lives in the titlebar's window-drag region since the single-row
+ *  merge. */
 export function TabBarChevronButton({ dir, onClick, title }: ChevronButtonProps) {
   const Icon = dir === "left" ? IconChevronLeft : IconChevronRight;
   return (
@@ -31,6 +33,7 @@ export function TabBarChevronButton({ dir, onClick, title }: ChevronButtonProps)
       onClick={onClick}
       title={title}
       aria-label={title}
+      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       className="flex h-6 w-5 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
     >
       <Icon size={14} />
@@ -81,9 +84,10 @@ export function TabBarOverflowMenu({
   return (
     <Menu.Root>
       <Menu.Trigger
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         className="flex h-6 w-5 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
-        title="Show all tabs"
-        aria-label="Show all tabs"
+        title={t("layout.showAllTabs")}
+        aria-label={t("layout.showAllTabs")}
       >
         <IconDotsVertical size={14} />
       </Menu.Trigger>

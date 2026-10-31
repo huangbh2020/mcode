@@ -18,8 +18,6 @@ import {
 } from "./components/layout/LeftPanelPeek.js";
 import { ChatPane } from "./components/chat/ChatPane.js";
 import { TerminalSessionPane } from "./components/chat/TerminalSessionPane.js";
-import { SessionTabs } from "./components/layout/SessionTabs.js";
-import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
 import { RightPanel } from "./components/layout/RightPanel.js";
 import { BottomTerminalBar } from "./components/layout/BottomTerminalBar.js";
 import { SettingsPage } from "./components/settings/SettingsPage.js";
@@ -658,21 +656,22 @@ function SessionSurface({ sessionId, isActive }: { sessionId: string; isActive: 
   return <ChatPane sessionId={sessionId} isActive={isActive} />;
 }
 
-/** `tabs` displayMode: ONE tab bar (UnifiedTabsBar) mixing session tabs and
- *  file tabs, with the active tab's content filling the whole center width.
- *  The chat|editor split is gone — that's the point (maximum reading space
- *  for whichever view is active). All open tabs' ChatPanes stay mounted and
- *  are backgrounded via CSS (`hidden`) so drafts / scroll / undo survive
- *  focus flips (same keep-alive trick the old tabs-mode chat column used);
- *  the editor column mounts only while an editor tab holds the focus.
+/** `tabs` displayMode: the tab strip (UnifiedTabsBar) lives in the TITLEBAR
+ *  since the 2026-10-31 single-row merge, mixing session tabs and file tabs;
+ *  the active tab's content fills the whole center width. The chat|editor
+ *  split is gone — that's the point (maximum reading space for whichever
+ *  view is active). All open tabs' ChatPanes stay mounted and are
+ *  backgrounded via CSS (`hidden`) so drafts / scroll / undo survive focus
+ *  flips (same keep-alive trick the old tabs-mode chat column used); the
+ *  editor column mounts only while an editor tab holds the focus.
  *
  *  In wide mode the editor has no surface (the plan opens as the
- *  WidePlanDialog overlay instead), so the strip swaps to the session-only
- *  SessionTabs (file tabs would be dead controls) and an editor tab holding
- *  the focus keeps its host mounted but `hidden` — the editor host is a
- *  SIBLING of the pane host, so the strip swap and the hide never remount
- *  the ChatPanes below. Monaco therefore survives the wide toggle and
- *  re-shows instantly on exit. */
+ *  WidePlanDialog overlay instead), so the strip hides its file/plan tabs
+ *  itself (widePanelOpen gate inside UnifiedTabsBar) and an editor tab
+ *  holding the focus keeps its host mounted but `hidden` — the editor host
+ *  is a SIBLING of the pane host, so the hide never remounts the ChatPanes
+ *  below. Monaco therefore survives the wide toggle and re-shows instantly
+ *  on exit. */
 function UnifiedTabbedPane({ wide }: { wide: boolean }) {
   // The active file is scoped to the active project - switching projects
   // swaps to that project's open files (or hides the editor if none).
@@ -726,7 +725,10 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {wide ? <SessionTabs /> : <UnifiedTabsBar />}
+      {/* The tab strip lives in the TITLEBAR since the 2026-10-31 single-row
+          merge (Titlebar.tsx renders UnifiedTabsBar) — the standalone strip
+          row that used to sit here is gone; wide mode hides file/plan tabs
+          inside the strip instead. */}
       {/* Split drag-in host: dropping a sidebar session below the tab bar
           splits the CURRENTLY OPEN tab in place (per-tab group) — the
           dragged session never becomes a tab. Only the content area is a
@@ -770,10 +772,10 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
                 !editorVisible && "hidden",
               )}
             >
-              {/* hideTabsBar: the unified bar above already shows the file
-                  tabs — a second OpenTabsBar would duplicate them. In wide
-                  mode the strip is SessionTabs, and the hidden host renders
-                  no bar at all. */}
+              {/* hideTabsBar: the titlebar's unified strip already shows the
+                  file tabs — a second OpenTabsBar would duplicate them. In
+                  wide mode the strip hides file tabs entirely (widePanelOpen
+                  gate in UnifiedTabsBar). */}
               <EditorColumn filePath={activeFile} hideTabsBar />
             </div>
           )}
@@ -882,7 +884,8 @@ function SplitCenterPane({ wide }: { wide: boolean }) {
   );
 }
 
-/** The chat half: SessionTabs strip (in tabs mode) + the active ChatPane.
+/** The chat half of the single-mode split: the active ChatPane (the tab
+ *  strip lives in the titlebar since the single-row merge).
  *
  *  Tabs mode keeps every OPEN tab's pane mounted, backgrounded via CSS
  *  (display:none) — pane lifetime is the user's own tab strip, and closeTab
@@ -972,9 +975,12 @@ function ChatColumn() {
   }, [openTabs, displayMode]);
 
   if (displayMode === "tabs") {
+    // Defensive: CenterPane routes "tabs" to UnifiedTabbedPane, so this
+    // component (mounted only under SplitCenterPane) never actually runs in
+    // tabs mode. The tab strip itself lives in the titlebar since the
+    // 2026-10-31 single-row merge — nothing renders here anymore.
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <SessionTabs />
         <div className="relative min-h-0 flex-1">
           {openTabs.map((sid) => (
             <div

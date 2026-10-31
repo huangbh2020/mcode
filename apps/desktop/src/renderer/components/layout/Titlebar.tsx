@@ -6,17 +6,16 @@ import {
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightExpand,
   IconCode,
-  IconFolder,
   IconGitFork,
   IconTerminal2,
 } from "@renderer/lib/icons.js";
-import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { ToolbarGitCommit } from "@renderer/components/layout/ToolbarGitCommit.js";
 import { WorktreeMergeToolbarButton } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { UnifiedTabsBar } from "./UnifiedTabsBar.js";
 
 type Mode = "workspace" | "settings" | "sched";
 
@@ -42,14 +41,22 @@ interface Props {
  *  bg-surface-muted matches the sidebar so the two read as one continuous
  *  frame around the center + right panes.
  *
- *  Leading content by mode:
- *   - workspace: the sidebar toggle ONLY while the sidebar is closed (the
- *     collapse button lives in the LeftBar footer; see LeftBar.tsx), then
- *     the active-thread title chip + owning-project chip + branch pill,
- *     editor toggle, and the terminal/right-panel toggles at the far right.
- *   - settings:  a "返回工作区" back button + a "设置" heading.
- *   - browser overlay / wide-panel mode: the matching back button
- *     ("返回工作台" / "退出宽屏") in the same slot.
+ *  SINGLE-ROW MERGE (2026-10-31): the old second row (the standalone
+ *  session/file tab strip) is gone — UnifiedTabsBar renders as the flexible
+ *  middle region of this 40px row, so the session title appears exactly once
+ *  (on its tab) and the chrome costs 40px instead of 72px. Layout:
+ *   - workspace: sidebar-reopen toggle (only while closed) → tab strip
+ *     (flex-1; empty space stays draggable like a browser tab strip) →
+ *     worktree chip (worktree sessions only) → editor `</>` toggle → git
+ *     pill → worktree merge-back (conditional, the ONE accent-green signal)
+ *     → terminal toggle (conditional) → right-panel toggle → the reserved
+ *     native-controls zone (Windows).
+ *   - settings:  a "返回工作区" back button + a "设置" heading (no strip —
+ *     the overlay covers the workspace).
+ *   - browser overlay / wide-panel mode: the matching back button ("返回工作
+ *     台" / "退出宽屏"). Wide-panel keeps the strip (sessions remain
+ *     visible; file/plan tabs hide inside UnifiedTabsBar); the fullscreen
+ *     browser overlay hides it (it covers the workspace entirely).
  *
  *  Platform reservation: on macOS the traffic lights sit on the LEFT — they
  *  overlay the full-height sidebar while it's open (LeftBar's header reserves
@@ -111,7 +118,13 @@ export function Titlebar({
     >
       <div
         className={cn(
-          "flex flex-1 items-center bg-surface-muted px-1.5",
+          // overflow-hidden: total containment — the tab strip's flex chain
+          // (min-w-0 at every level + overflow-x-auto track) normally keeps
+          // everything inside, but in degenerate narrow windows the strip's
+          // own shrink-0 chrome (chevrons/⋯) must never spill over the right
+          // cluster; clipping beats overlapping. Portaled popups (⋯ menu,
+          // git pill popover, dialogs) render at <body> and are unaffected.
+          "flex flex-1 items-center overflow-hidden bg-surface-muted px-1.5",
           !isMac && "pr-[138px]",
           // macOS traffic lights sit at the window's top-left. They overlay
           // the full-height sidebar while it's visible (LeftBar's header
@@ -176,7 +189,7 @@ export function Titlebar({
                   <button
                     onClick={onToggleLeft}
                     className={cn(
-                      "flex items-center justify-center rounded p-1.5 transition-colors",
+                      "flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
                       "text-content-muted hover:bg-surface-hover hover:text-content",
                     )}
                     title={t("layout.showLeftPanel") + hintFor("layout.toggle-left")}
@@ -190,20 +203,30 @@ export function Titlebar({
                 </>
               )
             )}
-            <ActiveThreadTitle />
-            {/* Owning-project chip — folder icon + project name for the active
-                session's project (full path in the tooltip). Rendered for
-                pinned and regular threads alike; the left bar no longer shows
-                the owner on pinned rows, so this is the single owner hint. */}
-            <ActiveProjectChip />
+            {/* Unified tab strip — the merged single-row titlebar's middle
+                region. Session title/project identity live ON the tabs now
+                (the old ActiveThreadTitle/ActiveProjectChip chips are gone —
+                the title appeared twice in the two-row layout). The wrapper
+                stays mounted so the right cluster keeps its place even when
+                the strip renders null (no tabs/files/plan). Hidden on
+                overlay pages (settings/sched cover the workspace) and during
+                the fullscreen browser overlay; wide-panel mode keeps it
+                (sessions remain the visible surface there). */}
+            {!isOverlayPage && !isBrowserOverlay && (
+              <div className="flex min-w-0 flex-1 items-center">
+                <UnifiedTabsBar />
+              </div>
+            )}
+            {isBrowserOverlay && <div className="flex-1" />}
             {/* Worktree chip — the active thread's isolated-checkout name.
                 Renders only for worktree sessions; local threads leave no
-                gap (the component returns null). */}
+                gap (the component returns null). Neutral tone: the accent
+                green is reserved for the merge-back button next to it. */}
             <ActiveWorktreeChip />
-            {/* Editor column toggle - shows/hides the center-pane editor column
-                without closing the open file. Sits right of the branch pill. */}
+            {/* Editor column toggle - shows/hides the center-pane editor
+                column without closing the open file. Lives in the right
+                cluster with the other workbench toggles since the merge. */}
             {!isBrowserMode && <EditorColumnToggle />}
-            <div className="flex-1" />
             {/* Git indicator - compact branch pill + change-count badge that
                 opens the quick-commit popover. Placed right-aligned with the
                 workbench controls for prominent access and clean title area. */}
@@ -215,14 +238,16 @@ export function Titlebar({
                 open, same as the panel toggles (kept during wide mode). */}
             {!isBrowserOverlay && <WorktreeMergeToolbarButton />}
 
-            {/* Bottom terminal toggle - shown only when terminal is docked at bottom */}
+            {/* Bottom terminal toggle - shown only when terminal is docked at bottom.
+                Active state is neutral (bg-surface-hover): accent green is reserved
+                for attention signals, not layout toggles. */}
             {terminalPosition === "bottom" && !isBrowserOverlay && (
               <button
                 onClick={() => setBottomTerminalOpen(!bottomTerminalOpen)}
                 className={cn(
-                  "flex items-center justify-center rounded p-1.5 transition-colors",
+                  "flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
                   bottomTerminalOpen
-                    ? "bg-surface-hover text-accent"
+                    ? "bg-surface-hover text-content"
                     : "text-content-muted hover:bg-surface-hover hover:text-content",
                 )}
                 title={
@@ -238,14 +263,16 @@ export function Titlebar({
             {/* Right-panel toggle - hidden while the browser overlay is open
                 (the browser forces the right panel closed and manages its own
                 restore on exit). During wide mode it stays: it hides/shows the
-                wide mode's right column (chat goes full width when hidden). */}
+                wide mode's right column (chat goes full width when hidden).
+                Active state is neutral (bg-surface-hover) — see the terminal
+                toggle note. */}
             {!isBrowserOverlay && (
               <button
                 onClick={onToggleRight}
                 className={cn(
-                  "flex items-center justify-center rounded p-1.5 transition-colors",
+                  "flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
                   rightOpen
-                    ? "bg-surface-hover text-accent"
+                    ? "bg-surface-hover text-content"
                     : "text-content-muted hover:bg-surface-hover hover:text-content",
                 )}
                 title={(rightOpen ? t("layout.hideRightPanel") : t("layout.showRightPanel")) + hintFor("layout.toggle-right")}
@@ -267,75 +294,15 @@ export function Titlebar({
   );
 }
 
-/** Active-thread title chip rendered on the left of the main titlebar strip.
- *  Fixed width, single line, truncated with ellipsis when too long; the full
- *  name shows in a native title tooltip on hover. Hidden when no session is
- *  open (leaves an empty drag region). */
-function ActiveThreadTitle() {
-  // Two atomic selectors — returning a fresh object literal here would
-  // trip zustand's "snapshot should be cached" check (Object.is sees a
-  // new ref every render → infinite loop). title and providerId are read
-  // independently so each returns a primitive (or undefined) that's stable.
-  // `s.sessions` mirrors the ACTIVE project's list, which no longer holds
-  // pinned rows (they render in the global pinned section above the project
-  // tree) — the pinned bucket is the fallback lookup for those.
-  const title = useSessionStore((s) => {
-    if (!s.activeSessionId) return null;
-    const sess =
-      s.sessions.find((x) => x.id === s.activeSessionId) ??
-      s.pinnedSessions.find((x) => x.id === s.activeSessionId);
-    return sess?.title ?? null;
-  });
-  const providerId = useSessionStore((s) => {
-    if (!s.activeSessionId) return null;
-    const sess =
-      s.sessions.find((x) => x.id === s.activeSessionId) ??
-      s.pinnedSessions.find((x) => x.id === s.activeSessionId);
-    return sess?.providerId ?? null;
-  });
-  if (!title) return null;
-  const { Icon, color } = getProviderIcon(providerId);
-  return (
-    <div className="flex min-w-0 max-w-[280px] shrink-0 items-center gap-1 px-1.5 text-xs font-medium text-content-muted">
-      <Icon size={13} className={cn("shrink-0", color)} />
-      <span className="truncate" title={title}>
-        {title}
-      </span>
-    </div>
-  );
-}
-
-/** Owning-project chip rendered right of the active-thread title: folder icon
- *  + project name, full path in the hover tooltip. Shows only while a session
- *  is active. `activeProjectId` is kept in lockstep with the active session's
- *  owner by syncConfigFromSession (every activation entry point routes through
- *  it), so resolving via the id works for pinned rows and per-project rows
- *  alike — no need to hunt the session record across the paginated lists. */
-function ActiveProjectChip() {
-  const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  // Returns an existing element of `projects` (stable ref) or null — never a
-  // fresh object, so the selector is safe under zustand's Object.is check.
-  const project = useSessionStore((s) =>
-    s.activeProjectId ? s.projects.find((p) => p.id === s.activeProjectId) ?? null : null,
-  );
-  if (!activeSessionId || !project) return null;
-  return (
-    <div
-      className="flex min-w-0 max-w-[180px] shrink-0 items-center gap-1 px-1 text-xs text-content-subtle"
-      title={project.path}
-    >
-      <IconFolder size={13} className="shrink-0" />
-      <span className="truncate">{project.name}</span>
-    </div>
-  );
-}
-
 /** Active-session worktree chip: fork icon + the worktree's display name
  *  (custom name if renamed, else directory basename), full path in the hover
- *  tooltip. Accent-tinted to read as "this thread is isolated". Renders only
- *  while the ACTIVE session runs in a materialized worktree — local threads
- *  render nothing. Atomic selectors (primitive / stable ref) per the
- *  ActiveThreadTitle note; the session may live in any list bucket. */
+ *  tooltip. Sits at the head of the right cluster, next to the merge-back
+ *  button. Deliberately NEUTRAL (text-content-subtle): it's identity context,
+ *  not a warning — the accent green beside it belongs to the merge-back
+ *  button ("this session has work waiting to land"). Renders only while the
+ *  ACTIVE session runs in a materialized worktree — local threads render
+ *  nothing. Atomic selectors (primitive / stable ref) per the store's
+ *  Object.is rule; the session may live in any list bucket. */
 function ActiveWorktreeChip() {
   const worktreePath = useSessionStore((s) => {
     if (!s.activeSessionId) return null;
@@ -353,7 +320,7 @@ function ActiveWorktreeChip() {
   if (!worktreePath) return null;
   return (
     <div
-      className="flex min-w-0 max-w-[160px] shrink-0 items-center gap-1 px-1 text-xs text-accent"
+      className="flex min-w-0 max-w-[160px] shrink-0 items-center gap-1 px-1 text-xs text-content-subtle"
       title={worktreePath}
     >
       <IconGitFork size={13} className="shrink-0" />
@@ -434,9 +401,13 @@ function EditorColumnToggle() {
       onClick={handleClick}
       disabled={!editorVisible && !canRestore}
       className={cn(
-        "flex items-center justify-center rounded p-1.5 transition-colors",
+        // shrink-0: the tab strip may shrink to nothing on narrow windows,
+        // but the right-cluster buttons and the git pill must keep their
+        // size — the strip scrolls instead (chevrons), it never squeezes
+        // the workbench controls.
+        "flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
         editorVisible
-          ? "bg-surface-hover text-accent"
+          ? "bg-surface-hover text-content"
           : "text-content-muted hover:bg-surface-hover hover:text-content disabled:opacity-40 disabled:hover:bg-transparent",
       )}
       title={

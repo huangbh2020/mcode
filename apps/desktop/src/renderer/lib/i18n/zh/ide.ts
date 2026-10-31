@@ -117,6 +117,7 @@ export const zh = {
   "ide.editor.closeTabAria": "关闭标签页",
   "ide.editor.closePlanTabAria": "关闭计划标签页",
   "ide.editor.closeOthers": "关闭其他",
+  "ide.editor.closeRight": "关闭右侧",
   "ide.editor.closeAll": "关闭全部",
   "ide.editor.addToChat": "加入聊天",
   "ide.editor.copyPath": "复制路径",

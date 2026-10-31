@@ -117,6 +117,7 @@ export const en = {
   "ide.editor.closeTabAria": "Close tab",
   "ide.editor.closePlanTabAria": "Close plan tab",
   "ide.editor.closeOthers": "Close others",
+  "ide.editor.closeRight": "Close to the right",
   "ide.editor.closeAll": "Close all",
   "ide.editor.addToChat": "Add to chat",
   "ide.editor.copyPath": "Copy path",
