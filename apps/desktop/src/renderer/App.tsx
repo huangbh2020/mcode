@@ -623,13 +623,10 @@ function CornerOverlayColumn({ children }: { children: ReactNode }) {
   );
 }
 
-/** Center pane router. `tabs` displayMode renders the UNIFIED tab bar —
- *  session tabs and editor file tabs share ONE strip, and whichever tab is
- *  active (chat or editor) takes the full center width (no split). `single`
- *  mode keeps the legacy layout: a horizontal split between the chat column
- *  (left) and the file-editor column (right), where the editor column only
- *  appears when a file or plan tab is open (see the design notes in
- *  docs/tech-stack.md).
+/** Center pane. The tab layout is the ONLY center mode — the `single`
+ *  (单会话) mode was removed on 2026-10-31: session tabs live in the
+ *  titlebar strip, file tabs in their own strip below it, and whichever is
+ *  active takes the full center width.
  *
  *  `wide` (wide-panel 3:7 mode) is a RENDER VARIATION, not a different tree:
  *  the same components stay mounted and only the editor surface is hidden
@@ -637,11 +634,7 @@ function CornerOverlayColumn({ children }: { children: ReactNode }) {
  *  a relayout, never a remount — the chat panes (Tiptap composers, scroll,
  *  drafts) and everything else below this point survive the toggle. */
 function CenterPane({ wide }: { wide: boolean }) {
-  const displayMode = useSessionStore((s) => s.displayMode);
-  if (displayMode === "tabs") {
-    return <UnifiedTabbedPane wide={wide} />;
-  }
-  return <SplitCenterPane wide={wide} />;
+  return <UnifiedTabbedPane wide={wide} />;
 }
 
 /** Per-tab surface router: a kind="terminal" session renders the PTY pane
@@ -791,249 +784,11 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
   );
 }
 
-/** `single` displayMode: a horizontal split between the chat column (left)
- *  and the file-editor column (right). When no file is open the editor
- *  column is omitted and the chat column takes the full width — the layout
- *  the user sees when they haven't clicked any files yet. The editor column
- *  hosts the Monaco FileEditor + its own tab bar (OpenTabsBar), and is only
- *  rendered when `ideActiveFile` is non-null.
- *
- *  Wide mode CSS-hides the editor column (keep-alive) and lets the chat fill
- *  the center — the right panel lives in the layout's aside beside it. Both
- *  columns are siblings of the same flex row, so the hide is a class flip,
- *  never a remount. */
-function SplitCenterPane({ wide }: { wide: boolean }) {
-  // The active file is scoped to the active project - switching projects
-  // swaps to that project's open files (or hides the editor if none).
-  const activeProjectId = useSessionStore((s) => s.activeProjectId);
-  const activeFile = useSessionStore((s) =>
-    activeProjectId ? s.ideActiveFileByProject[activeProjectId] ?? null : null,
-  );
-  // Plan tab: the editor column is visible when a file tab is active OR the
-  // plan tab is active. EditorColumn decides whether to render PlanViewer
-  // (plan tab active) or FileEditor (file tab active) based on planTabActive.
-  const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const planTabActive = useSessionStore(
-    (s) => (activeSessionId ? s.planTabActiveBySession[activeSessionId] ?? false : false),
-  );
-
-  // In `single` displayMode, normal file previews are rendered in the right panel's
-  // dual-column FilesPanel instead of splitting the center pane. The center pane only
-  // splits for the plan tab (PlanViewer) when active.
-  const editorMounted = planTabActive && !wide;
-  const editorVisible = editorMounted;
-
-
-  // Draggable chat|editor split. The editor column's share is a persisted
-  // percentage; the chat column gets the remainder. The Divider reports a px
-  // delta which we convert to a percentage delta using the container's
-  // measured width (captured via ref on the split row).
-  const editorWidthPct = useSessionStore((s) => s.editorWidthPct);
-  const adjustEditorWidthPct = useSessionStore((s) => s.adjustEditorWidthPct);
-  const resetEditorWidthPct = useSessionStore((s) => s.resetEditorWidthPct);
-  const splitRef = useRef<HTMLDivElement>(null);
-
-  // Convert a px drag delta into a percentage-point delta relative to the
-  // container width. The divider sits to the LEFT of the editor column, so the
-  // sign flip (growing the editor shrinks as the handle moves right) lives in
-  // adjustEditorWidthPct — here we just translate px to percentage points.
-  const handleEditorResize = (deltaPx: number) => {
-    const el = splitRef.current;
-    if (!el) return;
-    const w = el.getBoundingClientRect().width;
-    if (w <= 0) return;
-    adjustEditorWidthPct((deltaPx / w) * 100);
-  };
-
-  return (
-    <div ref={splitRef} className="flex h-full min-h-0">
-      {/* Chat column - flex-basis is the remainder of the editor share so the
-          two columns split the center pane proportionally. When no file is
-          open and no plan is viewed it takes the full width (flex-1). */}
-      <div
-        className="flex min-w-[600px] shrink-0 flex-col"
-        style={editorVisible ? { flexGrow: 0, flexBasis: `${100 - editorWidthPct}%` } : { flexGrow: 1, flexBasis: "0%" }}
-      >
-
-        <ChatColumn />
-      </div>
-      {/* Divider between chat and editor - only while the editor column is
-          actually visible (a hidden keep-alive column gets no handle). */}
-      {editorVisible && (
-        <Divider
-          orientation="vertical"
-          onResize={handleEditorResize}
-          onDoubleClick={resetEditorWidthPct}
-        />
-      )}
-      {/* Editor column - mounted while a file or plan tab is open; wide mode
-          keeps it mounted but `hidden` (flexBasis is inert under display:none,
-          the chat's flexGrow:1 above takes the full width). */}
-      {editorMounted && (
-        <div
-          className={cn(
-            "flex min-w-0 flex-col border-l border-edge-panel bg-surface",
-            !editorVisible && "hidden",
-          )}
-          style={{ flexGrow: 0, flexBasis: `${editorWidthPct}%` }}
-        >
-          <EditorColumn filePath={activeFile} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** The chat half of the single-mode split: the active ChatPane (the tab
- *  strip lives in the titlebar since the single-row merge).
- *
- *  Tabs mode keeps every OPEN tab's pane mounted, backgrounded via CSS
- *  (display:none) — pane lifetime is the user's own tab strip, and closeTab
- *  intentionally keeps the store buckets so re-opening shows the latest state.
- *
- *  Single mode mounts ONLY the active pane (单会话 = one live thread): the
- *  previous pane unmounts on every switch, and the session that ages out of
- *  the two-generation grace window (current + previous) gets its heavy store
- *  buckets pruned via `pruneSessionHistory` — loaded messages (incl. base64
- *  image blocks), turn-files cards, subagent transcripts, usage history. The
- *  grace window keeps A↔B ping-pong refetch-free (the previous session's
- *  store data survives; only the pane remounts), and anything older is fully
- *  destroyed: the next activation re-fetches the first page because
- *  selectSession/openTab gate on historyLoadedBySession. Sessions with a
- *  running turn or a pending question are never pruned (their live event
- *  stream, turn.done persistence, and the left-bar badge read those buckets)
- *  — they're deferred and retried on the next switch. */
-
-/** Buckets kept alive in single mode: [previous, current], most recent last.
- *  Module-level so it survives ChatColumn re-mounts (mode switches). */
-const singleModeGrace: string[] = [];
-const SINGLE_MODE_GRACE = 2;
-/** Eviction candidates deferred because the session was still live (running
- *  turn / pending question) at prune time. Retried on every switch. */
-const singleModePruneRetry: string[] = [];
-let lastChatColumnMode: "single" | "tabs" | null = null;
-
-function ChatColumn() {
-  const displayMode = useSessionStore((s) => s.displayMode);
-  const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const openTabs = useSessionStore((s) => s.openTabs);
-  const splitSessionIds = useSessionStore((s) => s.splitSessionIds);
-
-  // Single-mode memory policy driver (see the block comment above).
-  useEffect(() => {
-    if (displayMode !== "single") {
-      lastChatColumnMode = displayMode;
-      return;
-    }
-    if (lastChatColumnMode !== "single") {
-      // Entering single mode: baseline the grace window at the incoming
-      // session — its pane is the one being mounted right now.
-      lastChatColumnMode = "single";
-      singleModeGrace.length = 0;
-      if (activeSessionId != null) singleModeGrace.push(activeSessionId);
-      return;
-    }
-    if (activeSessionId == null) return;
-    if (singleModeGrace[singleModeGrace.length - 1] === activeSessionId) return;
-    singleModeGrace.push(activeSessionId);
-    const candidates: string[] = [];
-    while (singleModeGrace.length > SINGLE_MODE_GRACE) {
-      candidates.push(singleModeGrace.shift()!);
-    }
-    candidates.push(...singleModePruneRetry.splice(0));
-    if (candidates.length === 0) return;
-    const s = useSessionStore.getState();
-    for (const id of candidates) {
-      if (id === activeSessionId || singleModeGrace.includes(id)) continue;
-      // Split-view members are visibly mounted in the grid — exempt from
-      // the grace-window eviction entirely (agreed policy: split panes stay
-      // resident).
-      if (s.splitSessionIds.includes(id)) continue;
-      // Live threads keep their buckets: a running turn's events and its
-      // turn.done persistence read messagesBySession, and a pending question
-      // drives the left-bar/activity badge. Retry on the next switch.
-      if (s.runningBySession[id] || s.pendingQuestionBySession[id]) {
-        singleModePruneRetry.push(id);
-        continue;
-      }
-      s.pruneSessionHistory(id);
-    }
-  }, [activeSessionId, displayMode]);
-
-  // Tabs-mode memory hygiene: prune any resident session buckets whose tab has
-  // been closed (and has no in-flight turn / pending question). Survives tab closures,
-  // project switches, and archives without letting megabytes of base64 images linger.
-  useEffect(() => {
-    if (displayMode !== "tabs") return;
-    const s = useSessionStore.getState();
-    const openSet = new Set(openTabs);
-    for (const id of Object.keys(s.messagesBySession)) {
-      if (openSet.has(id)) continue;
-      if (s.runningBySession[id] || s.pendingQuestionBySession[id]) continue;
-      s.pruneSessionHistory(id);
-    }
-  }, [openTabs, displayMode]);
-
-  if (displayMode === "tabs") {
-    // Defensive: CenterPane routes "tabs" to UnifiedTabbedPane, so this
-    // component (mounted only under SplitCenterPane) never actually runs in
-    // tabs mode. The tab strip itself lives in the titlebar since the
-    // 2026-10-31 single-row merge — nothing renders here anymore.
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="relative min-h-0 flex-1">
-          {openTabs.map((sid) => (
-            <div
-              key={sid}
-              className={`absolute inset-0 ${sid === activeSessionId ? "" : "hidden"}`}
-            >
-              <SessionSurface sessionId={sid} isActive={sid === activeSessionId} />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // Split view (single displayMode, ≥ 2 members): every member pane mounts
-  // simultaneously in the 2×2 grid with ONE shared composer strip below.
-  // Split members never take the keyed-remount path below — their lifetime
-  // is the grid, and the prune effect above exempts them.
-  if (splitSessionIds.length >= 2) {
-    return <SplitChatArea sessionIds={splitSessionIds} />;
-  }
-
-  // single mode: mount ONLY the active pane. The keyed div forces a full
-  // remount on switch — that IS the destruction the mode promises. What the
-  // user loses vs. the old 8-pane keep-alive is instant back-switching
-  // (Tiptap re-init + timeline re-parse on return); the composer draft and
-  // capsule state live in the store and survive, and the immediately
-  // previous session's data stays in memory (grace window) so returning to
-  // it doesn't even refetch.
-  if (activeSessionId == null) {
-    return <ChatPane sessionId={null} />;
-  }
-  return (
-    <SplitDropHost className="relative min-h-0 flex-1">
-      <div key={activeSessionId} className="absolute inset-0">
-        <SessionSurface sessionId={activeSessionId} isActive />
-      </div>
-    </SplitDropHost>
-  );
-}
-
-/** Drag-in host for the NON-split center: dragging a sidebar session over
- *  the center materializes the split grid around the currently open session
- *  (addToSplit seeds it as pane 1; from `tabs` displayMode it switches the
- *  mode first). Used by the plain single view AND UnifiedTabbedPane's
- *  content area. Same highlight contract as SplitChatArea's own drop
- *  handling. */
-/** Drag-in host for the NON-split center. The drop is the split gesture in
- *  BOTH display modes (store-side mode dispatch): `single` seeds the global
- *  grid around the open session; `tabs` splits the currently open tab in
- *  place (per-tab group — the dragged session never becomes a tab). Used by
- *  the plain single view AND UnifiedTabbedPane's content area (the tab
- *  strip itself keeps its own dnd-kit reorder zone). */
+/** Drag-in host for the NON-split center. The drop is the split gesture:
+ *  addToSplit splits the currently open tab in place (per-tab group — the
+ *  dragged session never becomes a tab). Used by UnifiedTabbedPane's
+ *  content area (the titlebar strip keeps its own dnd-kit reorder zone).
+ *  Same highlight contract as SplitChatArea's own drop handling. */
 function SplitDropHost({ className, children }: { className?: string; children: ReactNode }) {
   const addToSplit = useSessionStore((s) => s.addToSplit);
   const [dragOver, setDragOver] = useState(false);

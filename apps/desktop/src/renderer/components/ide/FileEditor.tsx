@@ -497,7 +497,6 @@ function EditorActionsMenu({
   onToggleEditorMode: () => void;
 }) {
   const { t } = useI18n();
-  const displayMode = useSessionStore((s) => s.displayMode);
   const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
   const toggleTabsFilePreviewPlacement = useSessionStore((s) => s.toggleTabsFilePreviewPlacement);
   const closeFileInIde = useSessionStore((s) => s.closeFileInIde);
@@ -564,23 +563,21 @@ function EditorActionsMenu({
               </span>
             </Menu.Item>
 
-            {displayMode === "tabs" && (
-              <Menu.Item
-                onClick={toggleTabsFilePreviewPlacement}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none hover:bg-surface-muted hover:text-content data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
-              >
-                {tabsFilePreviewPlacement === "sidebar" ? (
-                  <IconLayoutColumns size={13} />
-                ) : (
-                  <IconLayoutSidebarRight size={13} />
-                )}
-                <span>
-                  {tabsFilePreviewPlacement === "sidebar"
-                    ? t("ide.files.placementCenterAction")
-                    : t("ide.files.placementSidebarAction")}
-                </span>
-              </Menu.Item>
-            )}
+            <Menu.Item
+              onClick={toggleTabsFilePreviewPlacement}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none hover:bg-surface-muted hover:text-content data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+            >
+              {tabsFilePreviewPlacement === "sidebar" ? (
+                <IconLayoutColumns size={13} />
+              ) : (
+                <IconLayoutSidebarRight size={13} />
+              )}
+              <span>
+                {tabsFilePreviewPlacement === "sidebar"
+                  ? t("ide.files.placementCenterAction")
+                  : t("ide.files.placementSidebarAction")}
+              </span>
+            </Menu.Item>
 
             <Menu.Separator className="my-1 h-px bg-edge" />
 

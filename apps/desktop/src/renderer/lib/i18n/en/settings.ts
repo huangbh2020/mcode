@@ -69,10 +69,6 @@ export const en = {
   "settings.voice.langZh": "Chinese (zh-CN)",
   "settings.voice.langEn": "English (en-US)",
 
-  "settings.general.displayMode": "Center pane mode",
-  "settings.general.displayModeDesc": "How the center chat area presents threads when you click one in the left bar.",
-  "settings.general.displayModeSingle": "Single session",
-  "settings.general.displayModeTabs": "Tabs",
   "settings.general.density": "Conversation density",
   "settings.general.densityDesc":
     "Adjusts the row gap between messages, the gap between blocks inside a message, and the paragraph spacing / line height of replies. Compact fits more on screen; relaxed is easier to read.",
@@ -800,7 +796,6 @@ export const en = {
   "settings.shortcuts.cmdNewSession": "New session",
   "settings.shortcuts.cmdCloseTab": "Close current tab",
   "settings.shortcuts.cmdPalette": "Open command palette",
-  "settings.shortcuts.cmdToggleDisplayMode": "Toggle display mode",
   "settings.shortcuts.cmdSearchFiles": "Search files",
   "settings.shortcuts.cmdSettings": "Open settings",
   "settings.shortcuts.cmdFocusInput": "Focus chat input",

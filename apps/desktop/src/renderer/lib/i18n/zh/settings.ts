@@ -72,10 +72,6 @@ export const zh = {
   "settings.voice.langZh": "中文 (zh-CN)",
   "settings.voice.langEn": "英语 (en-US)",
 
-  "settings.general.displayMode": "中间面板显示模式",
-  "settings.general.displayModeDesc": "点击左侧会话时,中间聊天区的呈现方式。",
-  "settings.general.displayModeSingle": "单会话模式",
-  "settings.general.displayModeTabs": "Tab 标签模式",
   "settings.general.density": "对话紧凑度",
   "settings.general.densityDesc":
     "调整消息之间的行间距、消息内块间距,以及回复正文的段落间距与行高。紧凑可在屏幕内看到更多内容,宽松阅读更舒适。",
@@ -799,7 +795,6 @@ export const zh = {
   "settings.shortcuts.cmdNewSession": "新建会话",
   "settings.shortcuts.cmdCloseTab": "关闭当前标签页",
   "settings.shortcuts.cmdPalette": "打开命令面板",
-  "settings.shortcuts.cmdToggleDisplayMode": "切换显示模式",
   "settings.shortcuts.cmdSearchFiles": "搜索文件",
   "settings.shortcuts.cmdSettings": "打开设置",
   "settings.shortcuts.cmdFocusInput": "聚焦聊天输入框",

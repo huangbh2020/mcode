@@ -361,20 +361,14 @@ function EditorColumnToggle() {
   );
   const setPlanTabActive = useSessionStore((s) => s.setPlanTabActive);
 
-  // In `tabs` displayMode the unified center bar decides visibility — the
-  // editor "shows" only while it holds the center focus. In `single` mode
-  // content presence alone decides (the split layout always shows the
-  // editor column when it has content).
-  const displayMode = useSessionStore((s) => s.displayMode);
+  // The unified center bar decides visibility — the editor "shows" only
+  // while it holds the center focus.
   const centerTabFocus = useSessionStore((s) => s.centerTabFocus);
 
   // Match the center pane's visibility logic: visible when a file is active
   // OR the plan tab is active. (planTabOpen alone - plan exists but is not
   // the active tab - does NOT make the editor visible, matching CenterPane.)
-  const editorVisible =
-    displayMode === "tabs"
-      ? centerTabFocus === "editor" && (!!activeFile || planTabActive)
-      : !!activeFile || planTabActive;
+  const editorVisible = centerTabFocus === "editor" && (!!activeFile || planTabActive);
   // Whether there's something to restore when the editor is hidden: either an
   // open file OR a plan tab that can be re-activated.
   const canRestore = openFiles.length > 0 || planTabOpen;

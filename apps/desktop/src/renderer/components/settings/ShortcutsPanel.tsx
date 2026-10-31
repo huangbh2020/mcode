@@ -166,7 +166,6 @@ function labelForId(id: string): MessageId {
     "session.new": "settings.shortcuts.cmdNewSession",
     "tab.close": "settings.shortcuts.cmdCloseTab",
     "command.palette": "settings.shortcuts.cmdPalette",
-    "view.display-mode.toggle": "settings.shortcuts.cmdToggleDisplayMode",
     "files.search": "settings.shortcuts.cmdSearchFiles",
     "view.settings": "settings.shortcuts.cmdSettings",
     "chat.focus-input": "settings.shortcuts.cmdFocusInput",

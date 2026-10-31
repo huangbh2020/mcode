@@ -4,9 +4,9 @@ import {
   PASTE_TAG_THRESHOLD_CHARS_MAX,
 } from "@renderer/stores/sessionStore.js";
 import { Select, Input, Switch, Button } from "@renderer/components/ui/index.js";
-import { IconSquare, IconStack2, IconList, IconListDetails, IconGripHorizontal, IconX } from "@renderer/lib/icons.js";
+import { IconList, IconListDetails, IconGripHorizontal, IconX } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
-import type { ChatDensity, DisplayMode, AutoArchiveConfig, Locale } from "@contracts/ipc";
+import type { ChatDensity, AutoArchiveConfig, Locale } from "@contracts/ipc";
 import type { ReactNode } from "react";
 import { SettingRow } from "./SettingRow.js";
 import { PanelHeader } from "./PanelHeader.js";
@@ -33,11 +33,6 @@ import { ToolApprovalPanel } from "./ToolApprovalPanel.js";
  * apart.
  */
 
-const DISPLAY_MODE_OPTIONS: { value: DisplayMode; labelKey: MessageId; icon: ReactNode }[] = [
-  { value: "single", labelKey: "settings.general.displayModeSingle", icon: <IconSquare size={14} className="text-content-muted" /> },
-  { value: "tabs", labelKey: "settings.general.displayModeTabs", icon: <IconStack2 size={14} className="text-content-muted" /> },
-];
-
 const DENSITY_OPTIONS: { value: ChatDensity; labelKey: MessageId; icon: ReactNode }[] = [
   { value: "compact", labelKey: "settings.general.densityCompact", icon: <IconList size={14} className="text-content-muted" /> },
   { value: "comfortable", labelKey: "settings.general.densityComfortable", icon: <IconListDetails size={14} className="text-content-muted" /> },
@@ -58,10 +53,6 @@ export function GeneralPanel() {
   // ── UI language ──
   const locale = useSessionStore((s) => s.locale);
   const setLocale = useSessionStore((s) => s.setLocale);
-
-  // ── Display mode ──
-  const displayMode = useSessionStore((s) => s.displayMode);
-  const setDisplayMode = useSessionStore((s) => s.setDisplayMode);
 
   // ── Message-stream density ──
   const chatDensity = useSessionStore((s) => s.chatDensity);
@@ -157,48 +148,6 @@ export function GeneralPanel() {
                     <Select.Item value="en">
                       <Select.ItemText>{t("settings.general.languageEn")}</Select.ItemText>
                     </Select.Item>
-                  </Select.List>
-                </Select.Popup>
-              </Select.Positioner>
-            </Select.Portal>
-          </Select.Root>
-        </SettingRow>
-
-        {/* ── Center-pane display mode ── */}
-        <SettingRow
-          title={t("settings.general.displayMode")}
-          desc={t("settings.general.displayModeDesc")}
-          htmlFor="setting-displaymode"
-        >
-          <Select.Root
-            value={displayMode}
-            onValueChange={(v) => void setDisplayMode(v as DisplayMode)}
-          >
-            <Select.Trigger id="setting-displaymode" className="w-full">
-              <Select.Value>
-                {(val: DisplayMode) => {
-                  const o =
-                    DISPLAY_MODE_OPTIONS.find((x) => x.value === val) ??
-                    DISPLAY_MODE_OPTIONS[0];
-                  return (
-                    <span className="flex items-center gap-1.5">
-                      {o.icon}
-                      {t(o.labelKey)}
-                    </span>
-                  );
-                }}
-              </Select.Value>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Positioner>
-                <Select.Popup>
-                  <Select.List>
-                    {DISPLAY_MODE_OPTIONS.map((o) => (
-                      <Select.Item key={o.value} value={o.value}>
-                        {o.icon}
-                        <Select.ItemText>{t(o.labelKey)}</Select.ItemText>
-                      </Select.Item>
-                    ))}
                   </Select.List>
                 </Select.Popup>
               </Select.Positioner>

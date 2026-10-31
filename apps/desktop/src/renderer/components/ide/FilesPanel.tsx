@@ -25,21 +25,20 @@ const FileEditor = lazy(() =>
 /**
  * Files panel - the right-panel "Files" tab body.
  *
- * In `single` displayMode with an active file open, this panel splits into two
- * columns:
+ * With the file preview placed in the sidebar (`tabsFilePreviewPlacement ===
+ * "sidebar"`) and an active file open, this panel splits into two columns:
  *  - Left column: file preview/editor (Monaco FileEditor), with path and close button;
  *  - Divider: draggable handle to resize split share (fileTreeSplitPct);
  *  - Right column: the directory FileTree for navigating and switching files.
  *
- * In tabs mode or when no file is active, it renders the classic single-column
- * file navigator.
+ * Otherwise (center placement or no file active) it renders the classic
+ * single-column file navigator.
  */
 export function FilesPanel() {
   const { t } = useI18n();
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
   const setSearchDialogOpen = useSessionStore((s) => s.setSearchDialogOpen);
-  const displayMode = useSessionStore((s) => s.displayMode);
   const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
   const toggleTabsFilePreviewPlacement = useSessionStore((s) => s.toggleTabsFilePreviewPlacement);
   const activeFile = useSessionStore((s) =>
@@ -97,7 +96,7 @@ export function FilesPanel() {
     return <EmptyState />;
   }
 
-  const isSplitLayout = displayMode === "single" || tabsFilePreviewPlacement === "sidebar";
+  const isSplitLayout = tabsFilePreviewPlacement === "sidebar";
 
   // Single-column tree content
   const treeColumn = (
@@ -134,30 +133,29 @@ export function FilesPanel() {
         >
           <IconSearch size={14} />
         </button>
-        {displayMode === "tabs" && (
-          <button
-            type="button"
-            onClick={toggleTabsFilePreviewPlacement}
-            title={
-              tabsFilePreviewPlacement === "center"
-                ? t("ide.files.placementCenterHint")
-                : t("ide.files.placementSidebarHint")
-            }
-            aria-label={
-              tabsFilePreviewPlacement === "center"
-                ? t("ide.files.placementCenterHint")
-                : t("ide.files.placementSidebarHint")
-            }
-            className={cn(
-              "flex shrink-0 items-center justify-center rounded p-0.5 transition-colors",
-              tabsFilePreviewPlacement === "sidebar"
-                ? "bg-accent/15 text-accent hover:bg-accent/20"
-                : "text-content-subtle hover:bg-surface-hover hover:text-content",
-            )}
-          >
-            <IconLayoutSidebarRight size={14} />
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={toggleTabsFilePreviewPlacement}
+          title={
+            tabsFilePreviewPlacement === "center"
+              ? t("ide.files.placementCenterHint")
+              : t("ide.files.placementSidebarHint")
+          }
+          aria-label={
+            tabsFilePreviewPlacement === "center"
+              ? t("ide.files.placementCenterHint")
+              : t("ide.files.placementSidebarHint")
+          }
+          className={cn(
+            "flex shrink-0 items-center justify-center rounded p-0.5 transition-colors",
+            // Neutral active state — green is reserved for attention signals.
+            tabsFilePreviewPlacement === "sidebar"
+              ? "bg-surface-hover text-content"
+              : "text-content-subtle hover:bg-surface-hover hover:text-content",
+          )}
+        >
+          <IconLayoutSidebarRight size={14} />
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">

@@ -39,7 +39,6 @@ export const DEFAULT_SHORTCUTS: ShortcutBindings = {
   "layout.toggle-browser": { key: "b", cmd: true, shift: false, alt: true },
   "sidechat.open": { key: "q", cmd: true, shift: true, alt: false },
   "layout.toggle-wide-panel": { key: "b", cmd: true, shift: true, alt: true },
-  "view.display-mode.toggle": { key: "t", cmd: true, shift: true, alt: false },
   "appearance.theme.toggle": { key: "l", cmd: true, shift: true, alt: false },
   "tab.close": { key: "w", cmd: true, shift: false, alt: false },
   "chat.focus-input": { key: "n", cmd: true, shift: true, alt: false },

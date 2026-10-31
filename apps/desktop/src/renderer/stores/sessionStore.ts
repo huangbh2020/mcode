@@ -42,8 +42,6 @@ import { DEFAULT_GESTURE_SETTINGS } from "@renderer/lib/gestures.js";
 import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeChoice, type EditorThemeId } from "@renderer/lib/editorThemes.js";
 import { sanitizeFontFamily } from "@renderer/lib/theme.js";
 import {
-  DISPLAY_MODE_SETTING_KEY,
-  SPLIT_SESSIONS_SETTING_KEY,
   TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
   INLINE_FILE_MENTION_SETTING_KEY,
@@ -325,25 +323,23 @@ function currentNavEntryFor(get: () => SessionState): NavEntry | null {
 
 /** Whether `sid`'s chat counts as "on screen" for unread-badge / toast
  *  gating in ingestEvent: non-active sessions are never on screen; the
- *  active one is — UNLESS the unified center bar (tabs displayMode, not in
- *  wide-panel mode where ChatColumn still shows the chat) has handed the
- *  center to the editor, hiding the active session's pane behind it. In
- *  that state noteworthy events (turn done / approval needed) must badge
- *  and toast again, or they'd be silently missed. Split-view members are
- *  ALL visibly mounted while their grid shows: always in `single`
- *  (membership ≥2 renders the grid), in `tabs` while their per-tab group
- *  owns the center (the active tab's group) — a group of an INACTIVE tab
- *  is not visible and its members still badge/toast. */
+ *  active one is — UNLESS the unified center bar (not in wide-panel mode
+ *  where the chat column still shows) has handed the center to the editor,
+ *  hiding the active session's pane behind it. In that state noteworthy
+ *  events (turn done / approval needed) must badge and toast again, or
+ *  they'd be silently missed. Split-view members are ALL visibly mounted
+ *  while their per-tab group owns the center (the active tab's group) — a
+ *  group of an INACTIVE tab is not visible and its members still
+ *  badge/toast. */
 /** Exported for ChatPane's cold-eviction self-heal effect: a pane that
  *  re-appears without an activation action (editor-focus overlay exit,
  *  split-grid re-show) must re-fetch if its transcript was evicted while it
  *  was hidden. Boolean result → stable Zustand selector. */
 export function isSessionChatOnScreen(
   sid: string,
-  s: Pick<SessionState, "activeSessionId" | "displayMode" | "tabsFilePreviewPlacement" | "centerTabFocus" | "widePanelOpen" | "splitSessionIds" | "splitGroupsBySession">,
+  s: Pick<SessionState, "activeSessionId" | "tabsFilePreviewPlacement" | "centerTabFocus" | "widePanelOpen" | "splitGroupsBySession">,
 ): boolean {
-  if (s.displayMode === "single" && s.splitSessionIds.includes(sid)) return true;
-  if (s.displayMode === "tabs" && s.activeSessionId) {
+  if (s.activeSessionId) {
     const group = activeTabsModeSplitGroup(s);
     if (group) {
       if (!group.includes(sid)) return false;
@@ -359,7 +355,6 @@ export function isSessionChatOnScreen(
   }
   if (sid !== s.activeSessionId) return false;
   return !(
-    s.displayMode === "tabs" &&
     s.tabsFilePreviewPlacement !== "sidebar" &&
     s.centerTabFocus === "editor" &&
     !s.widePanelOpen
@@ -902,24 +897,14 @@ export interface SessionState {
 
   /* ── tab state (center pane) ──
    *  `openTabs` is the ordered list of sessionIds the user has open in the
-   *  center pane. In `single` displayMode the renderer only mounts the
-   *  `activeSessionId` chat pane (so the list is mostly informational); in
-   *  `tabs` mode the list drives the SessionTabs strip and switching
-   *  between them is the primary way to navigate. We always write the
-   *  list (regardless of mode) so flipping the mode switch never loses
-   *  the user's open sessions. */
+   *  center pane; it drives the titlebar tab strip, and switching between
+   *  them is the primary way to navigate. */
   openTabs: string[];
-  /** How the center pane renders. Persisted in the `settings` table. */
+  /** How the center pane renders. The `single` (单会话) mode was removed on
+   *  2026-10-31 — the tab bar is the only layout, so this is the constant
+   *  "tabs" (kept as a field so the many readers stay one-shaped; the
+   *  settings key is no longer read or written). */
   displayMode: DisplayMode;
-  /** Split-view membership in `single` displayMode: the ordered sessionIds
-   *  rendered simultaneously in the center 2×2 grid (2 = side-by-side, 3 =
-   *  top row + bottom-left, 4 = full grid). Invariant: length is 0 or ≥ 2 —
-   *  collapsing below 2 clears the grid entirely. Persisted under
-   *  `ui.splitSessions` (dead ids dropped at hydration). Focus inside the
-   *  grid IS `activeSessionId`: clicking a pane runs the normal activation
-   *  chain, so the composer slots / title bar / git toolbar / right panel
-   *  all follow the focused pane with zero extra wiring. */
-  splitSessionIds: string[];
   /** Per-tab split groups in `tabs` displayMode: a session TAB can itself
    *  host a 2×2 grid — dragging a sidebar session onto the open tab splits
    *  THAT tab in place (single-mode style) WITHOUT opening the dragged
@@ -1881,29 +1866,24 @@ export interface SessionState {
    *  target); the renderer caches migrate only after the IPC accepts. */
   moveSession: (sessionId: string, toProjectId: string) => Promise<void>;
   /** Switch the active session (and load its history if not cached).
-   *  Always replaces the center pane content. In `single` displayMode
-   *  this is the only navigation primitive; in `tabs` mode it's used
-   *  by SessionTabs to flip between already-open tabs. */
+   *  Always replaces the center pane content; used by the titlebar tab
+   *  strip to flip between already-open tabs (and by split panes to focus
+   *  a member). */
   selectSession: (sessionId: string) => Promise<void>;
   /** Open a session as a tab. If it's already in `openTabs` this is a
    *  no-op except for the activeSessionId flip; otherwise it's appended
    *  to the end of the list. This is the LeftBar's "click a thread"
-   *  entry point in both display modes — the difference is purely
-   *  cosmetic (single mode hides the tab strip, tabs mode shows it). */
+   *  entry point. */
   openTab: (sessionId: string) => Promise<void>;
-  /** Split-open gesture, mode-aware — see `splitSessionIds` (single) and
-   *  `splitGroupsBySession` (tabs) for the two membership models. Guards
-   *  shared by both: unknown session → no-op; a 4-pane grid → silent
+  /** Split-open gesture — see `splitGroupsBySession` for the membership
+   *  model. Guards: unknown session → no-op; a 4-pane grid → silent
    *  reject; dropping a session already in the target grid → focus its
-   *  pane. Tabs mode NEVER opens the dragged session as a tab — the split
+   *  pane. The split NEVER opens the dragged session as a tab — it
    *  happens inside the currently open tab. */
   addToSplit: (sessionId: string) => Promise<void>;
   removeFromSplit: (sessionId: string) => Promise<void>;
-  /** Sidebar / palette session click. In split view (single displayMode,
-   *  ≥ 2 members) a click on a session NOT on the grid REPLACES the focused
-   *  pane's slot (VS Code active-editor-group semantics: the center shows
-   *  what you last clicked, and the arrangement stays a grid); a member
-   *  click just focuses its pane. Outside split view it's a plain openTab. */
+  /** Sidebar / palette session click. A session already visible inside a
+   *  tab's split group focuses its pane; otherwise it's a plain openTab. */
   openSessionFromSidebar: (sessionId: string) => Promise<void>;
   /** Load a session's first page of persisted messages WITHOUT activating
    *  it. Used for hover-prefetch from the sidebar so that by the time the
@@ -2180,12 +2160,8 @@ export interface SessionState {
   setSelectedGitDiffFile: (target: SelectedGitDiffTarget | null) => void;
   bumpGitStatusNonce: () => void;
 
-  /** Update the center-pane display mode. Persists to the `settings`
-   *  table so the choice survives restart. */
-  setDisplayMode: (mode: DisplayMode) => Promise<void>;
   /** Toggle multi-row tab wrapping for the center tab strips. Instant
-   *  local flip + fire-and-forget persistence (same pattern as
-   *  setDisplayMode). */
+   *  local flip + fire-and-forget persistence. */
   setTabBarMultiRow: (on: boolean) => void;
   /** Toggle inline `@<basename>` file-mention markers in the composer and
    * transcript (issue #22). Instant local flip + fire-and-forget
@@ -2197,7 +2173,7 @@ export interface SessionState {
   setPastePlainText: (on: boolean) => void;
   /** Switch the left-bar view between the project tree and the session
    *  stream. Instant local flip + fire-and-forget persistence (same
-   *  pattern as setDisplayMode). */
+   *  pattern as setTabBarMultiRow). */
   setLeftBarMode: (mode: LeftBarMode) => Promise<void>;
   /** Switch the UI theme style (classic ↔ sketch). Instant local flip +
    *  fire-and-forget persistence; the `.sketch` class application reacts
@@ -3509,34 +3485,6 @@ function findSession(
   return workersById?.[id];
 }
 
-/** Fire-and-forget persistence of the split-view membership. Same policy as
- *  the other UI-pref setters: a failed write keeps the in-memory state and
- *  logs; the next mutation retries. */
-function persistSplitSessions(ids: string[]) {
-  api.setting
-    .set({ key: SPLIT_SESSIONS_SETTING_KEY, value: JSON.stringify(ids) })
-    .catch((err) => console.error("setting.set(splitSessions) failed:", err));
-}
-
-/** Parse + validate a persisted `ui.splitSessions` blob (JSON string array)
- *  against a session-lookup predicate. Dead ids drop silently; a remainder
- *  below 2 collapses to [] (the store's 0-or-≥2 invariant — one pane is not
- *  a split). Exported for the split-view smoke. */
-export function parseSplitSessionIds(
-  raw: string | null | undefined,
-  exists: (id: string) => boolean,
-): string[] {
-  let parsed: unknown;
-  try {
-    parsed = raw ? JSON.parse(raw) : null;
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  const valid = parsed.filter((x): x is string => typeof x === "string").filter(exists);
-  return valid.length >= 2 ? valid : [];
-}
-
 /** Minimum width (px) a split pane must keep — the defining invariant of
  *  the width-adaptive split: how many panes the grid accepts is decided by
  *  the measured area width divided by this floor. */
@@ -4073,18 +4021,9 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   const idx = s.openTabs.indexOf(id);
   const baseOpenTabs = idx === -1 ? s.openTabs : s.openTabs.filter((sid) => sid !== id);
   const wasActive = s.activeSessionId === id;
-  // Split-view membership cleanup, both modes:
-  //  - single: a deleted pane leaves the global grid; a remainder below 2
-  //    collapses to no grid at all (removeFromSplit's invariant).
-  //  - tabs: the pane leaves its per-tab group; a group losing its root or
-  //    dropping below 2 members dissolves entirely (the tab reverts to its
-  //    plain pane).
-  const splitIdx = s.splitSessionIds.indexOf(id);
-  const nextSplit =
-    splitIdx === -1 ? s.splitSessionIds : s.splitSessionIds.filter((sid) => sid !== id);
-  const collapsedSplit = nextSplit.length < 2 ? [] : nextSplit;
-  const splitPatch =
-    collapsedSplit === s.splitSessionIds ? {} : { splitSessionIds: collapsedSplit };
+  // Split-view cleanup: the pane leaves its per-tab group; a group losing
+  // its root or dropping below 2 members dissolves entirely (the tab
+  // reverts to its plain pane).
   let nextGroups: Record<string, string[]> | null = null;
   let deletedGroupSuccessor: string | null = null;
   for (const [root, members] of Object.entries(s.splitGroupsBySession)) {
@@ -4129,19 +4068,13 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
       ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
       openTabs,
       streamDirty: true,
-      ...splitPatch,
       ...groupsPatch,
     };
   }
   // Was the active tab. Land on the previous tab if any, otherwise the
   // new tail, otherwise null (empty-state placeholder).
   let nextActive: string | null = null;
-  if (collapsedSplit.length >= 2) {
-    // The single-mode grid survives the delete: focus a neighboring pane so
-    // the activation (slots / title bar / right panel) stays on a VISIBLE
-    // session instead of a background tab.
-    nextActive = nextSplit[splitIdx] ?? nextSplit[splitIdx - 1] ?? nextSplit[0] ?? null;
-  } else if (deletedGroupSuccessor) {
+  if (deletedGroupSuccessor) {
     // The tabs-mode group survives (or dissolved onto its root): focus a
     // neighboring pane / the root instead of a background tab.
     nextActive = deletedGroupSuccessor;
@@ -4175,7 +4108,6 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     ...(hadSideChats ? { sideChatsByParent } : {}),
     ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
     openTabs,
-    ...splitPatch,
     ...groupsPatch,
     // `sessions` aliases the ACTIVE PROJECT's list — never assign a bucket
     // the row was removed from (stream aggregate / pinned) into it; those
@@ -6121,16 +6053,16 @@ export function selectActiveEnvPath(s: {
 
 /** Whether the git panel's "changes" sub-tab uses the two-column layout
  *  (left live-diff stage + right repo list). Mirrors FilesPanel's split
- *  layout: single display mode (the right pane is always the preview stage)
- *  or tabs mode with the file preview placed in the sidebar — in both the
- *  right pane runs wide. In tabs mode with "center" preview placement files
- *  open in the center tabs and the right pane tends to be resized narrow,
- *  so the git panel falls back to the classic single-column card list. */
+ *  layout: tabs mode with the file preview placed in the sidebar — the
+ *  right pane runs wide there. With "center" preview placement files open
+ *  in the center tabs and the right pane tends to be resized narrow, so
+ *  the git panel falls back to the classic single-column card list.
+ *  (The `single` display mode this used to OR-in was removed — the tab
+ *  bar is the only center layout.) */
 export function selectGitPanelSplitLayout(s: {
-  displayMode: DisplayMode;
   tabsFilePreviewPlacement: TabsFilePreviewPlacement;
 }): boolean {
-  return s.displayMode === "single" || s.tabsFilePreviewPlacement === "sidebar";
+  return s.tabsFilePreviewPlacement === "sidebar";
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -6160,14 +6092,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // if any) and by `startSession`. Defaulting to [] here means there's no
   // phantom active tab before hydration completes.
   openTabs: [],
-  // Persisted in `settings` table; init() overwrites from the DB. Default is
-  // `tabs` (unified tab bar) — new users land on the tabbed center pane;
-  // anyone who explicitly picked a mode keeps their stored choice.
+  // The `single` display mode was removed (2026-10-31) — the tab bar is the
+  // only center layout, so this is a constant. The settings key is no
+  // longer read or written; a stale `ui.displayMode` blob in the DB is
+  // simply ignored.
   displayMode: "tabs",
-  // Split-view grid membership (both display modes — see the field docs).
-  // [] until init validates the persisted `ui.splitSessions` blob against
-  // the loaded session lists; invariant: 0 or ≥ 2 members.
-  splitSessionIds: [],
   // Per-tab split groups (tabs displayMode) — see the field docs. Empty
   // until the user drags a session onto an open tab; in-memory only.
   splitGroupsBySession: {},
@@ -6454,8 +6383,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const fp = await api.setting
       .getMany({
         keys: [
-          DISPLAY_MODE_SETTING_KEY,
-          SPLIT_SESSIONS_SETTING_KEY,
           TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
           TAB_BAR_MULTI_ROW_SETTING_KEY,
           INLINE_FILE_MENTION_SETTING_KEY,
@@ -6558,15 +6485,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "true" || value === "false") set({ pinnedProjectsOpen: value === "true" });
     } catch (err) {
       console.error("apply(leftbar.pinnedProjectsOpen) failed:", err);
-    }
-
-    // displayMode determines single vs tabs layout - needed before first render
-    // of the center pane so the right structure mounts.
-    try {
-      const value = fp[DISPLAY_MODE_SETTING_KEY];
-      if (value === "single" || value === "tabs") set({ displayMode: value });
-    } catch (err) {
-      console.error("apply(displayMode) failed:", err);
     }
 
     // In tabs displayMode: file preview placement ("center" | "sidebar")
@@ -6905,48 +6823,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       streamDirty: true,
     });
 
-    // Split-view restore (single displayMode only — the persisted blob backs
-    // the GLOBAL single-mode grid; tabs mode's per-tab groups are in-memory
-    // and die with the tab strip across restarts): validate the persisted
-    // membership against the NOW-loaded session lists — dead ids drop
-    // silently, a remainder below 2 collapses to no grid (the 0-or-≥2
-    // invariant). When a split survives, the landing session must be one of
-    // its panes: ui.lastSessionId normally is (it's rewritten on every
-    // activation = focus), but a stale/invalid fallback would otherwise
-    // focus a session with no pane — pin the landing to the first surviving
-    // member instead.
-    if (get().displayMode === "single") {
-      const splitExists = (id: string) =>
-        findSession(
-          byProject,
-          archivedByProject,
-          pinnedRes.status === "fulfilled" ? pinnedRes.value.sessions : [],
-          get().streamSessions,
-          id,
-          get().orchWorkersById,
-        ) != null;
-      const valid = parseSplitSessionIds(fp[SPLIT_SESSIONS_SETTING_KEY], splitExists);
-      if (valid.length >= 2) {
-        set((st) => ({
-          splitSessionIds: valid,
-          // Members join openTabs (the "always write the list" rule) so
-          // a later displayMode flip keeps them reachable as tabs.
-          openTabs: [...new Set([...st.openTabs, ...valid])],
-        }));
-        if (!landingSession || !valid.includes(landingSession.id)) {
-          const member =
-            byProject[landingProject.id]?.find((s) => valid.includes(s.id) && !s.archived) ??
-            Object.values(byProject)
-              .flat()
-              .find((s) => valid.includes(s.id) && !s.archived) ??
-            (pinnedRes.status === "fulfilled"
-              ? pinnedRes.value.sessions.find((s) => valid.includes(s.id) && !s.archived)
-              : undefined);
-          if (member) landingSession = member;
-        }
-      }
-    }
-
     if (landingSession) {
       try {
         await get().selectSession(landingSession.id);
@@ -7199,7 +7075,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // squeeze the dual-column FilesPanel into a 250px strip. Mirrors
         // what setTabsFilePreviewPlacement("sidebar") does on click.
         if (
-          get().displayMode === "tabs" &&
           get().tabsFilePreviewPlacement === "sidebar" &&
           !get().isRightPreviewExpanded
         ) {
@@ -8170,114 +8045,66 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Unknown session: silent no-op.
     if (!row) return;
 
-    // ── tabs displayMode: split the CURRENTLY OPEN TAB in place ──
-    // The dragged session joins the active tab's per-tab group; it never
-    // becomes a tab itself (that's the whole point of the gesture).
-    if (s.displayMode === "tabs") {
-      const root = activeTabsModeSplitRoot(s);
-      if (!root) {
-        // Nothing open to split — the drag degrades to opening the session.
-        await get().openTab(sessionId);
-        return;
-      }
-      const group = s.splitGroupsBySession[root] ?? [root];
-      if (group.includes(sessionId)) {
-        // Already a pane of this tab's grid: plain focus.
-        await get().selectSession(sessionId);
-        return;
-      }
-      // Width-adaptive capacity: reject beyond what the measured area fits
-      // while every pane keeps its minimum width (full grid: silent reject).
-      if (group.length >= splitCapacityForWidth(s.splitAreaWidth)) return;
-      const next = [...group, sessionId];
-      set({
-        splitGroupsBySession: { ...s.splitGroupsBySession, [root]: next },
-      });
-      // Focus the NEW pane (activeSessionId = the member, NOT a tab flip —
-      // the strip stays exactly as it was).
+    // Split the CURRENTLY OPEN TAB in place: the dragged session joins the
+    // active tab's per-tab group; it never becomes a tab itself (that's the
+    // whole point of the gesture).
+    const root = activeTabsModeSplitRoot(s);
+    if (!root) {
+      // Nothing open to split — the drag degrades to opening the session.
+      await get().openTab(sessionId);
+      return;
+    }
+    const group = s.splitGroupsBySession[root] ?? [root];
+    if (group.includes(sessionId)) {
+      // Already a pane of this tab's grid: plain focus.
       await get().selectSession(sessionId);
       return;
     }
-
-    // ── single displayMode: the global persisted grid ──
-    if (s.splitSessionIds.length >= splitCapacityForWidth(s.splitAreaWidth)) return;
-    // A split needs a partner: dropping the FOCUSED session itself (or any
-    // drop while nothing is open) onto an empty grid can't form one —
-    // degrade to a plain focus and keep the 0-or-≥2 invariant.
-    if (
-      s.splitSessionIds.length === 0 &&
-      (s.activeSessionId == null || s.activeSessionId === sessionId)
-    ) {
-      await get().openTab(sessionId);
-      return;
-    }
-    if (s.splitSessionIds.includes(sessionId)) {
-      // Already on the grid: plain focus of its pane.
-      await get().openTab(sessionId);
-      return;
-    }
-    // First pane joins implicitly: the currently active session becomes
-    // pane 1 so the grid materializes around what the user is looking at.
-    const next =
-      s.splitSessionIds.length === 0 && s.activeSessionId != null && s.activeSessionId !== sessionId
-        ? [s.activeSessionId, sessionId]
-        : [...s.splitSessionIds, sessionId];
-    set({ splitSessionIds: next });
-    persistSplitSessions(next);
-    await get().openTab(sessionId);
+    // Width-adaptive capacity: reject beyond what the measured area fits
+    // while every pane keeps its minimum width (full grid: silent reject).
+    if (group.length >= splitCapacityForWidth(s.splitAreaWidth)) return;
+    const next = [...group, sessionId];
+    set({
+      splitGroupsBySession: { ...s.splitGroupsBySession, [root]: next },
+    });
+    // Focus the NEW pane (activeSessionId = the member, NOT a tab flip —
+    // the strip stays exactly as it was).
+    await get().selectSession(sessionId);
   },
 
   removeFromSplit: async (sessionId) => {
     const s = get();
-    // ── tabs displayMode: shrink the owning tab's group ──
-    if (s.displayMode === "tabs") {
-      const entry = Object.entries(s.splitGroupsBySession).find(([, members]) =>
-        members.includes(sessionId),
-      );
-      if (!entry) return;
-      const [root, members] = entry;
-      const idx = members.indexOf(sessionId);
-      const next = members.filter((id) => id !== sessionId);
-      const nextGroups = { ...s.splitGroupsBySession };
-      // Below 2 members the group dissolves — the tab reverts to its plain
-      // root pane.
-      const dissolved = next.length < 2 || !next.includes(root);
-      if (dissolved) delete nextGroups[root];
-      else nextGroups[root] = next;
-      set({ splitGroupsBySession: nextGroups });
-      // Focus handoff. A dissolved group's surviving member is NOT a tab
-      // (split members never join the strip) — selectSession alone would
-      // leave activeSessionId pointing at a session with no open tab and no
-      // mounted surface (blank center). openTab promotes it to a real tab;
-      // an already-open successor just takes the plain focus flip.
-      const wasFocused = s.activeSessionId === sessionId;
-      const focusedSurvivor =
-        !wasFocused && s.activeSessionId != null && next.includes(s.activeSessionId)
-          ? s.activeSessionId
-          : null;
-      if (wasFocused || focusedSurvivor != null) {
-        // Focus a neighboring survivor; a dissolved group lands on its root.
-        const successor = focusedSurvivor ?? next[idx] ?? next[idx - 1] ?? root;
-        // Only a DISSOLVED group promotes its survivor to a tab — while the
-        // grid lives, members stay panes (they never join the strip).
-        if (dissolved && !get().openTabs.includes(successor)) await get().openTab(successor);
-        else if (successor !== s.activeSessionId) await get().selectSession(successor);
-      }
-      return;
-    }
-    // ── single displayMode: the global persisted grid ──
-    const idx = s.splitSessionIds.indexOf(sessionId);
-    if (idx === -1) return;
-    // `next` still holds the survivor(s); the STORED list collapses to []
-    // below 2 members (grid gone) but the focus handoff reads the
-    // survivors, not the collapsed list.
-    const next = s.splitSessionIds.filter((id) => id !== sessionId);
-    const collapsed = next.length < 2 ? [] : next;
-    set({ splitSessionIds: collapsed });
-    persistSplitSessions(collapsed);
-    if (s.activeSessionId === sessionId) {
-      const successor = next[idx] ?? next[idx - 1] ?? null;
-      if (successor) await get().selectSession(successor);
+    const entry = Object.entries(s.splitGroupsBySession).find(([, members]) =>
+      members.includes(sessionId),
+    );
+    if (!entry) return;
+    const [root, members] = entry;
+    const idx = members.indexOf(sessionId);
+    const next = members.filter((id) => id !== sessionId);
+    const nextGroups = { ...s.splitGroupsBySession };
+    // Below 2 members the group dissolves — the tab reverts to its plain
+    // root pane.
+    const dissolved = next.length < 2 || !next.includes(root);
+    if (dissolved) delete nextGroups[root];
+    else nextGroups[root] = next;
+    set({ splitGroupsBySession: nextGroups });
+    // Focus handoff. A dissolved group's surviving member is NOT a tab
+    // (split members never join the strip) — selectSession alone would
+    // leave activeSessionId pointing at a session with no open tab and no
+    // mounted surface (blank center). openTab promotes it to a real tab;
+    // an already-open successor just takes the plain focus flip.
+    const wasFocused = s.activeSessionId === sessionId;
+    const focusedSurvivor =
+      !wasFocused && s.activeSessionId != null && next.includes(s.activeSessionId)
+        ? s.activeSessionId
+        : null;
+    if (wasFocused || focusedSurvivor != null) {
+      // Focus a neighboring survivor; a dissolved group lands on its root.
+      const successor = focusedSurvivor ?? next[idx] ?? next[idx - 1] ?? root;
+      // Only a DISSOLVED group promotes its survivor to a tab — while the
+      // grid lives, members stay panes (they never join the strip).
+      if (dissolved && !get().openTabs.includes(successor)) await get().openTab(successor);
+      else if (successor !== s.activeSessionId) await get().selectSession(successor);
     }
   },
 
@@ -8291,35 +8118,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   openSessionFromSidebar: async (sessionId) => {
     const s = get();
-    if (s.displayMode === "single" && s.splitSessionIds.length >= 2) {
-      // Member click: plain focus.
-      if (s.splitSessionIds.includes(sessionId)) {
-        await get().openTab(sessionId);
+    // LOCATE: a session already visible inside some tab's split group counts
+    // as open — activate its host tab and focus that pane (selectSession
+    // flips activeSessionId without touching the strip) so the click lands
+    // where the session already lives instead of appending a duplicate tab.
+    for (const members of Object.values(s.splitGroupsBySession)) {
+      if (members.includes(sessionId)) {
+        await get().selectSession(sessionId);
         return;
-      }
-      // Non-member click: take over the FOCUSED pane's slot. The session
-      // leaving the grid keeps its buckets (grace window / running guard
-      // own the eventual prune).
-      const focusedIdx =
-        s.activeSessionId != null ? s.splitSessionIds.indexOf(s.activeSessionId) : -1;
-      if (focusedIdx !== -1) {
-        const next = [...s.splitSessionIds];
-        next[focusedIdx] = sessionId;
-        set({ splitSessionIds: next });
-        persistSplitSessions(next);
-      }
-    }
-    // tabs mode LOCATE: a session already visible inside some tab's split
-    // group counts as open — activate its host tab and focus that pane
-    // (selectSession flips activeSessionId without touching the strip) so
-    // the click lands where the session already lives instead of appending
-    // a duplicate tab.
-    if (s.displayMode === "tabs") {
-      for (const members of Object.values(s.splitGroupsBySession)) {
-        if (members.includes(sessionId)) {
-          await get().selectSession(sessionId);
-          return;
-        }
       }
     }
     await get().openTab(sessionId);
@@ -8719,12 +8525,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Shared cleanup — a remote `session.deleted` event runs the same state
     // surgery (see applySessionDeletedState) so phone-side deletes behave
     // identically to local ones.
-    const splitBefore = get().splitSessionIds;
     set((s) => applySessionDeletedState(s, id));
-    // applySessionDeletedState may have dropped a split pane above — persist
-    // the survivor list. (Remote `session.deleted` events skip this; the
-    // next boot's parseSplitSessionIds validation drops the dead id anyway.)
-    if (get().splitSessionIds !== splitBefore) persistSplitSessions(get().splitSessionIds);
   },
 
   /** Set a session's archived flag (soft-delete; restorable). The session
@@ -11776,22 +11577,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ widePanelPct: WIDE_PANEL_PCT_DEFAULT });
   },
 
-  /** Update the center-pane display mode. The local store flips
-   *  immediately so the layout change is instant; the DB write is
-   *  fire-and-forget so a failed write doesn't block the UI. On the
-   *  next app start, `init` re-hydrates from the `settings` table.
-   *  Split state needs no handling: single mode's grid rides
-   *  `splitSessionIds` (persisted), tabs mode's per-tab groups are
-   *  in-memory and simply don't exist in the other mode. */
-  setDisplayMode: async (mode) => {
-    set({ displayMode: mode });
-    try {
-      await api.setting.set({ key: DISPLAY_MODE_SETTING_KEY, value: mode });
-    } catch (err) {
-      console.error("setting.set(displayMode) failed:", err);
-    }
-  },
-
   setTabsFilePreviewPlacement: (placement) => {
     set((s) => {
       const pid = s.activeProjectId;
@@ -11980,7 +11765,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   /** Update the UI language. Same immediate-flip + fire-and-forget-persist
-   *  pattern as setDisplayMode. Also mirrors the choice onto
+   *  pattern as setTabBarMultiRow. Also mirrors the choice onto
    *  <html lang> so assistive tech + font selection follow the UI language. */
   setLocale: async (locale) => {
     set({ locale });
@@ -11993,7 +11778,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   /** Update the session auto-archive rules. Same immediate-flip +
-   *  fire-and-forget-persist pattern as setDisplayMode; the main-process
+   *  fire-and-forget-persist pattern as setTabBarMultiRow; the main-process
    *  AutoArchiver re-reads the key on its next tick. */
   setAutoArchiveConfig: async (config) => {
     set({ autoArchiveConfig: config });
@@ -12005,7 +11790,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   /** Update the chat density. Same immediate-flip + fire-and-forget-persist
-   *  pattern as setDisplayMode; the CSS vars are re-applied reactively by
+   *  pattern as setTabBarMultiRow; the CSS vars are re-applied reactively by
    *  useChatAppearance subscribing to `chatDensity`. */
   setChatDensity: async (mode) => {
     set({ chatDensity: mode });
@@ -12017,7 +11802,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   /** Toggle the left-bar project view between flat and grouped. Same
-   *  immediate-flip + fire-and-forget-persist pattern as setDisplayMode. */
+   *  immediate-flip + fire-and-forget-persist pattern as setTabBarMultiRow. */
   setProjectView: async (mode) => {
     set({ projectView: mode });
     try {
@@ -14152,18 +13937,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Unified center bar (tabs displayMode): opening a file focuses the
       // editor so it gets the full center width UNLESS user configured
       // sidebar preview placement.
-      ...(s.displayMode === "tabs" && s.tabsFilePreviewPlacement === "center"
+      ...(s.tabsFilePreviewPlacement === "center"
         ? { centerTabFocus: "editor" as const }
         : {}),
       // Sidebar preview: file opens inside FilesPanel dual-column preview;
       // automatically widen the right sidebar and switch to files tab.
-      // Active in `single` displayMode OR in `tabs` displayMode with `sidebar`
-      // placement. Drawer mode: open the file INSIDE the hover-peek drawer —
+      // Drawer mode: open the file INSIDE the hover-peek drawer —
       // auto-peek it if not already showing (App arms an idle dismissal for
       // store-driven peeks, since the mouse may never have entered the
       // drawer) and keep the panel closed; the user pins it explicitly.
-      ...(s.displayMode === "single" ||
-      (s.displayMode === "tabs" && s.tabsFilePreviewPlacement === "sidebar")
+      ...(s.tabsFilePreviewPlacement === "sidebar"
         ? {
             ...(rightDrawerMode
               ? { rightPeekOpen: true, leftPeekOpen: false }

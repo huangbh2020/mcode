@@ -97,23 +97,22 @@ export function TurnFlowPanel() {
     sessionId ? (s.runningBySession[sessionId] ?? false) : false,
   );
   const loadOlder = useSessionStore((s) => s.loadOlderMessages);
-  const displayMode = useSessionStore((s) => s.displayMode);
   const setPendingBookmarkJump = useSessionStore((s) => s.setPendingBookmarkJump);
   const setCenterTabFocus = useSessionStore((s) => s.setCenterTabFocus);
   const openSubagentTranscript = useSessionStore((s) => s.openSubagentTranscript);
 
   /* Step click → locate the carrying message in the chat stream. Rides the
    * existing bookmark-jump channel (ChatPane consumes it: virtual-list
-   * aiming with retries + center + flash). In tabs mode an editor-focused
-   * center pane must flip back to chat first — otherwise the target pane
-   * stays display:none and its list never measures. */
+   * aiming with retries + center + flash). An editor-focused center pane
+   * must flip back to chat first — otherwise the target pane stays
+   * display:none and its list never measures. */
   const jumpToChat = useCallback(
     (messageId: string) => {
       if (!sessionId) return;
       setPendingBookmarkJump({ sessionId, messageId });
-      if (displayMode === "tabs") setCenterTabFocus("chat");
+      setCenterTabFocus("chat");
     },
-    [sessionId, displayMode, setPendingBookmarkJump, setCenterTabFocus],
+    [sessionId, setPendingBookmarkJump, setCenterTabFocus],
   );
   const openSubagent = useCallback(
     (taskId: string) => {

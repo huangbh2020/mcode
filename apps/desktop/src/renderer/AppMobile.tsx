@@ -15,10 +15,9 @@
  *    segmented control (会话/文件/Git) is the view switcher, and the top bar
  *    title mirrors the current view so "where am I" stays visible.
  *  - Settings is the minimal MobileSettingsSheet instead of SettingsPage.
- *  - The shell is always single-slot (2026-09-30): no SessionTabs strip, the
- *    drawer is the only session switcher. The desktop-shared `ui.displayMode`
- *    pref is deliberately ignored here — a phone must never grow a tab strip
- *    (or flip the desktop's layout from the phone settings).
+ *  - The shell is always single-slot (2026-09-30): no tab strip, the drawer
+ *    is the only session switcher — a phone must never grow one (the
+ *    desktop's tab layout is a desktop-only affordance).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChatPane } from "./components/chat/ChatPane.js";

@@ -38,8 +38,6 @@ import { voiceHandleFor } from "@renderer/lib/voiceController.js";
 import { translate, type MessageId } from "@renderer/lib/i18n/core.js";
 import {
   IconPlus,
-  IconMessage,
-  IconColumns3,
   IconList,
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightExpand,
@@ -107,7 +105,6 @@ export interface CommandDef {
  *  pass any SessionState-shaped object. */
 type CloseFocusState = Pick<
   SessionState,
-  | "displayMode"
   | "widePanelOpen"
   | "centerTabFocus"
   | "activeProjectId"
@@ -118,11 +115,11 @@ type CloseFocusState = Pick<
 
 /** What currently holds the unified center bar instead of the chat: the plan
  *  tab or an editor file. Mirrors the store's `isSessionChatOnScreen` rule —
- *  tabs display mode, editor focused, and NOT wide-panel (the center editor
- *  is hidden there, the chat column stays visible, so the session close
- *  semantic wins). Null when the chat holds the center. */
+ *  editor focused and NOT wide-panel (the center editor is hidden there, the
+ *  chat column stays visible, so the session close semantic wins). Null when
+ *  the chat holds the center. */
 function editorCenterTarget(s: CloseFocusState): "file" | "plan" | null {
-  if (s.displayMode !== "tabs" || s.widePanelOpen || s.centerTabFocus !== "editor") {
+  if (s.widePanelOpen || s.centerTabFocus !== "editor") {
     return null;
   }
   const sid = s.activeSessionId;
@@ -174,7 +171,7 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
       }
       if (s.activeSessionId) s.closeTab(s.activeSessionId);
     },
-    available: (s) => s.displayMode === "tabs" && s.openTabs.length > 0,
+    available: (s) => s.openTabs.length > 0,
   },
   {
     id: "session.close",
@@ -250,40 +247,6 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     perform: (s) => {
       s.setCommandPaletteOpen(!s.commandPaletteOpen);
     },
-  },
-  {
-    id: "view.display-mode.single",
-    labelKey: "lib.commands.displaySingle",
-    group: "视图",
-    keywords: ["single", "display", "mode", "单", "模式"],
-    icon: IconMessage,
-    perform: (s) => {
-      void s.setDisplayMode("single");
-    },
-    available: (s) => s.displayMode !== "single",
-  },
-  {
-    id: "view.display-mode.tabs",
-    labelKey: "lib.commands.displayTabs",
-    group: "视图",
-    keywords: ["tabs", "display", "mode", "标签", "多开", "模式"],
-    icon: IconColumns3,
-    perform: (s) => {
-      void s.setDisplayMode("tabs");
-    },
-    available: (s) => s.displayMode !== "tabs",
-  },
-  {
-    id: "view.display-mode.toggle",
-    labelKey: "lib.commands.displayToggle",
-    group: "视图",
-    keywords: ["toggle", "display", "mode", "切换", "模式"],
-    icon: IconArrowsExchange,
-    defaultAccelerator: DEFAULT_SHORTCUTS["view.display-mode.toggle"],
-    perform: (s) => {
-      void s.setDisplayMode(s.displayMode === "tabs" ? "single" : "tabs");
-    },
-    available: (s) => s.activeProjectId !== null,
   },
   {
     id: "view.right-panel.files",

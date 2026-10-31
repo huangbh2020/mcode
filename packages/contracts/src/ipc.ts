@@ -225,8 +225,13 @@ export const DISPLAY_MODE_SETTING_KEY = "ui.displayMode";
  */
 export const SEARCH_FILE_TYPES_SETTING_KEY = "ui.search.fileTypes";
 
-/** zod schema + TS union for the display-mode preference. */
-export const DisplayModeSchema = z.enum(["single", "tabs"]);
+/** zod schema + TS union for the display-mode preference. The `single`
+ *  (单会话) mode was removed on 2026-10-31 — the tab bar is the only center
+ *  layout now, so the schema pins the single remaining value. A persisted
+ *  `ui.displayMode = "single"` blob simply fails this schema and is ignored
+ *  at hydration (sessionStore never reads the key anymore, either — the
+ *  field is a constant). */
+export const DisplayModeSchema = z.enum(["tabs"]);
 export type DisplayMode = z.infer<typeof DisplayModeSchema>;
 
 /**
