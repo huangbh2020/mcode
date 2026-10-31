@@ -83,17 +83,10 @@ export const en = {
   // ── MessageBlocks: images ──
   "chatStream.image.browserScreenshot": "Browser screenshot",
   "chatStream.image.userImage": "User image",
+  "chatStream.image.toolImage": "Image",
   "chatStream.imageRenderedAbove": "[image rendered above]",
 
   // ── MessageBlocks: inline video (script-generated media) ──
-  "chatStream.media.tabVideos": "Videos",
-  "chatStream.media.tabImages": "Images",
-  "chatStream.media.previewAll": "Preview all",
-  "chatStream.media.screenshotsTotal": "Browser screenshots · {n} total",
-  "chatStream.media.videosTotal": "Videos · {n} total",
-  "chatStream.media.userImagesTotal": "User images · {n} total",
-  "chatStream.media.expandList": "Expand list",
-  "chatStream.media.collapseList": "Collapse list",
   "chatStream.video.unplayable": "Can't play",
   "chatStream.video.openInEditor": "Open in editor",
 

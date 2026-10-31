@@ -88,17 +88,10 @@ export const zh = {
   // ── MessageBlocks: images ──
   "chatStream.image.browserScreenshot": "浏览器截图",
   "chatStream.image.userImage": "用户图片",
+  "chatStream.image.toolImage": "图片",
   "chatStream.imageRenderedAbove": "[图片已在上方显示]",
 
   // ── MessageBlocks: inline video (script-generated media) ──
-  "chatStream.media.tabVideos": "视频",
-  "chatStream.media.tabImages": "图片",
-  "chatStream.media.previewAll": "预览全部",
-  "chatStream.media.screenshotsTotal": "浏览器截图 · 共 {n} 张",
-  "chatStream.media.videosTotal": "视频附件 · 共 {n} 个",
-  "chatStream.media.userImagesTotal": "用户图片 · 共 {n} 张",
-  "chatStream.media.expandList": "展开列表",
-  "chatStream.media.collapseList": "收起列表",
   "chatStream.video.unplayable": "无法播放",
   "chatStream.video.openInEditor": "在编辑器中打开",
 

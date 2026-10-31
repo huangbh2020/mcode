@@ -57,7 +57,7 @@ import {
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
 import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
-import { MediaLightbox, type MediaBlock, type MediaItem } from "./mediaGallery.js";
+import { MediaLightbox, MediaThumbImage, type MediaBlock, type MediaItem } from "./mediaGallery.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { turnTokenUsage, CUMULATIVE_USAGE_PROVIDER_IDS } from "@renderer/lib/turnTokens.js";
@@ -5618,41 +5618,32 @@ const MessageRow = memo(function MessageRow({
               {userImageBlocks.length > 0 && (
                 <div
                   className={cn(
-                    "relative flex flex-wrap gap-1.5",
+                    "relative flex flex-wrap items-center gap-1.5",
                     userProseBlocks.length > 0 && "mb-[var(--chat-block-gap)]",
                   )}
                 >
-                  {userImageBlocks.length === 1 ? (
+                  {/* Same compact tile geometry as the composer's pending-image
+                      strip — what you attach is what you see after sending.
+                      Inline painting goes through the shared canvas-downscaled
+                      thumb (useMediaThumbSrc inside MediaThumbImage); full-res
+                      stays one lightbox click away. */}
+                  {userImageBlocks.map((b, i) => (
                     <button
+                      key={i}
                       type="button"
-                      onClick={() => setActiveImageIdx(0)}
-                      title={t("chat.imageN", { n: 1 })}
-                      className="group inline-flex items-center gap-1.5 rounded-lg border border-edge bg-surface-muted/60 px-2.5 py-1.5 text-xs font-medium text-content transition-all hover:border-accent/60 hover:bg-surface-hover hover:shadow-sm"
+                      onClick={() => setActiveImageIdx(i)}
+                      title={t("chat.imageN", { n: i + 1 })}
+                      className="group relative block h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-edge bg-surface shadow-xs transition-shadow hover:shadow-md"
                     >
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-accent/10 text-accent transition-colors group-hover:bg-accent group-hover:text-white">
-                        <IconPhoto size={12} />
-                      </span>
-                      <span>{t("chat.imageN", { n: 1 })}</span>
-                      <IconArrowsMaximize size={11} className="text-content-subtle opacity-70 transition-opacity group-hover:opacity-100" />
-                    </button>
-                  ) : (
-                    <div className="inline-flex items-center gap-2 rounded-lg border border-edge/80 bg-surface-muted/50 py-1 pl-2.5 pr-1.5 text-xs font-medium text-content">
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-accent/15 text-accent">
-                        <IconPhoto size={12} />
-                      </span>
-                      <span className="font-semibold text-content-strong">
-                        {t("chatStream.media.userImagesTotal", { n: userImageBlocks.length })}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setActiveImageIdx(0)}
-                        className="ml-1 inline-flex items-center gap-1 rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-white shadow-xs transition-opacity hover:opacity-90 active:opacity-100"
+                      <MediaThumbImage block={b} />
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/35 text-white group-hover:flex"
                       >
-                        <IconArrowsMaximize size={11} />
-                        <span>{t("chatStream.media.previewAll")}</span>
-                      </button>
-                    </div>
-                  )}
+                        <IconArrowsMaximize size={14} />
+                      </span>
+                    </button>
+                  ))}
                   {activeImageIdx !== null && (
                     <MediaLightbox
                       items={userMediaItems}

@@ -26,11 +26,13 @@ import type { PairingStartResult, PairedDevice } from "@contracts/mobile";
 import type { RelayStatus } from "@contracts/ipc";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
-/** Self-contained trigger button + dialog, rendered in the left sidebar's quick
- *  actions (below 搜索). The trigger matches the search/new-session button
- *  style; renders its own Dialog.Root so the sidebar only needs
- *  `<MobileConnectButton />`. When remote access (relay) is connected, an
- *  enabled indicator is shown on the right. */
+/** Self-contained trigger button + dialog, rendered in the left sidebar's
+ *  bottom settings rail (rightmost of the compact icon group, after
+ *  locate/theme/collapse). The trigger is a square icon button matching those
+ *  neighbors' metrics; renders its own Dialog.Root so the rail only needs
+ *  `<MobileConnectButton />`. Signals on the icon itself: active-device count
+ *  as a corner badge, and the icon tints accent while remote access (relay)
+ *  is connected. */
 export function MobileConnectButton() {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -84,25 +86,20 @@ export function MobileConnectButton() {
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          "flex w-full items-center gap-2 rounded-lg px-1 py-2 transition-colors",
-          "[font-size:var(--right-panel-font-size)]",
-          "text-content-muted hover:bg-accent/10 hover:text-accent",
-          open && "bg-accent/10 text-accent",
+          "relative flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors [font-size:var(--right-panel-font-size)]",
+          "text-content-muted hover:bg-surface-hover hover:text-content",
+          open && "bg-surface-hover text-content",
         )}
-        title={t("layout.connectPhone")}
+        title={relayConnected ? `${t("layout.connectPhone")} · ${t("layout.relayConnected")}` : t("layout.connectPhone")}
       >
-        <IconDeviceMobile size={16} className="shrink-0" />
-        <span className="flex-1 text-left font-medium">{t("layout.connectPhone")}</span>
+        <IconDeviceMobile size={14} className={cn("shrink-0", relayConnected && "text-accent")} />
         {activeCount > 0 && (
           <span
-            className="shrink-0 rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-accent"
+            className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold leading-none text-white"
             title={t("layout.activeDevices", { n: activeCount })}
           >
-            ×{activeCount}
+            {activeCount}
           </span>
-        )}
-        {relayConnected && (
-          <IconWorld size={14} className="shrink-0 text-accent" title={t("layout.relayConnected")} />
         )}
       </button>
       <Dialog.Root open={open} onOpenChange={setOpen}>

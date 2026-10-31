@@ -2,8 +2,8 @@
  * StreamSidebar — the session-first left-bar view ("stream" leftBarMode),
  * modeled on T3 Code's current sidebar (apps/web Sidebar.tsx):
  *
- *   [现状快捷入口: 新建会话 / 搜索 / 连接手机]   (SidebarQuickActions,原样式;
- *      新建会话在 scope 指向项目/工作树时改道到该处)
+ *   [现状快捷入口: 新建会话 / 搜索]             (SidebarQuickActions,原样式;
+ *      新建会话在 scope 指向项目/工作树时改道到该处;连接手机在底部 footer)
  *   [📁 全部项目 ▾]  [+]                        (scope filter + add project)
  *   ── pinned cards ── hairline ── live cards ── (flat, each card carries
  *      its project identity + an inline status label; running rows recede)
@@ -68,6 +68,7 @@ import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionSto
 import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { ProjectManageMenuPopup, type ManageMenuState } from "./ProjectManageMenu.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
+import { MobileConnectButton } from "./MobileConnectDialog.js";
 import { ArchivedRow, HoverIconButton, RenameDialog, SessionContextMenu } from "./SidebarShared.js";
 import { ForkSessionDialog } from "@renderer/components/chat/ForkSessionDialog.js";
 import { beginSessionDrag } from "@renderer/lib/sessionDrag.js";
@@ -864,6 +865,10 @@ function StreamSidebarBase() {
             <IconLayoutSidebarLeftExpand size={14} />
           </button>
         )}
+        {/* 连接手机 — same footer slot as the tree view: rightmost compact
+            icon trigger (self-contained dialog; count badge / accent tint
+            signal from the button itself). */}
+        <MobileConnectButton />
       </div>
 
       {/* Session context menu — with the worktree action group wired to the

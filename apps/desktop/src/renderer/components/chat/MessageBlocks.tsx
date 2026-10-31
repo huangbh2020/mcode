@@ -46,7 +46,7 @@ import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { FileLink } from "./FileLink.js";
 import { ToolPathDisplay } from "./ToolPathDisplay.js";
-import { MediaGallery, type MediaBlock } from "./mediaGallery.js";
+import { MediaGallery, type MediaBlock, type ToolMeta } from "./mediaGallery.js";
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
 import { formatPathWithMaxDirsText } from "@renderer/lib/path.js";
@@ -179,6 +179,17 @@ const MessageBlocks = memo(function MessageBlocks({
    *  occurrences as pills. */
   inlineFiles?: ReadonlyArray<{ name: string; filePath: string }>;
 }) {
+  // tool_use identity for media labeling — image blocks carry base64 only,
+  // so the paired tool call (Read's file_path, screenshot tools) is the only
+  // naming source. Built once per message, before the empty-block early
+  // return (hooks must run unconditionally).
+  const toolMetaById = useMemo(() => {
+    const m = new Map<string, ToolMeta>();
+    for (const b of blocks) {
+      if (b.kind === "tool_use") m.set(b.toolCallId, { toolName: b.toolName, input: b.input });
+    }
+    return m;
+  }, [blocks]);
   if (blocks.length === 0) return null;
   const segments = groupBlocks(blocks);
   const segKeys = segmentKeys(segments);
@@ -199,11 +210,12 @@ const MessageBlocks = memo(function MessageBlocks({
               onOpenPlan={onOpenPlan}
               projectPath={projectPath}
               inlineFiles={inlineFiles}
+              toolMetaById={toolMetaById}
             />
           </RenderErrorBoundary>
         ) : seg.kind === "media" ? (
           <RenderErrorBoundary key={segKeys[i]}>
-            <MediaGallery blocks={seg.blocks} />
+            <MediaGallery blocks={seg.blocks} toolMetaById={toolMetaById} />
           </RenderErrorBoundary>
         ) : seg.kind === "attachments" ? (
           <RenderErrorBoundary key={segKeys[i]}>
@@ -1122,6 +1134,7 @@ const BlockView = memo(function BlockView({
   onOpenPlan,
   projectPath,
   inlineFiles,
+  toolMetaById,
 }: {
   block: Block;
   defaultOpen?: boolean;
@@ -1149,6 +1162,10 @@ const BlockView = memo(function BlockView({
    *  (issue #22). The text branch passes them to Markdown so `@<name>`
    *  occurrences render as pills titled with the full path. */
   inlineFiles?: ReadonlyArray<{ name: string; filePath: string }>;
+  /** Paired tool_use metadata for media labeling (see MediaGallery). Only the
+   *  message-level callers have the sibling tool_use blocks; batch paths omit
+   *  it (batch runs never contain media blocks). */
+  toolMetaById?: ReadonlyMap<string, ToolMeta>;
 }) {
   // Known skill/command names — used to highlight /name references in text
   // blocks regardless of whether they were inserted as pills (block.skillNames)
@@ -1355,7 +1372,7 @@ const BlockView = memo(function BlockView({
       // screenshot). All render through the SAME unified tile + lightbox
       // (MediaGallery with a single-item run) so a lone image/video shows at
       // exactly the same tile size and interaction as media inside a run.
-      return <MediaGallery blocks={[block]} />;
+      return <MediaGallery blocks={[block]} toolMetaById={toolMetaById} />;
   }
 });
 export { BlockView };

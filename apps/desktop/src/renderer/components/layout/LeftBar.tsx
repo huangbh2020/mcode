@@ -57,6 +57,7 @@ import { useToastStore } from "@renderer/stores/toastStore.js";
 import { Button, ConfirmDialog, Dialog, Input } from "@renderer/components/ui/index.js";
 import { BrandLogo } from "./BrandLogo.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
+import { MobileConnectButton } from "./MobileConnectDialog.js";
 import { describeSchedule, taskNextLine } from "@renderer/components/automation/automationFormat.js";
 import { HoverIconButton, RenameDialog, SessionContextMenu, ArchivedRow } from "./SidebarShared.js";
 import { ForkSessionDialog } from "@renderer/components/chat/ForkSessionDialog.js";
@@ -105,15 +106,7 @@ import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
  *   ─────────────────────────────
  *   ⚙ 设置
  */
-function LeftBarBase({
-  showSearch = true,
-  showConnectPhone = true,
-}: {
-  /** Forwarded to SidebarQuickActions — the mobile drawer hides the 搜索 /
-      连接手机 entries (no Ctrl+K on a phone, and its visitor is already it). */
-  showSearch?: boolean;
-  showConnectPhone?: boolean;
-} = {}) {
+function LeftBarBase() {
   const { t } = useI18n();
   const projects = useSessionStore((s) => s.projects);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -777,13 +770,11 @@ function LeftBarBase({
         </div>
       )}
 
-      {/* Quick actions — 新建会话 / 搜索 / 连接手机. Full-width buttons
-          docked directly under the brand logo so the most-used workspace
-          entry points are always visible without scrolling. */}
-      <SidebarQuickActions
-        showSearch={showSearch}
-        showConnectPhone={showConnectPhone}
-      />
+      {/* Quick actions — 新建会话 / 搜索. Full-width buttons docked
+          directly under the brand logo so the most-used workspace entry
+          points are always visible without scrolling. (连接手机 moved to
+          the footer's icon group below.) */}
+      <SidebarQuickActions />
 
       {/* Header */}
       <div className="group mb-1 flex items-center justify-between px-1">
@@ -1094,9 +1085,11 @@ function LeftBarBase({
       {/* Settings + locate + theme quick-toggle — entry moved here from the
           (removed) TopBar header. Docked to the bottom of the left rail so
           it's always reachable regardless of how far the project list
-          scrolls. The two compact square buttons right of 设置: locate
-          (scroll the project tree to the active session, centering it) and
-          theme (sun while dark → light, moon while light → dark). Hidden in
+          scrolls. The compact square buttons right of 设置: locate (scroll
+          the project tree to the active session, centering it), theme (sun
+          while dark → light, moon while light → dark), collapse-sidebar
+          (win only) and — rightmost — 连接手机 (moved up from the quick
+          actions when the sidebar slimmed to 新建会话/搜索). Hidden in
           bulk mode — the action bar above takes the slot. */}
       {!bulkMode && (
       <div className="mt-2 flex shrink-0 items-center gap-1 border-t border-edge pt-1.5">
@@ -1148,6 +1141,10 @@ function LeftBarBase({
             <IconLayoutSidebarLeftExpand size={14} />
           </button>
         )}
+        {/* 连接手机 — LAN pairing (QR + code) / remote relay. Self-contained
+            trigger + dialog; the compact icon metrics match the toggles left
+            of it (count badge / accent tint signal from the button itself). */}
+        <MobileConnectButton />
       </div>
       )}
 
