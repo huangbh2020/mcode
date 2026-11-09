@@ -280,5 +280,10 @@ export const en = {
   "layout.image.revealFailed": "Couldn't open the containing folder",
   "layout.image.fitWidth": "Fit width (scroll)",
   "layout.image.fitScreen": "Fit to window",
+  "layout.image.zoomIn": "Zoom in",
+  "layout.image.zoomOut": "Zoom out",
+  "layout.image.resetZoom": "Reset zoom",
+  "layout.image.originalSize": "1:1 Original size",
+  "layout.image.rotate": "Rotate 90° clockwise",
   "layout.image.closePreview": "Close preview",
 } as const;

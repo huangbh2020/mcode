@@ -211,7 +211,10 @@ async function scanSkillsRoot(
     }
     if (!isDir) continue;
 
-    const md = await readTextHead(path.join(real, "SKILL.md"));
+    let md = await readTextHead(path.join(real, "SKILL.md"));
+    if (md == null) {
+      md = await readTextHead(path.join(real, "skill.md"));
+    }
     const fm = md ? parseSkillFrontmatter(md) : {};
     // Dedupe by name: later-scoped roots are scanned after earlier ones, so a
     // project/agent skill naturally overrides a same-named global skill.
@@ -341,7 +344,10 @@ async function scanExternalSkillsRoot(
     }
     if (!isDir) continue;
 
-    const md = await readTextHead(path.join(real, "SKILL.md"));
+    let md = await readTextHead(path.join(real, "SKILL.md"));
+    if (md == null) {
+      md = await readTextHead(path.join(real, "skill.md"));
+    }
     const fm = md ? parseSkillFrontmatter(md) : {};
     const name = fm.name?.trim() || entry.name;
     // Dedupe within this tool only: if the same name appeared in another tool,
@@ -426,6 +432,7 @@ async function scanZcodePluginSkillDirs(): Promise<string[]> {
  *  projects at all. */
 export async function listSkillsForProject(projectPath: string | undefined): Promise<SkillInfo[]> {
   const project = projectPath ? findKnownProject(projectPath) : null;
+  const targetProjectPath = project?.path ?? (projectPath && (await safeRealPath(projectPath)) ? projectPath : undefined);
 
   const byName = new Map<string, SkillInfo>();
   try {
@@ -436,9 +443,12 @@ export async function listSkillsForProject(projectPath: string | undefined): Pro
     // scanning `.agent` first and `.agents` last makes the plural — the
     // cross-tool convention — win a same-name collision.
     await scanSkillsRoot(resolveSkillRoot("global", ""), "global", byName);
-    if (project) {
-      await scanSkillsRoot(resolveSkillRoot("project", project.path), "project", byName);
-      for (const root of [...agentSkillsRoots(project.path)].reverse()) {
+    for (const root of [...agentSkillsRoots(homedir())].reverse()) {
+      await scanSkillsRoot(root, "agent", byName, { nameFromDir: true });
+    }
+    if (targetProjectPath) {
+      await scanSkillsRoot(resolveSkillRoot("project", targetProjectPath), "project", byName);
+      for (const root of [...agentSkillsRoots(targetProjectPath)].reverse()) {
         await scanSkillsRoot(root, "agent", byName, { nameFromDir: true });
       }
     }
@@ -489,8 +499,12 @@ export async function readSkillForProject(
   try {
     return await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8");
   } catch {
-    // Missing file (e.g. a skill dir without SKILL.md) → empty editor.
-    return "";
+    try {
+      return await fs.readFile(path.join(skillDir, "skill.md"), "utf-8");
+    } catch {
+      // Missing file (e.g. a skill dir without SKILL.md) → empty editor.
+      return "";
+    }
   }
 }
 
@@ -515,16 +529,17 @@ async function resolveSkillRootForRequest(
   if (source === "global") {
     return resolveSkillRoot("global", "");
   }
-  if (!projectPath) return null;
-  const project = findKnownProject(projectPath);
-  if (!project) return null;
+  const project = projectPath ? findKnownProject(projectPath) : null;
+  const targetPath = project?.path ?? (projectPath && (await safeRealPath(projectPath)) ? projectPath : undefined);
+  if (!targetPath && source !== "agent") return null;
   // "project" (`.claude/skills`) and "agent" (`.agent/skills` + `.agents/
   // skills`) are both project-rooted, editable sources — same guard,
   // different root.
   if (source === "agent") {
-    return name ? await agentSkillEditRoot(project.path, name) : agentSkillsRoot(project.path);
+    const cwd = targetPath ?? homedir();
+    return name ? await agentSkillEditRoot(cwd, name) : agentSkillsRoot(cwd);
   }
-  return resolveSkillRoot(source, project.path);
+  return resolveSkillRoot(source, targetPath!);
 }
 
 export function registerSkillsHandlers(ipcMain: IpcMain): void {

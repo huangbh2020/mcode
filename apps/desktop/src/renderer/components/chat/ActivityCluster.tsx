@@ -474,7 +474,7 @@ export function ActivityCluster({
   if (!isElectron) {
     return (
       <>
-        <div ref={rootRef} className="pointer-events-none absolute right-5 top-2 z-30 flex items-center">
+        <div ref={rootRef} className="pointer-events-none absolute right-5 top-3.5 z-30 flex items-center">
           {cluster}
         </div>
         {sheetNode && (
@@ -504,13 +504,13 @@ export function ActivityCluster({
   }
 
   return (
-    <div ref={rootRef} className="pointer-events-none absolute right-5 top-2 z-30 flex items-center">
+    <div ref={rootRef} className="pointer-events-none absolute right-5 top-3.5 z-30 flex items-center">
       {cluster}
       {openKind && (
         <div
           ref={panelRef}
           className={cn(
-            "pointer-events-auto absolute right-0 top-[42px] z-40 flex max-h-[78dvh] w-[420px]",
+            "pointer-events-auto absolute right-0 top-[48px] z-40 flex max-h-[78dvh] w-[420px]",
             "max-w-[calc(100vw-40px)] flex-col overflow-hidden rounded-[26px] border backdrop-blur-3xl transition-all",
             "border-slate-300 bg-white text-slate-900 shadow-[0_20px_50px_rgba(15,23,42,0.14)]",
             "dark:border-white/[0.14] dark:bg-[#0c0d12]/95 dark:text-white dark:shadow-[0_28px_70px_-15px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.18)]",

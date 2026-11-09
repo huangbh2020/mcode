@@ -4275,6 +4275,13 @@ function syncConfigFromSession(
   // / openTab) route through here, so this single write covers them.
   void api.setting.set({ key: UI_LAST_SESSION_SETTING_KEY, value: sessionId });
   void api.setting.set({ key: UI_LAST_PROJECT_SETTING_KEY, value: sess.projectId });
+
+  // When switching between projects, refresh the composer `/` skills menu
+  // so project-scoped drop-in skills (.claude/skills and .agent/skills) match
+  // the activated session's project.
+  if (prevPid !== sess.projectId) {
+    void get().reloadSkills();
+  }
 }
 
 /**
@@ -12706,17 +12713,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   reloadSkills: async () => {
     // Resolve the active project's path. skills.list scans that root's
-    // .claude/skills in addition to the user-global dir; without a project
-    // there's nothing project-scoped to add (global-only would mislead the
-    // menu into showing skills that may not apply), so we no-op.
+    // .claude/skills and .agent/skills in addition to the user-global dir.
+    // Without an active project, user-global skills are still fetched.
     const pid = get().activeProjectId;
     const project = pid ? get().projects.find((p) => p.id === pid) : undefined;
-    if (!project) {
-      set({ skills: EMPTY_SKILLS });
-      return;
-    }
     try {
-      const { skills } = await api.skills.list({ projectPath: project.path });
+      const { skills } = await api.skills.list(project?.path ? { projectPath: project.path } : {});
       set({ skills: skills.length ? skills : EMPTY_SKILLS });
     } catch (err) {
       console.error("reloadSkills failed:", err);

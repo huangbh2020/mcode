@@ -282,5 +282,10 @@ export const zh = {
   "layout.image.revealFailed": "无法打开所在目录",
   "layout.image.fitWidth": "适合宽度 (上下滚动)",
   "layout.image.fitScreen": "适应窗口",
+  "layout.image.zoomIn": "放大",
+  "layout.image.zoomOut": "缩小",
+  "layout.image.resetZoom": "重置缩放",
+  "layout.image.originalSize": "1:1 实际尺寸",
+  "layout.image.rotate": "向右旋转 90°",
   "layout.image.closePreview": "关闭预览",
 } as const;

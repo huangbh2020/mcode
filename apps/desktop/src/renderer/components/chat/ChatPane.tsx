@@ -105,7 +105,7 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
 /** 第一条消息与顶部(标签条 / 标题栏)之间的留白。作为滚动内容的顶部
  *  padding,停在顶部时可见,向下滚动后随内容滚走。 */
-const MESSAGE_LIST_TOP_PADDING = 10;
+const MESSAGE_LIST_TOP_PADDING = 24;
 
 /** 展开折叠卡(「N 个操作」操作条 / 工具卡 / 思考折叠)期间,挂起虚拟列表
  *  高度触发底部钉住的单窗预算;有效期内由 interval 按半窗重臂,保证卡片
@@ -3352,11 +3352,20 @@ function ChatPaneForSession({
   const handleSend = async () => {
     // Serialize the editor: text has skill pills inlined as `/name` at their
     // positions; skillNames records which pills were embedded.
-    const { text: editorText, skillNames } = editorRef.current?.serialize() ?? {
+    const { text: editorText, skillNames: rawSkillNames } = editorRef.current?.serialize() ?? {
       text: value.trim(),
       skillNames: [],
     };
     const text = editorText.trim();
+    const skillNames = [...rawSkillNames];
+    // If no pills were serialized but user typed a slash command at the start
+    // (e.g. `/paper-stage-video ...`), auto-detect if it matches an installed skill.
+    if (skillNames.length === 0 && text.startsWith("/")) {
+      const match = text.match(/^\/([A-Za-z0-9_-]+)/);
+      if (match && skills.some((s) => s.name === match[1])) {
+        skillNames.push(match[1]);
+      }
+    }
     // Nothing to send if the editor, tag list, and staged images are all empty.
     if (!text && tags.length === 0 && pendingImages.length === 0) return;
     // Don't allow sending while a turn (or a backgrounded subagent from a
@@ -3458,11 +3467,18 @@ function ChatPaneForSession({
    *  path and the user message looks identical to a live send. No-op when not
    *  busy. */
   const handleEnqueue = async () => {
-    const { text: editorText, skillNames } = editorRef.current?.serialize() ?? {
+    const { text: editorText, skillNames: rawSkillNames } = editorRef.current?.serialize() ?? {
       text: value.trim(),
       skillNames: [],
     };
     const text = editorText.trim();
+    const skillNames = [...rawSkillNames];
+    if (skillNames.length === 0 && text.startsWith("/")) {
+      const match = text.match(/^\/([A-Za-z0-9_-]+)/);
+      if (match && skills.some((s) => s.name === match[1])) {
+        skillNames.push(match[1]);
+      }
+    }
     if (!text && tags.length === 0 && pendingImages.length === 0) return;
     // Only meaningful while busy — when idle, Enter/click routes to handleSend.
     if (!sessionBusy) return;

@@ -61,3 +61,6 @@ export type { KbdProps } from "./kbd.js";
 
 export { ImageWithPreview } from "./image-preview.js";
 export type { ImageWithPreviewProps } from "./image-preview.js";
+
+export { MediaLightbox } from "./media-lightbox.js";
+export type { MediaLightboxProps, MediaItem } from "./media-lightbox.js";
