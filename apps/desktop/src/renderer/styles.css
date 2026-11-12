@@ -1132,30 +1132,51 @@ button.chat-ledger-head:hover {
   }
 }
 
-/* 工具行状态图标：仅运行中的工具显示圆弧，完成即消失（2026-10-29 起不再
- * 渲染完成对勾——活跃回合里成排绿勾是视觉噪音；error 红叉由组件层直接
- * 渲染，不经过这里）。 */
-.chat-st {
-  position: relative;
-  display: inline-grid;
-  place-items: center;
-  width: 12px;
-  height: 12px;
-  flex: none;
+/* 运行中文字扫光(2026-11-10,替代行首 loading 图标):文字本体不动,一道
+ * 高光从左向右周期性扫过——background-clip:text + 渐变位移动画。基色/高光
+ * 走 CSS 变量(深浅主题各自成立;子上下文可内联覆盖,如 .shimmer-text-subtle
+ * 把基色调成三级文本色);运行结束摘掉 class 即静止复原,无布局位移。 */
+.shimmer-text {
+  --shimmer-base: rgb(var(--content-muted));
+  --shimmer-hi: rgb(var(--content));
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--shimmer-base) 0%,
+    var(--shimmer-base) 38%,
+    var(--shimmer-hi) 50%,
+    var(--shimmer-base) 62%,
+    var(--shimmer-base) 100%
+  );
+  /* 2× 宽 + 默认平铺:文本在任何相位都被基色瓦片覆盖(绝不露空),
+   * 高光带按 W(1 − P/100) 随 P 递减连续右移,每个周期扫过两次。 */
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmer-sweep 2s linear infinite;
 }
 
-.chat-st-run {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 1.6px solid rgb(var(--accent) / 0.26);
-  border-top-color: rgb(var(--accent));
-  animation: chat-st-spin 0.72s linear infinite;
+/* 三级文本色变体(流式预览 hint 用——它的常态色比标签更浅)。 */
+.shimmer-text-subtle {
+  --shimmer-base: rgb(var(--content-subtle));
 }
 
-@keyframes chat-st-spin {
-  to {
-    transform: rotate(360deg);
+@keyframes shimmer-sweep {
+  /* 高光从左向右:100%→0% 是完整的穿屏区间,这里给 200%→-200% 让平铺
+   * 无缝循环(位移动程 4W = 两个瓦片,方向恒定向右)。 */
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    color: var(--shimmer-base);
+    background: none;
   }
 }
 
@@ -1170,11 +1191,6 @@ button.chat-ledger-head:hover {
   .chat-bubble-in,
   .chat-enter {
     animation: none;
-  }
-
-  .chat-st-run {
-    animation: none;
-    border-top-color: rgb(var(--accent));
   }
 
   .chat-fold,
@@ -1637,6 +1653,120 @@ button.chat-ledger-head:hover {
 [data-chat-root] .composer-lvlbars > span.on {
   opacity: 1;
   background: rgb(var(--accent));
+}
+
+/* ── Merged model picker (2026-11-10): the model dropdown's popup now pairs
+ * the model list with a thinking-level slider. NOTE: global selectors, no
+ * [data-chat-root] scope — the popup renders through Menu.Portal on
+ * document.body, outside the chat root. ─────────────────────────────── */
+
+/* Group avatar: the colored disc in the popup header / config list rows
+ * (claude configs, pi/codex/opencode suppliers). Hue comes inline from the
+ * deterministic avatarColor(key) hash; only the shape lives here. */
+.model-group-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.25rem;             /* 20px */
+  height: 1.25rem;
+  border-radius: 9999px;
+  color: #fff;
+  font-size: 0.625rem;        /* 10px — a single letter */
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
+/* Thinking-level slider: a recessed 4px track, accent fill to the active
+ * stop, small stop dots, a white knob, and one invisible 18px stop button
+ * per level (the keyboard/AT path — pointer users drag anywhere on the
+ * strip and it snaps to the nearest level). */
+.model-effort {
+  padding: 0 0 0.375rem;
+}
+.model-effort-slider {
+  position: relative;
+  height: 1.5rem;             /* 24px hit strip */
+  margin: 0.125rem 0.75rem;
+  cursor: pointer;
+  touch-action: none;         /* horizontal drag, never scroll */
+}
+.model-effort-slider.dragging,
+.model-effort-slider.dragging * {
+  cursor: grabbing;
+}
+.model-effort-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 4px;
+  border-radius: 2px;
+  background: rgb(var(--surface-muted));
+}
+.model-effort-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: rgb(var(--accent));
+}
+.model-effort-dot {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 9999px;
+  background: rgb(var(--content-subtle) / 0.4);
+}
+.model-effort-stop {
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 9999px;
+  cursor: pointer;
+}
+.model-effort-stop:focus-visible {
+  outline: 2px solid rgb(var(--accent) / 0.7);
+  outline-offset: 1px;
+}
+.model-effort-knob {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 9999px;
+  background: #fff;
+  /* The hairline ring keeps the white knob legible on the light theme's
+   * white popup; the drop shadow lifts it off the track. */
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(0 0 0 / 0.08);
+  pointer-events: none;
+  z-index: 1;
+}
+.model-effort-fill,
+.model-effort-knob {
+  transition: left 0.12s ease, width 0.12s ease;
+}
+/* While dragging, snaps track the pointer exactly — no tween lag. */
+.model-effort-slider.dragging .model-effort-fill,
+.model-effort-slider.dragging .model-effort-knob {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .model-effort-fill,
+  .model-effort-knob {
+    transition: none;
+  }
 }
 
 /* ── Card polish (方案 B 质感 baseline) ──────────────────────────────── */

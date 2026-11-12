@@ -192,7 +192,7 @@ export const zh = {
   "orch.toast.workerFailed": "任务 {id} 失败",
   "orch.toast.runDone": "编排完成:{n}/{total} 任务成功",
   "orch.toast.gate": "编排决策门等待处理",
-  "orch.toast.handoff": "已移交,新会话已创建并发送简报",
+  "orch.toast.handoff": "已移交到新会话,简报已填入输入框,确认后发送",
   "orch.toast.suggest": "检测到可拆解任务:开启「自动编排」或 @agent 可并行处理",
   // ── RightPanel tab ──
   "layout.tabOrch": "编排",

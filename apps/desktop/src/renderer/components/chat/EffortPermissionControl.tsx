@@ -19,10 +19,14 @@ import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
 import type { PermissionModeOption, ThinkingLevelOption } from "@contracts/provider";
 
 /**
- * Thinking-level and permission-mode pickers for the composer toolbar.
- * Each opens a block-grid popover where every option is a tappable tile
- * (label + a 2–4-word caption). Selections apply immediately and the panel
- * stays open; Esc / outside click closes.
+ * Thinking-level and permission-mode pickers for composer-adjacent surfaces.
+ *
+ * The chat composer itself no longer hosts these chips: its model picker
+ * ({@link ModelDropdown}) merged the thinking ladder into its own popup
+ * (slider under the model list — one chip, one interaction). What remains
+ * here serves the surfaces that still pick effort/permission standalone:
+ * the automation editor's dialog rows (EffortChip with a controller draft,
+ * PermissionChip) — the tile-grid popover they open is unchanged.
  *
  * Both lists are NOT hardcoded — they come from the active provider's
  * `capabilities.thinkingLevels` / `capabilities.permissionModes` declarations,
@@ -49,9 +53,10 @@ import type { PermissionModeOption, ThinkingLevelOption } from "@contracts/provi
  * Popover.Portal so it isn't clipped by the composer card's overflow.
  */
 
-/** Full-hint i18n keys by level value (provider-qualified entries first) —
- *  used for the tile `title` tooltip. */
-const EFFORT_HINT_KEYS: Record<string, MessageId> = {
+/** Full-hint i18n keys by level value (provider-qualified entries first).
+ *  Shared with ModelDropdown's merged slider — its stop tooltips resolve
+ *  through the same chain so the wording never drifts between surfaces. */
+export const EFFORT_HINT_KEYS: Record<string, MessageId> = {
   default: "chat.effort.hintDefault",
   off: "chat.effort.hintOff",
   on: "chat.effort.hintOn",

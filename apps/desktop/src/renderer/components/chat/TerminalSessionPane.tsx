@@ -185,6 +185,9 @@ export function TerminalSessionPane({
             mentionFilesOnDrop
             projectPathForLinks={projectPath ?? undefined}
             onBusyChange={(busy) => setTerminalBusy(sessionId, busy)}
+            // Shift/Ctrl+Enter insert a newline in the CLI's input box
+            // instead of submitting (see TerminalView props doc).
+            newlineOnEnterChord
             active={isActive}
             onStatusChange={handleStatusChange}
             onReady={(h) => {

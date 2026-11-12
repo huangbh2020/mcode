@@ -2,7 +2,7 @@ import { useSessionStore, EMPTY_USAGE } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconChartBar } from "@renderer/lib/icons.js";
 import { ModelDropdown } from "./ModelDropdown.js";
-import { EffortChip, PermissionChip } from "./EffortPermissionControl.js";
+import { PermissionChip } from "./EffortPermissionControl.js";
 import { ContextRing } from "./ContextRing.js";
 import { AttachMenuButton } from "./AttachMenuButton.js";
 
@@ -13,25 +13,29 @@ import { AttachMenuButton } from "./AttachMenuButton.js";
  *
  * - layout="pill" (default): the ONLY inline presentation, rendered at every
  *   composer width. One bordered container whose segments are, in order:
- *   attach "+" → model → effort → permission → context ring. Every segment
- *   is its own trigger opening the very same menus/popovers as before, so
- *   "which model / level / permission" stays readable AND directly clickable
- *   no matter how narrow the card gets; the + and the ring persist through
+ *   attach "+" → model+effort (ONE merged segment — the popup pairs the
+ *   model list with the thinking slider, so picking either never costs a
+ *   second click) → permission → context ring. Every segment is its own
+ *   trigger opening the very same menus/popovers as before, so "which
+ *   model / level / permission" stays readable AND directly clickable no
+ *   matter how narrow the card gets; the + and the ring persist through
  *   every tier (the user-facing requirement). `compact` (tier 1, see
  *   useComposerRowFit) collapses the segment labels through animatable grid
- *   shells (`.composer-lblwrap`) — icons + effort level bars + permission
- *   color remain; the ring's % number collapses the same way, the ring
- *   itself stays.
+ *   shells (`.composer-lblwrap`) — icons + permission color remain; the
+ *   ring's % number collapses the same way, the ring itself stays. The
+ *   thinking level lives INSIDE the model segment now (effort no longer has
+ *   a pill segment of its own).
  *
  * - layout="row": the vertical settings list hosted inside the collapsed
  *   hosts' toggle popup ({@link ComposerToolbarToggle} — side-chat panel /
  *   phone shell). Each control becomes a full-width labelled row — field
  *   name on the left, current value on the right — so the whole next-turn
  *   config is scannable at a glance without opening any dropdown, and hit
- *   targets span the panel width. The dropdown menus fly out to the RIGHT of
- *   their row (cascading, like a context menu) so the list itself stays
- *   visible while choosing; on phone-class viewports — where panel + menu
- *   can't sit side by side — they open upward instead (see
+ *   targets span the panel width. The merged model row reads
+ *   "model · level"; its popup carries both surfaces. The dropdowns fly out
+ *   to the RIGHT of their row (cascading, like a context menu) so the list
+ *   itself stays visible while choosing; on phone-class viewports — where
+ *   panel + menu can't sit side by side — they open upward instead (see
  *   useNarrowViewport). The ContextRing closes the list as a read-only
  *   status row behind a top border — it indicates, it doesn't select.
  *
@@ -77,20 +81,18 @@ export function ComposerToolbar({
   // `?? EMPTY_USAGE` keeps the selector's return stable across renders (a
   // bare `?? []` would create a new array each time and trip re-renders).
   const usageHistory = useSessionStore((s) => s.usageHistoryBySession[sessionId] ?? EMPTY_USAGE);
-  // Pill only: which segments render (a provider may declare no thinking
-  // levels or no permission modes — dividers must not dangle around an
-  // absent segment).
+  // Pill only: which segments render (a provider may declare no permission
+  // modes — dividers must not dangle around an absent segment). Effort has
+  // no segment of its own anymore: it's merged into the model segment.
   const providerId = useSessionStore((s) => s.providerId);
   const providers = useSessionStore((s) => s.providers);
   const caps = providers.find((p) => p.id === providerId)?.capabilities;
-  const hasEffort = (caps?.thinkingLevels?.length ?? 0) > 0;
   const hasPerm = (caps?.permissionModes?.length ?? 0) > 0;
 
   if (layout === "row") {
     return (
       <div className="flex w-72 flex-col items-stretch gap-0.5">
         <ModelDropdown layout="row" />
-        <EffortChip layout="row" />
         <PermissionChip layout="row" />
         {contextSnapshot && (
           <div className="mt-1 flex items-center justify-between gap-2 border-t border-edge/60 px-2.5 pt-2">
@@ -105,7 +107,7 @@ export function ComposerToolbar({
     );
   }
 
-  // The mini pill: attach → model → effort → permission → ring, each a
+  // The mini pill: attach → model(+effort) → permission → ring, each a
   // separately-clickable segment behind a hairline divider. The attach and
   // ring segments never collapse (the + and the ring must stay visible at
   // every width); labels collapse under `compact` via CSS grid shells keyed
@@ -126,12 +128,6 @@ export function ComposerToolbar({
         </>
       )}
       <ModelDropdown layout="pill" />
-      {hasEffort && (
-        <>
-          <span className="composer-minipill-mid" aria-hidden />
-          <EffortChip layout="pill" />
-        </>
-      )}
       {hasPerm && (
         <>
           <span className="composer-minipill-mid" aria-hidden />

@@ -104,8 +104,9 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
  */
 
 /** 第一条消息与顶部(标签条 / 标题栏)之间的留白。作为滚动内容的顶部
- *  padding,停在顶部时可见,向下滚动后随内容滚走。 */
-const MESSAGE_LIST_TOP_PADDING = 24;
+ *  padding,停在顶部时可见,向下滚动后随内容滚走。48px 与历史加载骨架的
+ *  pt-12 对齐——骨架消失、真消息落地时顶部位置不跳变。 */
+const MESSAGE_LIST_TOP_PADDING = 48;
 
 /** 展开折叠卡(「N 个操作」操作条 / 工具卡 / 思考折叠)期间,挂起虚拟列表
  *  高度触发底部钉住的单窗预算;有效期内由 interval 按半窗重臂,保证卡片
@@ -5025,11 +5026,11 @@ function ChatPaneForSession({
                   <ComposerToolbarToggle sessionId={sessionId} />
                 ) : (
                   // The mini pill is the ONLY inline presentation and never
-                  // folds away: attach "+" → model → effort → permission →
-                  // context ring, all in one bordered container at every
-                  // width. `compact` (tier 1) collapses the segment labels
-                  // through CSS grid shells — the + and the ring persist
-                  // ("药丸常驻" per 方案 B single-pill revision).
+                  // folds away: attach "+" → model(+effort, one merged
+                  // segment) → permission → context ring, all in one bordered
+                  // container at every width. `compact` (tier 1) collapses the
+                  // segment labels through CSS grid shells — the + and the
+                  // ring persist ("药丸常驻" per 方案 B single-pill revision).
                   <ComposerToolbar
                     sessionId={sessionId}
                     layout="pill"

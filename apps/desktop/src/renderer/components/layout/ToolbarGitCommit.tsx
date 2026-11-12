@@ -1,9 +1,13 @@
 /**
- * Toolbar git quick-commit widget — sits in the titlebar next to the branch
- * pill. Extends the compact ProjectBranchIndicator with a change-count badge
- * (green +added / red -deleted / muted ~modified, file counts from git
- * status) that opens a quick-commit popover:
+ * Toolbar git quick-commit widget — the single git capsule in the titlebar.
+ * The trigger is a change-count badge (green +added / red -deleted / muted
+ * ~modified, file counts from git status; reads "工作区干净" when clean) that
+ * opens a quick-commit popover:
  *
+ *   - branch switcher (moved OFF the titlebar 2026-11-10 to reclaim width —
+ *     the popover header hosts a compact ProjectBranchIndicator that opens
+ *     the full branch/tag picker; checkout broadcasts git.changed so the
+ *     counts and the pill refresh live)
  *   - repo switcher (only for projects hosting MULTIPLE git repos; the last
  *     selection is remembered per project for the session)
  *   - commit-message box + LLM generation, reusing the right panel's
@@ -11,6 +15,12 @@
  *   - "commit" and "commit & push" over ALL changes — everything is
  *     auto-staged first (untracked included); fine-grained staging stays in
  *     the right panel's GitRepoCard by design
+ *
+ * Nested-overlay note: the switcher menu runs in its own floating tree, so
+ * clicks inside it register as outside presses for this popover — which
+ * would unmount the menu mid-interaction. `onOpenChange` therefore swallows
+ * dismissals while the menu is open; the menu's own dismissal (pick / Esc /
+ * outside click) closes it and leaves the popover live on top.
  *
  * Refresh triggers: git.changed runtime events (main bumps
  * gitChangeVersionByRepo after ANY client's git op — covers commits/stages
@@ -114,6 +124,14 @@ export function ToolbarGitCommit() {
 
   // ── popover / actions state ──
   const [open, setOpen] = useState(false);
+  // True while the header branch-switcher menu is up — see the nested-overlay
+  // note on the Popover.Root below. Reset when the popover closes: a close
+  // that unmounts the menu under it (× button, commit success) never runs the
+  // menu's own onOpenChange, so the flag would stick true and pin the gate.
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!open) setBranchMenuOpen(false);
+  }, [open]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<null | "generate" | "commit" | "push">(null);
   const [error, setError] = useState<string | null>(null);
@@ -312,24 +330,24 @@ export function ToolbarGitCommit() {
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       className="inline-flex h-7 shrink-0 items-center rounded-lg border border-edge/80 bg-surface px-1 py-0.5 shadow-xs transition-all hover:border-edge hover:shadow-sm"
     >
-      {/* Left segment: Branch button */}
-      <ProjectBranchIndicator
-        projectPath={projectPath}
-        projectName=""
-        compact
-        repos={repos}
-        repoOverride={selectedRepo}
-        triggerClassName="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium text-content/90 hover:text-content hover:bg-surface-hover/80 active:scale-[0.98] transition-all cursor-pointer"
-      />
-
-      {/* Hairline divider */}
-      <div className="mx-1 h-3.5 w-[1px] shrink-0 bg-edge/70" />
-
-      {/* Right segment: Change-count or Clean status trigger. The +/-/~ counts
-          carry the semantic success/danger colors (deliberately NOT accent —
-          see tokens); the trigger chrome itself stays neutral so the titlebar's
-          green budget is spent only on attention signals. */}
-      <Popover.Root open={open} onOpenChange={setOpen}>
+      {/* Change-count or Clean status trigger. The +/-/~ counts carry the
+          semantic success/danger colors (deliberately NOT accent — see
+          tokens); the trigger chrome itself stays neutral so the titlebar's
+          green budget is spent only on attention signals. The branch pill
+          that used to sit left of this segment now lives inside the popover
+          header (titlebar space triage, 2026-11-10). */}
+      <Popover.Root
+        open={open}
+        onOpenChange={(nextOpen) => {
+          // The header branch-switcher menu runs in its own floating tree,
+          // so clicks inside it count as outside presses for this popover —
+          // without this gate the first menu click would close (and unmount)
+          // the menu mid-interaction. The menu's own dismissal (pick a ref /
+          // Esc / outside click) closes it and the popover stays live.
+          if (!nextOpen && branchMenuOpen) return;
+          setOpen(nextOpen);
+        }}
+      >
         <Popover.Trigger
           className={cn(
             "flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[11px] tabular-nums transition-all select-none cursor-pointer active:scale-[0.98]",
@@ -387,7 +405,10 @@ export function ToolbarGitCommit() {
                 "transition-[transform,opacity] duration-100",
               )}
             >
-              {/* Header: Title + branch badge + repo switcher + actions */}
+              {/* Header: Title + branch switcher (was the titlebar's branch
+                  pill, moved here 2026-11-10) + repo switcher + actions.
+                  While this menu is open, `branchMenuOpen` pins the popover
+                  open — see the Popover.Root gate above. */}
               <div className="flex items-center gap-1.5">
                 <div className="flex items-center gap-1.5">
                   <div className="flex h-5 w-5 items-center justify-center rounded-md bg-accent/10 text-accent">
@@ -396,9 +417,15 @@ export function ToolbarGitCommit() {
                   <span className="text-xs font-semibold text-content">
                     {t("layout.gitCommit.title")}
                   </span>
-                  <span className="max-w-[120px] truncate rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-content-muted">
-                    {status?.branch || selectedRepo.name}
-                  </span>
+                  <ProjectBranchIndicator
+                    projectPath={projectPath}
+                    projectName=""
+                    compact
+                    repos={repos}
+                    repoOverride={selectedRepo}
+                    onSwitcherMenuOpenChange={setBranchMenuOpen}
+                    triggerClassName="flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-content-muted hover:bg-surface-hover hover:text-content transition-colors cursor-pointer"
+                  />
                 </div>
 
                 <div className="flex-1" />

@@ -191,7 +191,7 @@ export const en = {
   "orch.toast.workerFailed": "Task {id} failed",
   "orch.toast.runDone": "Run completed: {n}/{total} tasks succeeded",
   "orch.toast.gate": "Orchestration gate awaiting decision",
-  "orch.toast.handoff": "Handed off — new session created with the briefing",
+  "orch.toast.handoff": "Handed off — briefing prefilled in the new session, review and send",
   "orch.toast.suggest": "Decomposable task detected — turn on auto-orchestration or use @agent to parallelize",
   // ── RightPanel tab ──
   "layout.tabOrch": "Orchestration",

@@ -5,7 +5,6 @@ import {
   IconArrowLeft,
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightExpand,
-  IconCode,
   IconGitFork,
   IconTerminal2,
 } from "@renderer/lib/icons.js";
@@ -47,8 +46,8 @@ interface Props {
  *  (on its tab) and the chrome costs 40px instead of 72px. Layout:
  *   - workspace: sidebar-reopen toggle (only while closed) → tab strip
  *     (flex-1; empty space stays draggable like a browser tab strip) →
- *     worktree chip (worktree sessions only) → editor `</>` toggle → git
- *     pill → worktree merge-back (conditional, the ONE accent-green signal)
+ *     worktree chip (worktree sessions only) → git pill → worktree
+ *     merge-back (conditional, the ONE accent-green signal)
  *     → terminal toggle (conditional) → right-panel toggle → the reserved
  *     native-controls zone (Windows).
  *   - settings:  a "返回工作区" back button + a "设置" heading (no strip —
@@ -223,13 +222,10 @@ export function Titlebar({
                 gap (the component returns null). Neutral tone: the accent
                 green is reserved for the merge-back button next to it. */}
             <ActiveWorktreeChip />
-            {/* Editor column toggle - shows/hides the center-pane editor
-                column without closing the open file. Lives in the right
-                cluster with the other workbench toggles since the merge. */}
-            {!isBrowserMode && <EditorColumnToggle />}
-            {/* Git indicator - compact branch pill + change-count badge that
-                opens the quick-commit popover. Placed right-aligned with the
-                workbench controls for prominent access and clean title area. */}
+            {/* Git indicator - change-count / clean-status pill that opens the
+                quick-commit popover (which also hosts the branch switcher,
+                moved off the titlebar 2026-11-10 to reclaim width). Placed
+                right-aligned with the workbench controls. */}
             <ToolbarGitCommit />
             {/* Worktree merge-back (Land) — session-scoped, right-aligned with
                 the panel toggles. Shown only while the active session runs in
@@ -329,91 +325,8 @@ function ActiveWorktreeChip() {
   );
 }
 
-/** Stable empty array so the openFiles selector never returns a fresh []
- *  (Zustand Object.is rule - a new [] every render causes an infinite loop). */
-const EMPTY_OPEN_FILES: string[] = [];
-
-/** Editor column toggle button. Shows/hides the center-pane editor column.
- *  The editor is visible when a file tab is active OR a plan tab is open.
- *  Clicking when visible hides it (clears the active file AND deactivates the
- *  plan tab so neither renders); clicking when hidden re-opens the first file
- *  from the open-files list (or does nothing if none are open). */
-function EditorColumnToggle() {
-  const { t } = useI18n();
-  const activeProjectId = useSessionStore((s) => s.activeProjectId);
-  const activeFile = useSessionStore((s) =>
-    activeProjectId ? s.ideActiveFileByProject[activeProjectId] ?? null : null,
-  );
-  const openFiles = useSessionStore((s) =>
-    activeProjectId ? s.ideOpenFilesByProject[activeProjectId] ?? EMPTY_OPEN_FILES : EMPTY_OPEN_FILES,
-  );
-  const clearIdeActiveFile = useSessionStore((s) => s.clearIdeActiveFile);
-  const setIdeActiveFile = useSessionStore((s) => s.setIdeActiveFile);
-
-  // Plan tab state: the editor column is also visible when the plan tab is
-  // the active tab (same condition CenterPane uses).
-  const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const planTabActive = useSessionStore(
-    (s) => (activeSessionId ? s.planTabActiveBySession[activeSessionId] ?? false : false),
-  );
-  const planTabOpen = useSessionStore(
-    (s) => (activeSessionId ? s.planDrawerPlanBySession[activeSessionId] != null : false),
-  );
-  const setPlanTabActive = useSessionStore((s) => s.setPlanTabActive);
-
-  // The unified center bar decides visibility — the editor "shows" only
-  // while it holds the center focus.
-  const centerTabFocus = useSessionStore((s) => s.centerTabFocus);
-
-  // Match the center pane's visibility logic: visible when a file is active
-  // OR the plan tab is active. (planTabOpen alone - plan exists but is not
-  // the active tab - does NOT make the editor visible, matching CenterPane.)
-  const editorVisible = centerTabFocus === "editor" && (!!activeFile || planTabActive);
-  // Whether there's something to restore when the editor is hidden: either an
-  // open file OR a plan tab that can be re-activated.
-  const canRestore = openFiles.length > 0 || planTabOpen;
-
-  const handleClick = () => {
-    if (editorVisible) {
-      // Hide the editor: clear the active file AND deactivate the plan tab so
-      // neither the FileEditor nor PlanViewer renders.
-      clearIdeActiveFile();
-      if (activeSessionId && planTabActive) {
-        setPlanTabActive(activeSessionId, false);
-      }
-    } else if (openFiles.length > 0) {
-      // Re-open the first file in the open list.
-      setIdeActiveFile(openFiles[0]);
-    } else if (activeSessionId && planTabOpen) {
-      // No files open but a plan tab exists - re-activate it.
-      setPlanTabActive(activeSessionId, true);
-    }
-  };
-
-  return (
-    <button
-      onClick={handleClick}
-      disabled={!editorVisible && !canRestore}
-      className={cn(
-        // shrink-0: the tab strip may shrink to nothing on narrow windows,
-        // but the right-cluster buttons and the git pill must keep their
-        // size — the strip scrolls instead (chevrons), it never squeezes
-        // the workbench controls.
-        "flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
-        editorVisible
-          ? "bg-surface-hover text-content"
-          : "text-content-muted hover:bg-surface-hover hover:text-content disabled:opacity-40 disabled:hover:bg-transparent",
-      )}
-      title={
-        editorVisible
-          ? t("layout.hideEditor")
-          : canRestore
-            ? t("layout.showEditor")
-            : t("layout.noOpenFiles")
-      }
-      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-    >
-      <IconCode size={16} className="shrink-0" />
-    </button>
-  );
-}
+/** Editor column toggle removed (2026-11-10, titlebar space triage): the
+ *  `</>` button was cut; editor visibility is owned by the tab strip (clicking
+ *  a file/plan tab activates the editor column, closing them deactivates it).
+ *  layout.hideEditor / showEditor / noOpenFiles keys remain in the dicts for
+ *  future surfaces. */

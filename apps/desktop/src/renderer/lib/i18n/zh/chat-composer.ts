@@ -176,6 +176,7 @@ export const zh = {
   "chat.model.pickHint": "请先选择模型",
   "chat.model.free": "免费",
   "chat.model.rowLabel": "模型",
+  "chat.model.configsTitle": "选择模型配置",
 
   // ── model config guard dialog ──
   "chat.modelConfig.title": "尚未配置模型",

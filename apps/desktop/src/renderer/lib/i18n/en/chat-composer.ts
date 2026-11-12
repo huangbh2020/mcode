@@ -170,6 +170,7 @@ export const en = {
   "chat.model.pickHint": "Pick a model first",
   "chat.model.free": "Free",
   "chat.model.rowLabel": "Model",
+  "chat.model.configsTitle": "Select configuration",
 
   // ── model config guard dialog ──
   "chat.modelConfig.title": "No model configured",

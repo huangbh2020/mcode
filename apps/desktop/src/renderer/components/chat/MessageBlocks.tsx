@@ -25,7 +25,6 @@ import {
   IconWorldSearch,
   IconHelpCircle,
   IconStack2,
-  IconLoader2,
 } from "@renderer/lib/icons.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -687,22 +686,10 @@ function AttachmentRow({ blocks }: { blocks: Extract<Block, { kind: "attachment"
   return <AttachmentStackDeck blocks={blocks} />;
 }
 
-/** Status icon for tool calls. Error → red X (the only state that always
- *  deserves a glyph on its own). 方案A「脉络」live glyph: while the owning turn
- *  is streaming (`live`) and the tool is still running, the row shows a spinning
- *  arc. Completion is silent — no checkmark (2026-10-29 用户反馈：活跃回合里
- *  成排的完成对勾是视觉噪音), so busy turns no longer accumulate a wall of
- *  green checks; rows of COMPLETED turns keep the same quiet behavior. */
-function StatusIcon({ status, live }: { status: "running" | "done" | "error"; live?: boolean }) {
-  if (status !== "running" || !live) {
-    return null;
-  }
-  return (
-    <span className="chat-st" aria-hidden="true">
-      <span className="chat-st-run" />
-    </span>
-  );
-}
+/** 运行中的工具行不再有行首 loading 图标(2026-11-10,用户反馈:转圈图标
+ *  不够时尚):StatusIcon 圆弧整体移除,运行中改由标题文字的左→右扫光承担
+ *  (`.shimmer-text`);完成态本就无 glyph(2026-10-29 移除成排对勾),error
+ *  红叉仍在行尾由组件层渲染——三态的行首从此统一干净。 */
 
 /** Freshness window within which a completed turn's TurnPanel mounts open
  *  and plays its one-shot fold-away (see TurnPanel). Sized to cover the
@@ -1144,15 +1131,17 @@ const BlockView = memo(function BlockView({
    *  useDeferredValue instead). Kept on the signature for interface
    *  stability - MessageBlocks still forwards it down. */
   isStreamingTail?: boolean;
-  /** Whether the owning turn is still streaming. Forwarded to tool cards so
-   *  their status glyph shows the 方案A live arc→check crossfade (running
-   *  arc, cross-fading to a check on completion). Undefined on display-only
-   *  paths — tool cards of settled turns stay glyph-quiet except errors. */
+  /** Whether the owning turn is still streaming. Forwarded to tool cards —
+   *  while live, a running card's title text carries the left→right shimmer
+   *  sweep (2026-11-10: the row-leading loading glyph is gone entirely).
+   *  Undefined on display-only paths — tool cards of settled turns stay
+   *  glyph-quiet except errors. */
   liveTurn?: boolean;
   /** This thinking block is the one currently streaming (turn live + it is
-   *  the turn's last block) — the thinking card shows a spinner instead of
-   *  the static brain glyph. Only the segment callers know the block's
-   *  position in the turn, so they compute it; undefined = not running. */
+   *  the turn's last block) — the thinking card sweeps its label + live
+   *  preview instead of showing the static brain glyph. Only the segment
+   *  callers know the block's position in the turn, so they compute it;
+   *  undefined = not running. */
   thinkingActive?: boolean;
   /** Forwarded to PlanStreamBlock - opens the PlanDrawer on click. */
   onOpenPlan?: (plan: string) => void;
@@ -1388,8 +1377,8 @@ export function BatchToolGroup(props: {
   showTicker?: boolean;
   /** The turn is live AND this run is the turn's tail (its last block is the
    *  one streaming). Only meaningful when that last block is thinking — it
-   *  drives the standalone thinking card's spinner. Multi-block runs derive
-   *  the same fact internally. */
+   *  drives the standalone thinking card's shimmer sweep. Multi-block runs
+   *  derive the same fact internally. */
   thinkingActive?: boolean;
   projectPath?: string | null;
 }) {
@@ -1886,9 +1875,10 @@ function OrchPlanToolCard({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
-        <StatusIcon status={block.status} live={live} />
         <ToolIcon name={block.toolName} className="text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">{t("orch.tool.submitTitle")}</span>
+        <span className={cn("shrink-0 font-medium text-content-muted", block.status === "running" && !!live && "shimmer-text")}>
+          {t("orch.tool.submitTitle")}
+        </span>
         {goal && (
           <span className="truncate text-content-subtle" title={goal}>
             {goal}
@@ -1958,8 +1948,9 @@ function EditToolCard({
   status: "running" | "done" | "error";
   result?: unknown;
   defaultOpen?: boolean;
-  /** Live-turn flag: renders the 方案A running-arc → done-check crossfade
-   *  instead of the quiet error-only glyph. */
+  /** Live-turn flag: a running card's title carries the left→right shimmer
+   *  sweep (2026-11-10: the row-leading running arc is gone; settled rows
+   *  stay glyph-quiet except errors). */
   live?: boolean;
   projectPath?: string | null;
 }) {
@@ -1982,9 +1973,10 @@ function EditToolCard({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
-        <StatusIcon status={status} live={live} />
         <ToolIcon name="Edit" className="shrink-0 text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, "Edit")}</span>
+        <span className={cn("shrink-0 font-medium text-content-muted", status === "running" && !!live && "shimmer-text")}>
+          {toolDisplayName(t, "Edit")}
+        </span>
         <ToolPathDisplay filePath={filePath} className="min-w-0 flex-1" />
         {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
@@ -2029,8 +2021,9 @@ function WriteToolCard({
   result?: unknown;
   defaultOpen?: boolean;
   beforeMap?: BeforeContentMap;
-  /** Live-turn flag: renders the 方案A running-arc → done-check crossfade
-   *  instead of the quiet error-only glyph. */
+  /** Live-turn flag: a running card's title carries the left→right shimmer
+   *  sweep (2026-11-10: the row-leading running arc is gone; settled rows
+   *  stay glyph-quiet except errors). */
   live?: boolean;
   projectPath?: string | null;
 }) {
@@ -2069,9 +2062,10 @@ function WriteToolCard({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
-        <StatusIcon status={status} live={live} />
         <ToolIcon name="Write" className="shrink-0 text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, "Write")}</span>
+        <span className={cn("shrink-0 font-medium text-content-muted", status === "running" && !!live && "shimmer-text")}>
+          {toolDisplayName(t, "Write")}
+        </span>
         <ToolPathDisplay filePath={filePath} className="min-w-0 flex-1" />
         {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
@@ -2135,8 +2129,9 @@ function GenericToolCard({
 }: {
   block: Extract<Block, { kind: "tool_use" }>;
   defaultOpen?: boolean;
-  /** Live-turn flag: renders the 方案A running-arc → done-check crossfade
-   *  instead of the quiet error-only glyph. */
+  /** Live-turn flag: a running card's title carries the left→right shimmer
+   *  sweep (2026-11-10: the row-leading running arc is gone; settled rows
+   *  stay glyph-quiet except errors). */
   live?: boolean;
   projectPath?: string | null;
 }) {
@@ -2158,9 +2153,10 @@ function GenericToolCard({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
-        <StatusIcon status={block.status} live={live} />
         <ToolIcon name={block.toolName} className="shrink-0 text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, block.toolName)}</span>
+        <span className={cn("shrink-0 font-medium text-content-muted", block.status === "running" && !!live && "shimmer-text")}>
+          {toolDisplayName(t, block.toolName)}
+        </span>
         {summaryToolPath ? (
           <span className="min-w-0 flex-1 truncate font-mono text-content-subtle">
             <FileLink
@@ -2220,8 +2216,9 @@ function Collapsible({
   label: string;
   hint: string;
   defaultOpen?: boolean;
-  /** This thinking segment is streaming right now — the brain glyph swaps
-   *  for a spinner until the model moves on or the turn ends. */
+  /** This thinking segment is streaming right now — the brain glyph stands
+   *  down and the label + live preview carry a left→right shimmer sweep
+   *  instead (2026-11-10: no more spinner icon). */
   running?: boolean;
   children: ReactNode;
 }) {
@@ -2236,17 +2233,20 @@ function Collapsible({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left text-content-muted hover:bg-surface-muted/40"
       >
-        {running ? (
-          <IconLoader2 size={13} className="shrink-0 animate-spin text-accent" />
-        ) : (
-          <IconBrain size={13} className="shrink-0 text-content-subtle" />
-        )}
+        {!running && <IconBrain size={13} className="shrink-0 text-content-subtle" />}
         {/* shrink-0 + whitespace-nowrap keep the short label on one line even
             in a narrow pane; flex-1 + min-w-0 let the hint own the leftover
             width and truncate with an ellipsis instead of pushing the header
-            onto two lines. */}
-        <span className="shrink-0 whitespace-nowrap font-medium text-content-muted">{label}</span>
-        <span className="min-w-0 flex-1 truncate text-content-subtle">{hint}</span>
+            onto two lines. While running, label + hint sweep (the hint's
+            resting tone is one stop lighter, hence the subtle variant). */}
+        <span className={cn("shrink-0 whitespace-nowrap font-medium text-content-muted", running && "shimmer-text")}>
+          {label}
+        </span>
+        <span
+          className={cn("min-w-0 flex-1 truncate text-content-subtle", running && "shimmer-text shimmer-text-subtle")}
+        >
+          {hint}
+        </span>
         <Chevron open={open} className="ml-auto" />
       </button>
       {open && (

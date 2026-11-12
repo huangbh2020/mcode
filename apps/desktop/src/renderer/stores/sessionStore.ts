@@ -2517,7 +2517,8 @@ export interface SessionState {
   orchResolveGate: (runId: string, gateId: string, resolution: string) => Promise<void>;
   /** Merge a completed worktree node back into the main checkout. */
   orchMergeTask: (runId: string, taskId: string) => Promise<string | null>;
-  /** Full handoff: create a plain new session with the briefing and send it. */
+  /** Full handoff: create a plain new session, open it with the briefing
+   *  prefilled in its composer — the user reviews/edits, then sends. */
   orchHandoff: (briefing: string, title?: string) => Promise<Session | null>;
   /** Fetch a worker session row + open it as a center tab. */
   openOrchWorker: (workerSessionId: string) => Promise<void>;
@@ -13607,6 +13608,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         fromSessionId: s.activeSessionId ?? undefined,
         title,
       });
+      // Prefill BEFORE openTab: the composer's draft-restore effect runs on
+      // the sessionId change, so the briefing lands in the editor the moment
+      // the new tab mounts. The turn itself only starts when the user sends —
+      // through the normal path (visible user bubble + persistence + echo).
+      get().saveComposerDraft(session.id, { text: briefing, html: "", tags: [] });
+      await get().openTab(session.id);
       pushToastLite("info", translate(get().locale, "orch.toast.handoff"));
       return session;
     } catch (err) {

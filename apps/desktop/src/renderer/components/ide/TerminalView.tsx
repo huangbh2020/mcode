@@ -76,6 +76,16 @@ interface Props {
    *  terminal-session host maps it onto the shared running-spinner state;
    *  absent = nobody listens. */
   onBusyChange?: (busy: boolean) => void;
+  /** Shift+Enter / Ctrl+Enter insert a newline instead of submitting.
+   *  Terminals cannot distinguish these chords from plain Enter at the byte
+   *  level (both arrive as CR), so the CLI's TUI never sees the user's
+   *  intent. When set, we intercept the chords in the custom key handler and
+   *  write a bare LF instead — claude's TUI parses LF as "enter" = insert
+   *  newline (empirically verified against claude 2.1.220; plain CR submits,
+   *  LF/ESC+CR both insert). Terminal sessions only: a plain shell treats LF
+   *  as a line ending, so the IDE terminal leaves this off. Enter presses
+   *  during IME composition pass through untouched (they commit the IME). */
+  newlineOnEnterChord?: boolean;
   /** When false the host is hidden (right-tab keep-alive) — skip fit spam. */
   active: boolean;
   /** `shell` is the executable the live PTY actually spawned (from the create
@@ -197,6 +207,7 @@ export function TerminalView({
   mentionFilesOnDrop,
   projectPathForLinks,
   onBusyChange,
+  newlineOnEnterChord,
   active,
   onStatusChange,
   onReady,
@@ -221,6 +232,11 @@ export function TerminalView({
   const { t } = useI18n();
   const tRef = useRef(t);
   tRef.current = t;
+  // Same freshness trick for the newline-chord flag: handleKeyEvent is bound
+  // once per sessionKey (attachCustomKeyEventHandler in the create effect),
+  // so the prop is mirrored into a ref the callback can read live.
+  const newlineChordRef = useRef(newlineOnEnterChord === true);
+  newlineChordRef.current = newlineOnEnterChord === true;
   // Bumps to force a fresh PTY spawn while keeping the same xterm instance.
   const [spawnGen, setSpawnGen] = useState(0);
   const dark = useIsDark();
@@ -294,6 +310,37 @@ export function TerminalView({
     (event: KeyboardEvent): boolean => {
       const term = termRef.current;
       if (!term) return true;
+
+      // Newline chords (terminal sessions): Shift+Enter / Ctrl+Enter would
+      // otherwise send the same CR as plain Enter (submit). Write LF — the
+      // TUI's "insert newline" key — directly to the PTY instead. IME
+      // composition Enter (isComposing / keyCode 229) must pass through: it
+      // commits the IME, and hijacking keys mid-composition breaks input.
+      // Cmd/Cmd-like (meta) Enter chords are left alone — macOS apps
+      // conventionally reserve those, never for newline.
+      // NOTE: xterm invokes this handler for keydown AND keyup AND keypress —
+      // write only on keydown, but block all three (a pass-through keypress
+      // would emit the CR we are trying to suppress).
+      if (
+        newlineChordRef.current &&
+        event.key === "Enter" &&
+        (event.shiftKey || event.ctrlKey) &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.isComposing &&
+        event.keyCode !== 229
+      ) {
+        if (event.type === "keydown") {
+          const id = terminalIdRef.current;
+          if (id && statusRef.current === "running") {
+            void api.terminal.write({ terminalId: id, data: "\n" }).catch(() => {
+              /* ignore — exited races */
+            });
+          }
+        }
+        return false;
+      }
+
       const mod = event.metaKey || event.ctrlKey;
       if (!mod) return true;
 

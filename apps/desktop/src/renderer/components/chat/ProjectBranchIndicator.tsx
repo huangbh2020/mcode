@@ -54,6 +54,12 @@ export interface ProjectBranchIndicatorProps {
   repoOverride?: GitRepo | null;
   /** Optional custom trigger class to blend seamlessly into segmented capsule layouts. */
   triggerClassName?: string;
+  /** Notified when the branch/tag switcher menu opens or closes. Hosts that
+   *  embed this component inside another overlay (e.g. the toolbar
+   *  quick-commit popover) use it to gate their own dismissal: the switcher
+   *  menu runs in its own floating tree, so clicks inside it count as outside
+   *  presses for the host overlay. */
+  onSwitcherMenuOpenChange?: (open: boolean) => void;
 }
 
 export function ProjectBranchIndicator({
@@ -63,6 +69,7 @@ export function ProjectBranchIndicator({
   repos,
   repoOverride,
   triggerClassName,
+  onSwitcherMenuOpenChange,
 }: ProjectBranchIndicatorProps) {
   const { t } = useI18n();
   // Repos found by our own scan (unused when the caller passes `repos`).
@@ -199,7 +206,12 @@ export function ProjectBranchIndicator({
       )}
 
       {repo && (
-        <Menu.Root onOpenChange={(open) => open && void loadBranches()}>
+        <Menu.Root
+          onOpenChange={(open) => {
+            if (open) void loadBranches();
+            onSwitcherMenuOpenChange?.(open);
+          }}
+        >
           <Menu.Trigger
             className={cn(
               "flex shrink-0 items-center gap-1.5 rounded font-mono text-[11px] text-content-muted transition-all select-none cursor-pointer",

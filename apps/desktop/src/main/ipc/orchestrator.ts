@@ -26,10 +26,8 @@ import {
   OrchSettingsSaveSchema,
 } from "@contracts/ipc";
 import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
-import { SessionRepo, ProjectRepo } from "@main/store/repositories.js";
-import { runtimeManager } from "@main/claude/RuntimeManager.js";
+import { SessionRepo } from "@main/store/repositories.js";
 import { createOrReuseSession } from "@main/lib/sessionStart.js";
-import { resolveSessionCwd } from "@main/lib/sessionCwd.js";
 import { log } from "@main/lib/logger.js";
 
 
@@ -129,8 +127,12 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     return orchestrator.mergeTask(input.runId, input.taskId);
   });
 
-  /* ── 完全移交(Handoff):普通新会话 + 简报,不建任务行、不追踪 ── */
-  ipcMain.handle(IPC.ORCH_HANDOFF, async (_evt, raw) => {
+  /* ── 完全移交(Handoff):普通新会话 + 简报,不建任务行、不追踪 ──
+   * 只创建会话行——简报由 renderer 预填进新会话的 composer 草稿,用户
+   * 确认/编辑后自己发送(走正常回合管线:用户消息可见 + 落库 + echo)。
+   * 此前在这里直接 sendTurn 有两个缺陷:回合无确认立即开跑;prompt 不带
+   * userMessage → 简报在新会话转录里不可见也不持久化。 */
+  ipcMain.handle(IPC.ORCH_HANDOFF, (_evt, raw) => {
     const input = OrchHandoffSchema.parse(raw);
     // 继承来源会话的执行配置 —— 与 worker 派发同款:customModelId 不带的话
     // 第三方网关用户的新会话落官方 OAuth,首轮即 /login。
@@ -149,22 +151,6 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
       },
       "desktop",
     );
-    // 立即发送简报首轮(移交 = 一次性转移,原会话不再监控)。
-    const project = ProjectRepo.get(session.projectId);
-    if (!project) throw new Error(`project not found: ${session.projectId}`);
-    SessionRepo.updateStatus(session.id, "running");
-    const cwd = await resolveSessionCwd(session, project);
-    runtimeManager.bindSession(session);
-    await runtimeManager.sendTurn(session, {
-      prompt: [
-        "【任务移交简报】",
-        input.briefing,
-        input.fromSessionId ? `(由会话 ${input.fromSessionId} 移交)` : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-      cwd,
-    });
     log.info(`orch handoff: session ${session.id} created from ${input.fromSessionId ?? "?"}`);
     return { session };
   });
