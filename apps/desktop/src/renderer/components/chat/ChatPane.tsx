@@ -3696,15 +3696,17 @@ function ChatPaneForSession({
     lastUserMessageIdRef.current = lastUserMessageId;
   }, [lastUserMessageId]);
 
-  /** 运行中台账的过程明细开关（2026-09-30）：大任务每个 think→act 周期落
-   *  两行（思考 + N 个操作），几十个周期就是一面元信息墙。默认收拢——台头
-   *  本就汇总模型/走时/实时操作/步数，正文只留展示内容；点击台头展开全量流。
-   *  每个新回合（isRunning false→true 边沿）重置回收拢态，与完成态 TurnPanel
-   *  的默认折叠同哲学。pane 级状态即可：tabs 模式 pane 常驻保活，单槽模式
-   *  切会话重挂载 → 回到默认收拢，正是期望语义。 */
-  const [liveProcessOpen, setLiveProcessOpen] = useState(false);
+  /** 运行中台账的过程明细开关（2026-09-30 机制；2026-11-17 定准默认值）：
+   *  台头是按钮开关，点击在「全量流 / 收拢」间切换（机制见 AGENTS.md「运行中
+   *  过程默认收拢」）。**默认展开**——2026-11-17 用户实测拍板：运行中过程流要
+   *  照常铺开，要收的只是流内的操作组胶囊（MultiBatchToolGroup，默认一行摘要）；
+   *  本层若默认收拢 = 整个过程区只剩台头一行，不是期望行为（曾按 09-30 的
+   *  旧注释误改为 false，当天即回滚）。每个新回合（isRunning false→true 边沿）
+   *  重置回展开。pane 级状态即可：tabs 模式 pane 常驻保活，单槽模式切会话
+   *  重挂载 → 回到默认展开。 */
+  const [liveProcessOpen, setLiveProcessOpen] = useState(true);
   useEffect(() => {
-    if (isRunning) setLiveProcessOpen(false);
+    if (isRunning) setLiveProcessOpen(true);
   }, [isRunning]);
 
   /** One rendered row of the live segment — the element the list would have
