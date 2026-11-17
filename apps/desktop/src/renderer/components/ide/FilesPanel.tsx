@@ -13,6 +13,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { Divider } from "@renderer/components/layout/Divider.js";
 import { OpenTabsBar } from "./OpenTabsBar.js";
+import { basename } from "@renderer/lib/path.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
 const EMPTY_OPEN_FILES: string[] = [];
@@ -25,14 +26,20 @@ const FileEditor = lazy(() =>
 /**
  * Files panel - the right-panel "Files" tab body.
  *
+ * The tree header's sidebar button (2026-11-17) toggles TREE VISIBILITY:
+ * hidden → the editor/preview column renders full-width (the button moves
+ * into the editor's header so it can always bring the tree back); shown →
+ * the layout below. `ui.fileTreeHidden` persists the choice.
+ *
  * With the file preview placed in the sidebar (`tabsFilePreviewPlacement ===
- * "sidebar"`) and an active file open, this panel splits into two columns:
+ * "sidebar"`) and the tree visible, this panel splits into two columns:
  *  - Left column: file preview/editor (Monaco FileEditor), with path and close button;
  *  - Divider: draggable handle to resize split share (fileTreeSplitPct);
  *  - Right column: the directory FileTree for navigating and switching files.
  *
- * Otherwise (center placement or no file active) it renders the classic
- * single-column file navigator.
+ * Otherwise (center placement) it renders the classic single-column file
+ * navigator. (Placement itself is switched from the editor's ⋯ menu and the
+ * unified tab bar — not from this panel anymore.)
  */
 export function FilesPanel() {
   const { t } = useI18n();
@@ -40,7 +47,8 @@ export function FilesPanel() {
   const projects = useSessionStore((s) => s.projects);
   const setSearchDialogOpen = useSessionStore((s) => s.setSearchDialogOpen);
   const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
-  const toggleTabsFilePreviewPlacement = useSessionStore((s) => s.toggleTabsFilePreviewPlacement);
+  const fileTreeHidden = useSessionStore((s) => s.fileTreeHidden);
+  const toggleFileTreeHidden = useSessionStore((s) => s.toggleFileTreeHidden);
   const activeFile = useSessionStore((s) =>
     activeProjectId ? s.ideActiveFileByProject[activeProjectId] ?? null : null,
   );
@@ -98,6 +106,88 @@ export function FilesPanel() {
 
   const isSplitLayout = tabsFilePreviewPlacement === "sidebar";
 
+  // The tree-visibility toggle (2026-11-17, repurposed from the placement
+  // toggle). ONE element shared by every hosting header — the tree header
+  // when the tree is shown, the editor header when it's hidden — so the
+  // affordance is always one click away in both states. Active styling while
+  // the tree is hidden; neutral otherwise (green is reserved for attention).
+  const treeToggleBtn = (
+    <button
+      type="button"
+      onClick={toggleFileTreeHidden}
+      title={fileTreeHidden ? t("ide.files.showTree") : t("ide.files.hideTree")}
+      aria-label={fileTreeHidden ? t("ide.files.showTree") : t("ide.files.hideTree")}
+      aria-pressed={fileTreeHidden}
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded p-0.5 transition-colors",
+        fileTreeHidden
+          ? "bg-surface-hover text-content"
+          : "text-content-subtle hover:bg-surface-hover hover:text-content",
+      )}
+    >
+      <IconLayoutSidebarRight size={14} />
+    </button>
+  );
+
+  // Editor column header, per tree-visibility state:
+  //  - hidden: the toggle MUST always be reachable (the tree's own header is
+  //    gone), so every shape without a tab strip gets the compact bar hosting
+  //    the button — placeholder text when nothing is open, the file's name
+  //    otherwise (FileEditor draws its own path header below; this bar is the
+  //    button's home).
+  //  - visible (split layout): the original semantics — tab strip, or the
+  //    compact placeholder bar when no file is open (the tree header next
+  //    door already hosts the toggle).
+  const editorHeaderFor = (hidden: boolean) => {
+    if (editorMode === "tabs" && openFiles.length > 0) {
+      return <OpenTabsBar trailing={hidden ? treeToggleBtn : undefined} />;
+    }
+    if (hidden) {
+      return (
+        <div className="flex h-8 shrink-0 items-center gap-2 border-b border-edge bg-surface-muted/30 pl-2.5 pr-1.5">
+          <span
+            className="min-w-0 flex-1 truncate text-[11px] font-medium text-content-subtle/70 select-none"
+            title={activeFile ?? undefined}
+          >
+            {activeFile ? basename(activeFile) : t("ide.files.editorPlaceholder")}
+          </span>
+          {treeToggleBtn}
+        </div>
+      );
+    }
+    if (!activeFile) {
+      return (
+        <div className="flex h-8 shrink-0 items-center border-b border-edge bg-surface-muted/30 px-2.5">
+          <span className="text-[11px] font-medium text-content-subtle/70 select-none">
+            {t("ide.files.editorPlaceholder")}
+          </span>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // Editor column body: active file editor or empty placeholder.
+  const editorBody = activeFile ? (
+    <div className="min-h-0 flex-1 overflow-hidden">
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
+            {t("layout.loadingEditor")}
+          </div>
+        }
+      >
+        <FileEditor filePath={activeFile} projectPath={projectPath} />
+      </Suspense>
+    </div>
+  ) : (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center select-none p-6 text-center text-content-subtle">
+      <IconCode size={36} className="mb-2.5 text-content-subtle/50" />
+      <div className="text-xs font-medium text-content-muted">{t("ide.files.noFileOpen")}</div>
+      <div className="mt-1 text-[11px] text-content-subtle">{t("ide.files.noFileOpenHint")}</div>
+    </div>
+  );
+
   // Single-column tree content
   const treeColumn = (
     <div data-files-panel="true" className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -133,29 +223,7 @@ export function FilesPanel() {
         >
           <IconSearch size={14} />
         </button>
-        <button
-          type="button"
-          onClick={toggleTabsFilePreviewPlacement}
-          title={
-            tabsFilePreviewPlacement === "center"
-              ? t("ide.files.placementCenterHint")
-              : t("ide.files.placementSidebarHint")
-          }
-          aria-label={
-            tabsFilePreviewPlacement === "center"
-              ? t("ide.files.placementCenterHint")
-              : t("ide.files.placementSidebarHint")
-          }
-          className={cn(
-            "flex shrink-0 items-center justify-center rounded p-0.5 transition-colors",
-            // Neutral active state — green is reserved for attention signals.
-            tabsFilePreviewPlacement === "sidebar"
-              ? "bg-surface-hover text-content"
-              : "text-content-subtle hover:bg-surface-hover hover:text-content",
-          )}
-        >
-          <IconLayoutSidebarRight size={14} />
-        </button>
+        {treeToggleBtn}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -163,6 +231,17 @@ export function FilesPanel() {
       </div>
     </div>
   );
+
+  // Tree hidden (2026-11-17): the editor column takes the whole panel — no
+  // divider, no tree, regardless of the center/sidebar placement.
+  if (fileTreeHidden) {
+    return (
+      <div data-files-panel="true" className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-surface">
+        {editorHeaderFor(true)}
+        {editorBody}
+      </div>
+    );
+  }
 
   if (!isSplitLayout) {
     return treeColumn;
@@ -175,37 +254,8 @@ export function FilesPanel() {
         className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface"
         style={{ flexGrow: 0, flexBasis: `${fileTreeSplitPct}%` }}
       >
-        {/* Header: multi-tab strip in tabs mode (when tabs exist), or compact placeholder bar when no file is open */}
-        {editorMode === "tabs" && openFiles.length > 0 ? (
-          <OpenTabsBar />
-        ) : !activeFile ? (
-          <div className="flex h-8 shrink-0 items-center border-b border-edge bg-surface-muted/30 px-2.5">
-            <span className="text-[11px] font-medium text-content-subtle/70 select-none">
-              {t("ide.files.editorPlaceholder")}
-            </span>
-          </div>
-        ) : null}
-
-        {/* Editor body: active file editor or empty placeholder */}
-        {activeFile ? (
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <Suspense
-              fallback={
-                <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
-                  {t("layout.loadingEditor")}
-                </div>
-              }
-            >
-              <FileEditor filePath={activeFile} projectPath={projectPath} />
-            </Suspense>
-          </div>
-        ) : (
-          <div className="flex min-h-0 flex-1 flex-col items-center justify-center select-none p-6 text-center text-content-subtle">
-            <IconCode size={36} className="mb-2.5 text-content-subtle/50" />
-            <div className="text-xs font-medium text-content-muted">{t("ide.files.noFileOpen")}</div>
-            <div className="mt-1 text-[11px] text-content-subtle">{t("ide.files.noFileOpenHint")}</div>
-          </div>
-        )}
+        {editorHeaderFor(false)}
+        {editorBody}
       </div>
 
       {/* Resizable Divider between file preview and tree */}

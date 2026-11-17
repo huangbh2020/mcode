@@ -1788,31 +1788,6 @@ button.chat-ledger-head:hover {
 [data-chat-root] .composer-card:focus-within::after {
   opacity: 1;
 }
-/* Busy: a light sweep runs along the top edge while a turn is in flight —
- * carries the "working" signal into the card itself. */
-[data-chat-root] .composer-card[data-busy="1"]::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 2px;
-  border-radius: 16px 16px 0 0;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgb(var(--accent) / 0.15) 20%,
-    rgb(var(--accent)) 50%,
-    rgb(var(--accent) / 0.15) 80%,
-    transparent
-  );
-  background-size: 220% 100%;
-  animation: composer-sweep 1.6s linear infinite;
-}
-@keyframes composer-sweep {
-  from { background-position: 130% 0; }
-  to { background-position: -130% 0; }
-}
 
 /* ── Send / stop feedback ─────────────────────────────────────────────── */
 /* Ready (has content): a resident soft glow says "可以发了" without touching
@@ -1882,9 +1857,6 @@ button.chat-ledger-head:hover {
   [data-chat-root] .composer-lblwrap,
   [data-chat-root] .composer-minipill-seg {
     transition: none;
-  }
-  [data-chat-root] .composer-card[data-busy="1"]::before {
-    animation: none;
   }
   [data-chat-root] .composer-send-launch,
   [data-chat-root] .composer-send-launch > svg {

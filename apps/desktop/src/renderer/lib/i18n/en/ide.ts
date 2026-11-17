@@ -68,6 +68,8 @@ export const en = {
   "ide.files.placementSidebarAction": "Open in right sidebar preview",
   "ide.files.placementCenterHint": "Current: Open in center tabs — click to open in right sidebar",
   "ide.files.placementSidebarHint": "Current: Open in right sidebar — click to open in center tabs",
+  "ide.files.hideTree": "Hide file tree (editor only)",
+  "ide.files.showTree": "Show file tree",
   "ide.editor.readingFile": "Reading file…",
   "ide.editor.loadingEditor": "Loading editor…",
   "ide.editor.savedToast": "Saved ✓",

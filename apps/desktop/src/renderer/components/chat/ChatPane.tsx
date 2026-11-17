@@ -32,7 +32,7 @@ import {
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import { useSessionStore, resolveTurnModel, isSessionChatOnScreen, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, STREAM_RATE_STALE_MS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, resolveTurnModel, isSessionChatOnScreen, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api, isWebTransport } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
@@ -78,7 +78,6 @@ import { ComposerEditor, type ComposerEditorHandle, type FilePillEntry } from ".
 import { ContentTagChip } from "./ContentTagChip.js";
 import { TagPopover } from "./TagPopover.js";
 import { FileMentionPicker, type FileMentionPickerMode } from "./FileMentionPicker.js";
-import { OrchComposerChips } from "./OrchComposerChips.js";
 import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
 import { ActivityCluster } from "./ActivityCluster.js";
@@ -235,35 +234,6 @@ function fmtDuration(ms: number): string {
   const h = Math.floor(m / 60);
   const mm = m % 60;
   return `${h}h ${String(mm).padStart(2, "0")}m`;
-}
-
-/** Live generation-rate readout ("45.2 tok/s") pinned to the RIGHT end of
- *  the composer-top chips row (the 自动编排 / 定时任务 bar). Estimated
- *  renderer-side from text/thinking deltas (the API only reports real token
- *  counts at message END — see the accumulator in sessionStore); thinking
- *  counts as output. Renders nothing while the snapshot is stale (no delta
- *  for >2s: a tool is running or the model is waiting) or when no burst is
- *  measurable yet, so the number only appears while text actively streams —
- *  ml-auto keeps the slot at the row's right edge without disturbing the
- *  left-side chips when it pops in/out. Ticks against the app-wide useNow
- *  clock for the freshness check. */
-function StreamRateChip({ rate }: { rate: StreamRateSnapshot | null }) {
-  const { t } = useI18n();
-  // Hook order: useNow must run before the conditional return.
-  const now = useNow();
-  if (!rate || now - rate.lastDeltaAt > STREAM_RATE_STALE_MS) return null;
-  const v = rate.tokensPerSec;
-  return (
-    <span
-      // --chat-fs-xs: the chat meta-line tier (same as the turn stat rows) —
-      // tracks the Settings → 字号 choice instead of a hardcoded px, so the
-      // readout scales with the rest of the chat chrome.
-      className="ml-auto shrink-0 [font-size:var(--chat-fs-xs)] tabular-nums text-content-subtle"
-      title={t("chatStream.streamRateHint")}
-    >
-      {t("chatStream.streamRate", { n: v >= 100 ? String(Math.round(v)) : v.toFixed(1) })}
-    </span>
-  );
 }
 
 /** Per-turn stat row shown ABOVE the first assistant message of a turn:
@@ -3732,9 +3702,9 @@ function ChatPaneForSession({
    *  每个新回合（isRunning false→true 边沿）重置回收拢态，与完成态 TurnPanel
    *  的默认折叠同哲学。pane 级状态即可：tabs 模式 pane 常驻保活，单槽模式
    *  切会话重挂载 → 回到默认收拢，正是期望语义。 */
-  const [liveProcessOpen, setLiveProcessOpen] = useState(true);
+  const [liveProcessOpen, setLiveProcessOpen] = useState(false);
   useEffect(() => {
-    if (isRunning) setLiveProcessOpen(true);
+    if (isRunning) setLiveProcessOpen(false);
   }, [isRunning]);
 
   /** One rendered row of the live segment — the element the list would have
@@ -4461,13 +4431,17 @@ function ChatPaneForSession({
           it), so the bar can cover the tail of the first row while it is open;
           that is the deliberate trade for being almost invisible when idle.
           The console it opens drops down from it (see ActivityCluster). */}
-      {!empty && hasActivity && (
+      {!empty && (hasActivity || streamRate != null) && (
         <ActivityCluster
           subagents={subagents}
           todos={todos}
           planBlocks={planBlocks}
           bookmarks={bookmarks}
           bashTasks={bashTasks}
+          // Live generation-rate readout (freshness checked inside the
+          // cluster against the shared clock) — 2026-11-17: moved here from
+          // the composer-top chips row.
+          streamRate={streamRate}
           onStopBashTask={(task) => void stopBashTask(sessionId, task.taskId)}
           services={services}
           onStopService={(service) => void stopService(sessionId, service)}
@@ -4673,20 +4647,19 @@ function ChatPaneForSession({
               sessions only, hidden when there's <2 projects) then the
               working-environment picker. Both are quiet text triggers
               OUTSIDE the composer card; each hides itself once the
-              conversation starts. Far RIGHT: the live generation-rate
-              readout (estimated tokens/s while text actively streams). */}
+              conversation starts. (2026-11-17: the 自动编排/定时任务 entries
+              and the right-aligned generation-rate readout are gone — the
+              rate now lives in the top-right activity cluster island.) */}
           <div className={cn("flex items-center gap-1 px-1 pb-1", hideComposer && "hidden")}>
             <SessionDirectoryChip sessionId={sessionId} />
             <WorktreeModeChip sessionId={sessionId} />
-            <OrchComposerChips sessionId={sessionId} />
-            <StreamRateChip rate={streamRate} />
           </div>
           <div
             ref={composerCardRef}
             // composer-card: hooks for the 方案 B polish layers in styles.css —
-            // a busy sweep bar along the top edge while a turn runs, and an
-            // accent hairline that lights up on focus-within.
-            data-busy={visualBusy ? "1" : "0"}
+            // an accent hairline that lights up on focus-within. (The old
+            // data-busy top-edge sweep bar is gone — 2026-11-17: running state
+            // is carried by the turn ledger head + the cluster island instead.)
             className={cn(
               "composer-card relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-surface transition-all duration-200",
               "focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgb(var(--accent)/0.12)]",

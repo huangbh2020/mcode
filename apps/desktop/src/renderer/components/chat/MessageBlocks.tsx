@@ -426,22 +426,10 @@ function MultiBatchToolGroup({
   showTicker?: boolean;
   projectPath?: string | null;
 }) {
-  // 胶囊自身在运行中且后续未输出文字时默认展开；文字到达后自动收起
-  const shouldDefaultOpen = Boolean(turnActive && !hasFollowingText);
-  const [open, setOpen] = useState(shouldDefaultOpen);
-  const userToggledRef = useRef(false);
-
-  // 监听 turnActive 和 hasFollowingText：
-  // 当文字开始输出时（hasFollowingText 变为 true），若用户未手动点击，自动收起
-  // 当正在运行且未输出文字时，若未被用户手动收起，保持展开
-  useEffect(() => {
-    if (userToggledRef.current) return;
-    if (hasFollowingText || !turnActive) {
-      setOpen(false);
-    } else if (turnActive && !hasFollowingText) {
-      setOpen(true);
-    }
-  }, [turnActive, hasFollowingText]);
+  // 默认收起（2026-11-17）：运行中不再自动展开——运行态的台头本身显示当前
+  // 操作名与详情（见下方 isLiveRunning 分支），过程明细按需点击展开，与运行
+  // 台账「运行中过程默认收拢」同一哲学。历史回合原本就是收起的。
+  const [open, setOpen] = useState(false);
 
   const listRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
@@ -552,7 +540,6 @@ function MultiBatchToolGroup({
     <div className="my-0.5 [font-size:var(--chat-fs-sm)]">
       <button
         onClick={(e) => {
-          userToggledRef.current = true;
           holdFold(!open);
           toggleHoldPosition(e, setOpen);
         }}

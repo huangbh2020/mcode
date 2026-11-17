@@ -322,6 +322,13 @@ pnpm build
 - **入口改道(轮次/子会话)**:`openSubagentTranscript`(子代理转录,传**归属会话** id,非激活会话也能开)/`openSideChatPanel`(子会话面板 + 快捷键 `sidechat.open`)/命令 `view.right-panel.turns` 都改为 `openSessionRightTab`。
 - **验证**:`apps/desktop/scripts/session-store-smoke/run.sh` 第 [9] 组(真实 store 无头冒烟 44 断言):开/关/重激活、全局切换清激活保 open、跨会话切换回落、显式 sessionId 开在不活跃会话、browser 同机制、无激活会话 no-op、删除清桶。UI 端(菜单交互、rail 图标显隐、徽标)靠 typecheck + electron-vite build,行为留人工确认。词条:新增 `layout.tabBrowser`/`layout.rightPanelAddTab`/`rightPanelCloseTab`/`rightPanelSessionHint`;`layout.openBrowser` 已无引用、随本轮删除。
 
+### 文件树隐藏开关(2026-11-17,树头按钮改语义)
+
+- **是什么**:Files 标签树头最右的侧栏按钮(**原「中心/双列」placement 切换**)改为**文件树显隐开关**——点击隐藏树,右栏整列只剩**编辑器/预览列全宽**(`editorHeaderFor(true)` + `editorBody`,无分割条无树);再点恢复。持久化 `ui.fileTreeHidden`(contracts `FILE_TREE_HIDDEN_SETTING_KEY`,store `fileTreeHidden/setFileTreeHidden/toggleFileTreeHidden`,tabBarMultiRow 同款首屏 getMany 水合 + fire-and-forget 落盘)。
+- **按钮的两个家(2026-11-17)**:树可见时住树头;树隐藏时树头没了,**恢复入口随编辑器头走**——tabs 模式有开文件时进 `OpenTabsBar` 的 **`trailing` 槽**(该 prop 本就有,首次消费方),其余形态(tab 条缺位/无文件)渲染一条紧凑条承载(有文件显 basename——FileEditor 自带相对路径头,仅隐藏态下短暂并存;无文件显 placeholder 词条)。同一 `treeToggleBtn` 元素两处复用,隐藏态加 active 底色。
+- **placement 不删**:编辑器 ⋯ 菜单(FileEditor)与统一标签栏(UnifiedTabsBar)的 placement 切换入口保留,四个 `ide.files.placement*` 词条仍被引用;新增 `ide.files.hideTree/showTree`(zh/en 同步,缺键过不了 typecheck)。
+- **边界**:`data-files-panel="true"` 属性三条返回路径(隐藏/树单列/双列)全保留——useMouseGestures 的双击手势守卫靠它;MobileFilesScreen 自建列表不吃此面板;无项目 EmptyState 不变。
+
 ### 浏览器集成增强四项(2026-10-24,借鉴 Codex 浏览器方案)
 - **agent 浏览器工具总览**:`main/browser/agentBrowserTools.ts` 是共享核心(19+ 个 `browser_*` 工具,三家 provider 统一注册:Claude 走进程内 MCP `mcp__mcode-browser__*`、Pi 走 `pi.registerTool`、Codex 走 dynamicTools),底层是 `BrowserManager` 的 WebContentsView 内嵌浏览器(cookie vault 登录态/设备仿真/CDP 调试器)。工具描述单一事实源在 `BROWSER_TOOL_SPECS`(改描述只动这里)。
 - **① 面板遮挡弹层修复(全局 portal 检测器)**:内嵌浏览器是 OS 级视图,CSS 永远压不过,只能"弹层开→藏视图"。既有 `useSuppressBrowserView` 钩子只接了 18 处,ConfirmDialog 家族/右键菜单/select 下拉/CommandPalette/SchedPage/toast 全漏——补三层:**全局检测器** `renderer/lib/browserPortalWatcher.ts`(MutationObserver 监 body,按 ARIA role 分类:menu/listbox/dialog→几何感知并集 rect(**base-ui 的 Popover/Combobox 弹层也渲染 role=dialog,按 popover 语义走几何感知,一刀切全域抑制会把「任意位置开下拉就空白浏览器」的旧病带回来**);alertdialog→全域;tooltip 刻意不跟踪防闪烁;`[data-open]` 过滤关闭动画中的弹层)——注意 watcher **必须同时驱动 store 的 suppressBrowserView 计数器**,BrowserPanel 的 reconcile 在计数=0 时早退,只注册遮挡器是死信;**显式接线**:ui/dialog.tsx 的 Popup 烘入无 ref 钩子(真模态全域抑制)+ CommandPalette + Toaster 角落容器(ResizeObserver 检测有无内容)+ VoiceListeningOverlay(内层徽章 ref);**结构性**:SchedPage 进 BrowserPanel 的 isActive 门禁(对齐 settingsOpen)。**主进程抑制竞态**:新 IPC `browser:setSuppressed` → `BrowserManager.rendererSuppressed` 旗标,agent 的 click()/clickAt()/screenshot() 在抑制时不再强制 show——click 落程序式回退、clickAt/screenshot 走 `withDebugger` CDP(离屏可用;clickAt 无程序式回退,调试器槽被占时才降级 force-show)。BrowserPanel 的 reconcile/freeze 路径负责推旗标,失活/卸载清零防陈旧。冒烟 `scripts/browser-portal-smoke`(18 断言;**rAF 桩必须微任务延迟——同步桩会在 `scheduledRaf = rAF(cb)` 赋值表达式内联执行 cb,返回值把 cb 已重置的 0 覆盖回去,后续 rescan 全部早退**,冒烟首跑的 5 连挂即此)。
@@ -405,6 +412,7 @@ pnpm build
 - **状态与生命周期**:`liveProcessOpen` 是 ChatPane **pane 级 useState**(tabs 模式 pane 常驻保活;单槽模式切会话重挂载 → 回默认收拢,正是期望语义);`isRunning` false→true 边沿(每个新回合)重置回收拢——与完成态面板的默认折叠同哲学。切换时先 `pauseBottomAnchor()` 挂起贴底跟随再翻转(展开高度剧变,防 snap,与 TurnPanel 手动折叠同款)。回合结束仍走既有 TurnPanel justCompleted 折叠链路,零改动。`data-open` 从恒 "true" 改为绑状态:收拢态台头下不发分隔发丝线,与完成态折叠面板同形。
 - **历史取舍注记**:2026-09-11 曾按用户要求把思考行从折叠态拉平为独立行(「推理段是读的,不是扫的」);本条把**默认面**收回摘要,展开后仍见 2026-09-11 的行形态——两个诉求由开关共存。
 - **验证**:`tsc --noEmit` 通过。收拢/展开交互与流式跟随留人工确认。
+- **2026-11-17 实修(代码漂移回归,截图确认)**:上线时 `liveProcessOpen` 实际是 `useState(true)` + 每回合重置为 true——本节的收拢机制(LiveLedgerHead 开关/compactRows)都在,唯独默认值与本节文档的「默认收拢」相反,运行中整面过程墙(思考/命令/读取行)默认铺开。恢复 `useState(false)` + `isRunning` 边沿重置 false(402 行注释本就这么写,代码对齐文档)。同日把内层操作胶囊(`MessageBlocks.tsx` 的 `MultiBatchToolGroup`)的「运行中且无后续文字时自动展开」一并拆除:`shouldDefaultOpen`/`userToggledRef`/自动开合 effect 整体删除,恒 `useState(false)` 纯手动开关——用户手动展开台账后,里面每组操作也是一行摘要(运行中台头显示当前操作名+详情,emerald 文字),再点才见该组明细;两级都收拢。`hasFollowingText` prop 保留在签名上(三个调用方照传,组件内暂不消费)。范围:主聊天流;OrchWorkerConsole(编排画布 worker 实时输出)的 `useState(true)` 是刻意的「盯输出」面板,不动。
 
 ### 集成终端环境刷新(win32,2026-08-31)
 
@@ -417,7 +425,7 @@ pnpm build
 - **药丸 = 唯一内联形态,任何宽度常驻**(`ComposerToolbar layout="pill"`,替代旧的"宽屏 chip 行"):一颗带描边的分段容器,**+ 附件 → 模型 → 思考级别 → 权限 → 上下文环** 五段并列,每段仍是独立触发器(打开各自原有的菜单/弹层,store 读写、快捷键、模型守卫 nudge 全部原实现)——窄屏下"当前什么模型/级别/权限"仍可读可点。**+ 与环随卡片变窄永不收起**(用户明确的硬要求);环的百分比数字、各段文字标签则按档位经 `composer-lblwrap`(**1fr↔0fr grid 壳**,可动画宽度过渡)平滑收起,紧凑态段落 = 图标 + `LevelBars` 柱状级别(≤5 根,codex 8 级会爆段)+ 权限语义色 inline。
 - **档位(useComposerRowFit 返回 `tier` 0|1)**:0 = 展开(标签 + 环百分比可见)→ 1 = 紧凑(标签收成图标)。判定按**卡片宽 <560px** + **24px 回滞**;tier 0 时保留**实测溢出提升**(冻结 `.composer-minipill` 为 `max-content` 量 `row.scrollWidth`,locale/长模型名在阈值上方提前收紧),`collapseAt` 记卡片宽、只封锁"回 tier 0"。`chipsMode="collapsed"`(SideChatPanel/手机壳)**跳过药丸直接渲染 `ComposerToolbarToggle`**(gear + `layout="row"` 纵向设置弹层)——该宿主每个宽度都窄,纵向列表才是可用形态。
 - **药丸段落化**:AttachMenuButton 增 `segment` 形态(w-7 方形段、IconPlus 15);三 picker 的 `layout` 只剩 `"pill" | "row"`(旧 chip 形态连同 `.composer-chips-root` 一起删除,`composer-chip` 类仅剩 ProviderDropdown 用);`data-popup-open`(base-ui 自动加)高亮打开中的段。**ProviderDropdown 不进药丸**(发送键左侧,会话锁定后只读),但窄档 `compact` 把名称经同一 lblwrap 壳收成品牌图标。分段显隐随 provider capabilities:无 thinkingLevels/permissionModes 时对应段与分隔线(`composer-minipill-mid`)自动消失。
-- **质感层(styles.css,`[data-chat-root]` 作用域)**:`composer-card` 的 `data-busy="1"` 顶部扫光(`composer-sweep`)+ `focus-within` accent 发丝线(`::after` 渐变);发送键 `data-ready` 常驻柔光、发送/入队成功后 `composer-send-launch` 起飞动画(图标飞出→对面回位 + 光环脉冲,`onAnimationEnd` 清 class);停止键 `::before` conic 旋转进度环(radial mask 成 2.5px 环);附件标签/图片/队列项入场动画(`composer-tag-in` spring / `composer-q-in` 滑入,**fill 必须 backwards 不能 both**——both 会持续覆盖元素样式,劫持队列项后续的拖拽 `opacity-40`);ContextRing 弧线 `stroke-dasharray` 500ms 过渡(占用变化扫弧不跳变)。曲线族 `--composer-ease-out/.22,1,.36,1` + `--composer-spring/.34,1.56,.64,1`;`prefers-reduced-motion` 全部降级。
+- **质感层(styles.css,`[data-chat-root]` 作用域)**:`focus-within` accent 发丝线(`::after` 渐变;旧 `data-busy` 顶部扫光 `composer-sweep` 已于 2026-11-17 删除,见下节);发送键 `data-ready` 常驻柔光、发送/入队成功后 `composer-send-launch` 起飞动画(图标飞出→对面回位 + 光环脉冲,`onAnimationEnd` 清 class);停止键 `::before` conic 旋转进度环(radial mask 成 2.5px 环);附件标签/图片/队列项入场动画(`composer-tag-in` spring / `composer-q-in` 滑入,**fill 必须 backwards 不能 both**——both 会持续覆盖元素样式,劫持队列项后续的拖拽 `opacity-40`);ContextRing 弧线 `stroke-dasharray` 500ms 过渡(占用变化扫弧不跳变)。曲线族 `--composer-ease-out/.22,1,.36,1` + `--composer-spring/.34,1.56,.64,1`;`prefers-reduced-motion` 全部降级。
 
 ### Composer 外部文件拖入(2026-09-21)
 
@@ -425,6 +433,13 @@ pnpm build
 - **路径解析必须走 preload**:Electron 32 起 `File.path` 已移除,唯一途径 `webUtils.getPathForFile(file)`;沙箱 renderer 不能 `require("electron")`,故 preload 的 `file` 组新增 `getPathForFile(file)`(contextBridge 透传 File 对象是 Electron 官方文档背书的模式;内部 try/catch 兜底返回 `""`)。web 桩 `webApi.ts` 的 file 组补 `getPathForFile: () => ""`(浏览器永远拿不到真实路径)。
 - **分流(`ChatPane.handleExternalDrop`)**:**图片 → 粘贴同款内联管线**(`stageImageFile`,base64 内联,chip 变缩略图卡)——不能走 `@path` 引用:TagPopover 预览走 `api.file.readBinary`,其主进程守卫(`readBinaryGuarded`)只放行已知项目内路径 + 粘贴临时目录白名单,外部拖入图片的原位置(桌面/下载目录)必被拒,点击查看报「图片加载失败」(2026-09-21 修复);且字节内联让模型不依赖 Read 工具读项目外路径、Mcode 写守卫本就禁止 agent 写项目外路径,路径引用对图片价值极低。**非图片且有真实路径**(Explorer 拖入)→ `appendUniqueFileTags` 直接建 `@path` 引用 chip——与文件树拖入/提及选择器完全同形态,零字节拷贝,项目外路径同样放行(agent 用 Read 工具读原位,与写入守卫互不相干)。**无路径的虚拟 File**(网页拖图等)→ 整体复用 `handlePasteFiles` 管线(图片 → base64 内联、普通文件 → `clipboardFile.save` 落临时目录、50MB 上限与去重逻辑全部继承)。
 - **作用域**:只有主聊天 composer(ChatPane)。SideChatPanel、AutomationEditor 等其它 ComposerEditor 宿主未接(它们本来也没有内部拖放);需要时复制同两处 handler 即可。
+
+### Composer 上方 chips 行精简 + 生成速度挪入聚簇(2026-11-17)
+
+- **chips 行只剩两个**(ChatPane 的 composer-top 行):目录切换(SessionDirectoryChip)+ 工作环境(WorktreeModeChip)。**「自动编排」开关与「定时任务」入口(OrchComposerChips)整组移除**——用户拍板「只是去掉入口,暂不补新的」:编排开关从此无 UI 入口(会话内拆解功能暂时不可开启,代码全链路保留;OrchComposerChips.tsx 组件文件保留未删,后续要补入口可直接复用),定时任务不受影响(聚簇 Overview 面板的定时任务 widget 仍有 新建/打开 入口,右栏 SchedPanel 照旧)。
+- **生成速度读数挪到右上角聚簇**:`StreamRateChip`(原 chips 行右端的 tok/s 估算)组件删除,职责并入 `ActivityCluster`——新 prop `streamRate`(快照原样传入,新鲜度判定 STALE_MS 在聚簇内对着共享 useNow 时钟做)。行为:新鲜(2s 内有 delta)时主岛显示读数——**无其他活动信号时独占主岛**(accent 脉点 + tok/s,纯文本流式回合的「工作中」信号,hasAny/hasLiveRunning 都计入 rateFresh,空会话首回合也能长出岛);有其他活动时(服务/命令/子代理/侧聊/定时)以发丝线分隔**追加在主岛文案后**(muted 小字);过期即消失(若它是唯一成员,整颗岛随之缩没)。ChatPane 挂载门从 `hasActivity` 放宽为 `hasActivity || streamRate != null`(新鲜度由聚簇内部收口)。
+- **输入框运行中顶边扫光删除**:`.composer-card[data-busy="1"]::before`(composer-sweep 动画)+ keyframes + reduced-motion 覆盖行 + ChatPane 的 `data-busy` 挂载一并移除;卡片只留 focus-within 发丝线,`visualBusy` 变量保留(发送键停止态仍在用)。运行中状态由回合台账台头 + 聚簇岛承载,输入框本身不再闪。
+
 
 ### 聊天活动区:收放聚簇 + 活动台(方案 B,2026-09-11,设计文档 `prototypes/chat-activity-capsule-directions.html`)
 

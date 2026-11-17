@@ -253,6 +253,15 @@ export const TabsFilePreviewPlacementSchema = z.enum(["center", "sidebar"]);
 export type TabsFilePreviewPlacement = z.infer<typeof TabsFilePreviewPlacementSchema>;
 
 /**
+ * Whether the right panel's Files tab hides the directory tree and renders
+ * the editor/preview column full-width instead (toggled from the tree
+ * header's sidebar button — the former center/sidebar placement toggle;
+ * placement itself stays reachable from the editor's ⋯ menu and the unified
+ * tab bar). Same hydration pattern as `ui.tabBarMultiRow`.
+ */
+export const FILE_TREE_HIDDEN_SETTING_KEY = "ui.fileTreeHidden";
+
+/**
  * Tab-bar layout preference: when "true", the center tab strips (unified
  * bar in `tabs` displayMode, plus the session strip / editor file strip in
  * `single` mode) wrap their tabs onto multiple rows instead of scrolling

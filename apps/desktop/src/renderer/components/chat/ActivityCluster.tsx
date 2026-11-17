@@ -32,6 +32,8 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { isElectron } from "@renderer/lib/platform.js";
+import { useNow } from "@renderer/hooks/useNow.js";
+import { STREAM_RATE_STALE_MS, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
 import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
 import type { Session, SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
@@ -58,6 +60,12 @@ export function ActivityCluster({
   sideChatRunningIds,
   onOpenSideChat,
   automations = [],
+  /** Live generation-rate snapshot for this session (2026-11-17, moved from
+   *  the composer-top chips row). Freshness is checked here against the
+   *  shared clock; while it is fresh the main island carries a "tok/s"
+   *  readout — alone when nothing else is live, appended after the live
+   *  copy otherwise. Stale (>2s since the last delta) renders nothing. */
+  streamRate = null,
   waiting,
   isBookmarkStale,
   onPickBookmark,
@@ -85,6 +93,8 @@ export function ActivityCluster({
   sideChatRunningIds?: ReadonlySet<string>;
   onOpenSideChat?: (s: Session) => void;
   automations?: Automation[];
+  /** Live generation-rate snapshot (see prop doc). */
+  streamRate?: StreamRateSnapshot | null;
   waiting?: boolean;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   onPickBookmark?: (b: SessionBookmark) => void;
@@ -100,6 +110,9 @@ export function ActivityCluster({
   bookmarkNodeRef?: RefObject<HTMLDivElement | null>;
 }) {
   const { t } = useI18n();
+  // Shared 1s clock — drives the rate snapshot's freshness window (the only
+  // time-based member of hasAny/hasLiveRunning).
+  const now = useNow();
   const [openKind, setOpenKind] = useState<ActivityNodeKey | null>(null);
   const [sheetNode, setSheetNode] = useState<ActivityNodeKey | null>(null);
   // Filter tabs per kind, owned here (the console unmounts on close).
@@ -138,6 +151,17 @@ export function ActivityCluster({
   const serviceList = services ?? [];
   const sideChatList = sideChats ?? [];
   const inFlightSched = automations.filter(isInFlightAutomation);
+  // Fresh rate = the model streamed a text/thinking delta within the staleness
+  // window. It is live evidence (the island exists to say "working"), so it
+  // counts toward hasAny (a bare text-only stream must still grow the island)
+  // and hasLiveRunning; a stale snapshot renders nothing and, if it was the
+  // only member, lets the island shrink away.
+  const rateFresh = !!streamRate && now - streamRate.lastDeltaAt <= STREAM_RATE_STALE_MS;
+  const rateText = streamRate
+    ? t("chatStream.streamRate", {
+        n: streamRate.tokensPerSec >= 100 ? String(Math.round(streamRate.tokensPerSec)) : streamRate.tokensPerSec.toFixed(1),
+      })
+    : "";
   const hasAny =
     subagents.length > 0 ||
     todos.length > 0 ||
@@ -146,7 +170,8 @@ export function ActivityCluster({
     commands.length > 0 ||
     serviceList.length > 0 ||
     sideChatList.length > 0 ||
-    automations.length > 0;
+    automations.length > 0 ||
+    rateFresh;
   if (!hasAny) return null;
 
   const running = subagents.filter((a) => a.status === "running");
@@ -179,9 +204,19 @@ export function ActivityCluster({
     serviceList.length > 0 ||
     inFlightSched.length > 0 ||
     runningSideChats.length > 0 ||
+    rateFresh ||
     attn;
   const hasSatelliteData = todos.length > 0 || planBlocks.length > 0;
   const isSplit = hasLiveRunning && hasSatelliteData;
+  // Rate owns the island outright only when nothing else is live — otherwise
+  // it appends after the primary live copy behind a hairline divider.
+  const ratePrimary =
+    rateFresh &&
+    serviceList.length === 0 &&
+    runningCommands.length === 0 &&
+    running.length === 0 &&
+    runningSideChats.length === 0 &&
+    inFlightSched.length === 0;
 
   const cluster = (
     <div
@@ -271,11 +306,20 @@ export function ActivityCluster({
                   {t("chatStream.activity.deck.shortSideChats", { n: runningSideChats.length })}
                 </span>
               </div>
-            ) : (
+            ) : inFlightSched.length > 0 ? (
               <div className="flex items-center gap-1.5">
                 <span className="apple-live-dot bg-sky-400" />
                 <span className="whitespace-nowrap text-[11.5px] font-bold text-sky-500 dark:text-sky-400">
                   {t("chatStream.activity.cluster.schedRunning")}
+                </span>
+              </div>
+            ) : (
+              /* Rate-only: text/thinking is streaming but no process roster
+                 is live — the rate IS the working signal. */
+              <div className="flex items-center gap-1.5">
+                <span className="apple-live-dot bg-accent" />
+                <span className="whitespace-nowrap text-[11.5px] font-bold tabular-nums text-slate-900 dark:text-white">
+                  {rateText}
                 </span>
               </div>
             )}
@@ -286,6 +330,21 @@ export function ActivityCluster({
                 <span aria-hidden className="h-2.5 w-px bg-slate-300 dark:bg-white/20" />
                 <span className="text-[11px] font-semibold text-slate-700 dark:text-white/80">
                   {t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}
+                </span>
+              </>
+            )}
+
+            {/* Appended generation-rate readout (2026-11-17, from the
+                composer-top row) — only when the island's primary copy is
+                something else; the rate-only variant above already shows it. */}
+            {rateFresh && !ratePrimary && (
+              <>
+                <span aria-hidden className="h-2.5 w-px bg-slate-300 dark:bg-white/20" />
+                <span
+                  className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-slate-500 dark:text-white/60"
+                  title={t("chatStream.streamRateHint")}
+                >
+                  {rateText}
                 </span>
               </>
             )}

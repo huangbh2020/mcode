@@ -44,6 +44,7 @@ import { sanitizeFontFamily } from "@renderer/lib/theme.js";
 import {
   TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
+  FILE_TREE_HIDDEN_SETTING_KEY,
   INLINE_FILE_MENTION_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
   LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
@@ -931,6 +932,13 @@ export interface SessionState {
   tabsFilePreviewPlacement: TabsFilePreviewPlacement;
   setTabsFilePreviewPlacement: (placement: TabsFilePreviewPlacement) => void;
   toggleTabsFilePreviewPlacement: () => void;
+  /** Whether the Files tab hides the directory tree and renders the editor/
+   *  preview column full-width instead (toggled from the tree header's
+   *  sidebar button — 2026-11-17 repurposed from the placement toggle).
+   *  Persisted in the `settings` table under `ui.fileTreeHidden`. */
+  fileTreeHidden: boolean;
+  setFileTreeHidden: (hidden: boolean) => void;
+  toggleFileTreeHidden: () => void;
   /** Whether the tab strips wrap their tabs onto multiple rows instead of
    *  scrolling one horizontal row (toggled from the bars' "⋯" overflow
    *  menu). Persisted under `ui.tabBarMultiRow`. */
@@ -6112,6 +6120,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // SplitChatArea's first ResizeObserver report.
   splitAreaWidth: null,
   tabsFilePreviewPlacement: "center",
+  // Files tab tree visibility (2026-11-17): default false = tree shown.
+  // Persisted under `ui.fileTreeHidden`; init() overwrites from the DB.
+  fileTreeHidden: false,
   // Tab strips wrap onto multiple rows instead of horizontal scrolling.
   // Persisted under `ui.tabBarMultiRow`; init() overwrites from the DB.
   // Default false = the classic single scrolling row.
@@ -6393,6 +6404,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         keys: [
           TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
           TAB_BAR_MULTI_ROW_SETTING_KEY,
+          FILE_TREE_HIDDEN_SETTING_KEY,
           INLINE_FILE_MENTION_SETTING_KEY,
           PASTE_PLAIN_TEXT_SETTING_KEY,
           LEFTBAR_MODE_SETTING_KEY,
@@ -6501,6 +6513,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "center" || value === "sidebar") set({ tabsFilePreviewPlacement: value });
     } catch (err) {
       console.error("apply(tabsFilePreviewPlacement) failed:", err);
+    }
+
+    // Files tab tree hidden (editor full-width) — default false; only a
+    // stored "true" (the user explicitly hid it) flips it on.
+    try {
+      const value = fp[FILE_TREE_HIDDEN_SETTING_KEY];
+      if (value === "true") set({ fileTreeHidden: true });
+    } catch (err) {
+      console.error("apply(fileTreeHidden) failed:", err);
     }
 
     // Multi-row tab wrapping — must land before the bars' first render so
@@ -11637,6 +11658,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Fire-and-forget — a failed write keeps the in-session choice.
     api.setting.set({ key: TAB_BAR_MULTI_ROW_SETTING_KEY, value: on ? "true" : "false" })
       .catch((err) => console.error("setting.set(tabBarMultiRow) failed:", err));
+  },
+
+  setFileTreeHidden: (hidden) => {
+    set({ fileTreeHidden: hidden });
+    // Fire-and-forget — a failed write keeps the in-session choice.
+    api.setting.set({ key: FILE_TREE_HIDDEN_SETTING_KEY, value: hidden ? "true" : "false" })
+      .catch((err) => console.error("setting.set(fileTreeHidden) failed:", err));
+  },
+
+  toggleFileTreeHidden: () => {
+    get().setFileTreeHidden(!get().fileTreeHidden);
   },
 
   setInlineFileMention: (on) => {

@@ -70,6 +70,8 @@ export const zh = {
   "ide.files.placementSidebarAction": "切换到右侧双列预览",
   "ide.files.placementCenterHint": "当前:中间标签页打开 — 点击切到右侧双列预览",
   "ide.files.placementSidebarHint": "当前:右侧双列预览 — 点击切到中间标签页打开",
+  "ide.files.hideTree": "隐藏文件树（只显示编辑器）",
+  "ide.files.showTree": "显示文件树",
   "ide.editor.readingFile": "读取文件…",
   "ide.editor.loadingEditor": "加载编辑器…",
   "ide.editor.savedToast": "已保存 ✓",
