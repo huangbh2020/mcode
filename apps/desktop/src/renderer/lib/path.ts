@@ -158,3 +158,18 @@ export function formatPathWithMaxDirsText(filePath: string, maxDirs = 5): string
   return `${fileName}  ${dirDisplay}`;
 }
 
+/** Whether two tool-call file paths refer to the same file, for grouping
+ *  consecutive same-file edit rows. Trims whitespace and normalizes `\` to
+ *  `/` before comparing. Case sensitivity follows the path's own shape:
+ *  Windows-ish paths (drive-letter prefix or any backslash) compare
+ *  case-insensitively — models freely mix `D:\proj` with `d:/proj` across
+ *  calls — while everything else compares case-sensitively (POSIX file names
+ *  are case-sensitive, so `Foo.ts` ≠ `foo.ts`). */
+export function sameEditPath(a: string, b: string): boolean {
+  const na = a.trim().replace(/\\/g, "/");
+  const nb = b.trim().replace(/\\/g, "/");
+  if (na === nb) return true;
+  const windowsish = /^[A-Za-z]:[/]/.test(na) || /^[A-Za-z]:[/]/.test(nb);
+  return windowsish && na.toLowerCase() === nb.toLowerCase();
+}
+

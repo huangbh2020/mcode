@@ -29,6 +29,7 @@ if [[ -z "$ESBUILD" ]]; then ESBUILD="npx esbuild"; fi
   --bundle --platform=node --format=esm \
   --tsconfig=tsconfig.json \
   --alias:@main/providers/pi-sdk/piMcpBridge.js=./src/main/providers/pi-sdk/piMcpBridge.ts \
+  --alias:@main/lib/pathGuard.js=./scripts/pi-mcp-smoke/stub-pathGuard.ts \
   --alias:@main/store/db.js=./scripts/pi-mcp-smoke/stub-db.ts \
   --alias:@main/store/repositories.js=./scripts/pi-mcp-smoke/stub-repositories.ts \
   --alias:@main/providers/claude-sdk/customEnv.js=./scripts/pi-mcp-smoke/stub-customEnv.ts \

@@ -10,7 +10,7 @@ export const en = {
   "chatStream.userMsg.collapse": "Collapse",
 
   // ── MessageBlocks: batch tool group ──
-  "chatStream.opCount": "{n} operations",
+  "chatStream.typeCount": "{name}×{n}",
   "chatStream.opFailed": "(failed)",
 
   // ── Chat stream · Plan A (spine): turn summary / reply mark ──
@@ -72,6 +72,7 @@ export const en = {
   "chatStream.tool.input": "Input",
   "chatStream.tool.result": "Result",
   "chatStream.lineCount": "{n} lines",
+  "chatStream.editGroup.count": "×{n}",
   "chatStream.emptyPlaceholder": "(empty)",
   "chatStream.truncatedSuffix": "(truncated)",
 

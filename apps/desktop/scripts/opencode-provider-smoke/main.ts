@@ -448,8 +448,11 @@ console.log("D. message adapter (CLI 2.1.1 wire contract)");
     ad.dispatch(ev("session.text.delta", { sessionID: "oc-sess-1", assistantMessageID: "am-1", ordinal: 1, delta: "world" }));
     ad.dispatch(ev("session.execution.succeeded", { sessionID: "oc-sess-1" }));
     ad.dispatch(ev("session.execution.succeeded", { sessionID: "oc-sess-1" }));
+    // SentinelScanner withholds each chunk's tail against sentinel-spanning
+    // splits (472ae0e), so tiny deltas are buffered and released by the
+    // finalize flush — combined, verbatim.
     const deltas = sink.filter((e) => e.type === "text.delta");
-    ok(deltas.length === 2 && (deltas[0] as { text: string }).text === "Hello ", "D2a text deltas forwarded verbatim");
+    ok(deltas.length === 1 && (deltas[0] as { text: string }).text === "Hello world", "D2a text buffered by sentinel scanner, flushed verbatim at finalize");
     ok(sink.filter((e) => e.type === "turn.done").length === 1, "D2b execution.succeeded ends the turn exactly once");
     ok((sink.find((e) => e.type === "turn.done") as { reason: string }).reason === "end_turn", "D2c reason end_turn");
     ok(ad.hasTurnEnded, "D2d adapter marks turn ended");
@@ -599,7 +602,9 @@ console.log("D. message adapter (CLI 2.1.1 wire contract)");
     const bash = sink.filter((e) => e.type === "bash-tasks.update") as Array<{ tasks: Array<{ status: string }> }>;
     const done = sink.find((e) => e.type === "turn.done") as { reason: string };
     ok(done?.reason === "interrupted", "D11a finalizeAborted → interrupted turn.done");
-    ok(bash[bash.length - 1]?.tasks?.[0]?.status === "completed", "D11b running bash settled at finalize");
+    // finalizeAborted settles running bash to "killed" — honest kill-net on
+    // interrupt (mirrors the Claude side; 472ae0e).
+    ok(bash[bash.length - 1]?.tasks?.[0]?.status === "killed", "D11b running bash settled at finalize");
   }
 }
 

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>mcode-light caret repro</title>
+  <style>
+    body { margin: 0; background: #ffffff; }
+    #editor { width: 900px; height: 600px; }
+    .label { font: 13px sans-serif; padding: 6px 10px; color: #333; }
+  </div>
+  </style>
+</head>
+<body>
+  <div class="label">mcode-light theme repro — caret should sit after "const x = 1" below</div>
+  <div id="editor"></div>
+  <script src="./node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script>
+    require.config({ paths: { vs: './node_modules/monaco-editor/min/vs' } });
+    require(['vs/editor/editor.main'], function () {
+      // Verbatim mcode-light colors from apps/desktop/src/renderer/lib/editorThemes.ts
+      monaco.editor.defineTheme('mcode-light', {
+        base: 'vs',
+        inherit: true,
+        rules: [],
+        colors: {
+          'editor.background': '#ffffff',
+          'editor.foreground': '#09090b',
+          'editorLineNumber.foreground': '#71717a',
+          'editorLineNumber.activeForeground': '#3f3f46',
+          'editorCursor.foreground': '#09090b',
+          'editor.selectionBackground': '#add6ff',
+          'editor.inactiveSelectionBackground': '#add6ff80',
+          'editor.lineHighlightBackground': '#e4e4e733',
+          'editor.lineHighlightBorder': '#00000000',
+          'editorIndentGuide.background1': '#e4e4e7',
+          'editorIndentGuide.activeBackground1': '#a1a1aa99',
+          'editorBracketMatch.background': '#0596691f',
+          'editorBracketMatch.border': '#05966966',
+          'editorGutter.background': '#ffffff',
+          'editorWidget.background': '#ffffff',
+          'editorWidget.border': '#e4e4e7',
+          'editorSuggestWidget.background': '#ffffff',
+          'editorSuggestWidget.border': '#e4e4e7',
+          'editorSuggestWidget.selectedBackground': '#e4e4e7',
+          'editorHoverWidget.background': '#ffffff',
+          'editorHoverWidget.border': '#e4e4e7',
+          'editorError.foreground': '#dc2626',
+          'editorWarning.foreground': '#d97706',
+          'editorInfo.foreground': '#7c3aed',
+          'scrollbarSlider.background': '#a1a1aa66',
+          'scrollbarSlider.hoverBackground': '#a1a1aa',
+          'scrollbarSlider.activeBackground': '#71717a',
+          'minimap.background': '#ffffff',
+          'minimapSlider.background': '#a1a1aa55',
+          'diffEditor.insertedTextBackground': '#0596691f',
+          'diffEditor.removedTextBackground': '#dc26261f',
+          'diffEditor.insertedLineBackground': '#05966914',
+          'diffEditor.removedLineBackground': '#dc262614',
+        },
+      });
+      monaco.editor.create(document.getElementById('editor'), {
+        value: [
+          'import { OrderPayDetailManager } from "./order-pay-detail.manager";',
+          '',
+          'export class CustomRefStrategy {',
+          '  private readonly max = 10000;',
+          '',
+          '  validate(actualAmount: number, refund: number): boolean {',
+          '    const x = 1;',
+          '    return refund <= actualAmount;',
+          '  }',
+          '}',
+        ].join('\n'),
+        language: 'typescript',
+        theme: 'mcode-light',
+      });
+      window.__ready = true;
+    });
+  </script>
+</body>
+</html>

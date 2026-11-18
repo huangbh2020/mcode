@@ -13,7 +13,7 @@ export const zh = {
   "chatStream.userMsg.collapse": "收起",
 
   // ── MessageBlocks: batch tool group ──
-  "chatStream.opCount": "{n} 个操作",
+  "chatStream.typeCount": "{name}×{n}",
   "chatStream.opFailed": "(操作失败)",
 
   // ── Chat stream · 方案A「脉络」: turn summary / reply mark ──
@@ -77,6 +77,7 @@ export const zh = {
   "chatStream.tool.input": "输入",
   "chatStream.tool.result": "结果",
   "chatStream.lineCount": "{n} 行",
+  "chatStream.editGroup.count": "×{n}",
   "chatStream.emptyPlaceholder": "(空)",
   "chatStream.truncatedSuffix": "(已截断)",
 

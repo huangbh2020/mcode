@@ -56,7 +56,8 @@ import {
   FILE_DRAG_MIME,
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
-import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
+import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, fileEditRowInfo, EditRunRow, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
+import { sameEditPath } from "@renderer/lib/path.js";
 import { MediaLightbox, MediaThumbImage, type MediaBlock, type MediaItem } from "./mediaGallery.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
@@ -512,6 +513,27 @@ type RenderItem =
       tightTop?: boolean;
     }
   | {
+      // Live-turn cross-message edit run: consecutive same-file Edit/Write
+      // rows (fileEditRowInfo — isFoldableBlock=false, so they never join the
+      // ops capsule) merged ACROSS assistant messages into ONE collapsible
+      // group while the turn streams. The agent loop emits one message per
+      // think→act cycle, and models often fire several edits to one file
+      // back-to-back — per-message rows would repeat the file path N times.
+      // Exists only in the live layout — the completed turn folds everything
+      // into a turnGroup/TurnPanel, where groupBlocks re-derives the same
+      // runs over the flat list.
+      kind: "editRun";
+      blocks: ToolUseBlock[];
+      /** Id of the first contributing message — stable while the run grows
+       *  (runs only append), so LegendList recycling keeps the group's
+       *  expand state alive during streaming. Mirrors opsGroup.anchorId. */
+      anchorId: string;
+      /** Precomputed unique list key (`edit:<anchorId>`, #n-suffixed on
+       *  repeats) — see the live partition in groupMessagesForRender. */
+      liveKey?: string;
+      tightTop?: boolean;
+    }
+  | {
       kind: "turnGroup";
       /** The turn's process surface, in order: thinking, tool calls, AND any
        *  text the model emitted between tools (e.g. "let me read this first").
@@ -726,9 +748,24 @@ function groupMessagesForRender(
              *  opsGroup branch — where the 方案A spine lives. */
             leading?: Block[];
           }
+        | {
+            // Consecutive same-file Edit/Write rows merged into ONE
+            // collapsible group (EditRunRow). No leading absorption: buffered
+            // narration flushes as its own row first, so the group header
+            // always mirrors the first edit row it grew from.
+            kind: "editRun";
+            blocks: ToolUseBlock[];
+            anchorId: string;
+            key: string;
+          }
         | { kind: "msg"; msg: ChatMessage; blocks: Block[]; key: string };
       const rows: LiveRow[] = [];
       let openOps: { blocks: ProceduralBlock[]; anchorId: string; leading: Block[] } | null = null;
+      // Open same-file edit run — mirror of openOps for Edit/Write diff rows
+      // (fileEditRowInfo: isFoldableBlock=false, so they never join a
+      // capsule). Runs only extend with the SAME file (sameEditPath); a
+      // different file or any display block breaks them.
+      let openEdit: { blocks: ToolUseBlock[]; anchorId: string; path: string } | null = null;
       let curMsg: ChatMessage | null = null;
       let curBlocks: Block[] = [];
       // Occurrence counters for unique row keys. One message CAN split into
@@ -739,6 +776,7 @@ function groupMessagesForRender(
       // one recycled cell with two different block kinds — the 2026-09-08
       // black screen.
       const opsSeq = new Map<string, number>();
+      const editSeq = new Map<string, number>();
       const msgSeq = new Map<string, number>();
       const flushOps = () => {
         if (openOps && (openOps.blocks.length > 0 || openOps.leading.length > 0)) {
@@ -753,6 +791,19 @@ function groupMessagesForRender(
           });
         }
         openOps = null;
+      };
+      const flushEditRun = () => {
+        if (openEdit && openEdit.blocks.length > 0) {
+          const n = editSeq.get(openEdit.anchorId) ?? 0;
+          editSeq.set(openEdit.anchorId, n + 1);
+          rows.push({
+            kind: "editRun",
+            blocks: openEdit.blocks,
+            anchorId: openEdit.anchorId,
+            key: n === 0 ? `edit:${openEdit.anchorId}` : `edit:${openEdit.anchorId}#${n}`,
+          });
+        }
+        openEdit = null;
       };
       const flushMsg = (force = false) => {
         // `force` (end of turn): always emit the buffered display-only message
@@ -771,7 +822,33 @@ function groupMessagesForRender(
         curBlocks = [];
       };
       for (const { block, msg } of turnBlocks) {
-        if (isFoldableBlock(block)) {
+        // Classified BEFORE the foldable check on the un-narrowed Block —
+        // isFoldableBlock's predicate excludes tool_use from its negative
+        // branch, so an edit-row test after it can't type-check. Edit/Write
+        // are never foldable, so checking first is semantically identical.
+        const editRow = fileEditRowInfo(block);
+        if (editRow !== null) {
+          // Same-file Edit/Write row: extend the open run, or start a new one.
+          // Runs only merge when ADJACENT — a different file path, a capsule
+          // row, or a display block all break the run. While a run is open
+          // no display blocks can be buffered (they flush it), so curMsg is
+          // provably null here; the flushMsg guards are cheap invariants.
+          flushOps();
+          if (openEdit && sameEditPath(openEdit.path, editRow.path)) {
+            if (curMsg && curMsg !== msg) flushMsg();
+            openEdit.blocks.push(editRow.block);
+          } else {
+            flushEditRun();
+            // Buffered narration (this message's own or a prior message's)
+            // emits as its own row BEFORE the run opens, keeping arrival
+            // order: narration row, then the group row beneath it.
+            flushMsg();
+            openEdit = { blocks: [editRow.block], anchorId: msg.id, path: editRow.path };
+          }
+        } else if (isFoldableBlock(block)) {
+          // A capsule row between two edit rows breaks the edit run: only
+          // truly adjacent rows merge (2026-11-18, user call).
+          flushEditRun();
           // Foldable blocks merge ACROSS assistant messages: the agent loop
           // emits one message per think→act cycle, so per-message grouping
           // would spawn a tiny card per cycle. They also absorb any display
@@ -795,8 +872,9 @@ function groupMessagesForRender(
           }
           openOps.blocks.push(block);
         } else {
-          // Display block: flush the open run, then buffer under its message.
+          // Display block: flush the open runs, then buffer under its message.
           flushOps();
+          flushEditRun();
           if (curMsg !== msg) {
             flushMsg();
             curMsg = msg;
@@ -805,6 +883,7 @@ function groupMessagesForRender(
         }
       }
       flushOps();
+      flushEditRun();
       flushMsg(true);
 
       // A turn whose opener is foldable-only (e.g. it starts with a glob or
@@ -838,6 +917,14 @@ function groupMessagesForRender(
             liveKey: row.key,
             isStreamingTail: false,
             ...(k === 0 ? { turnMeta: liveTurnMeta } : {}),
+            tightTop: true,
+          });
+        } else if (row.kind === "editRun") {
+          items.push({
+            kind: "editRun",
+            blocks: row.blocks,
+            anchorId: row.anchorId,
+            liveKey: row.key,
             tightTop: true,
           });
         } else {
@@ -3736,7 +3823,7 @@ function ChatPaneForSession({
     let lastRenderableIdx = -1;
     for (let i = items.length - 1; i >= 0; i--) {
       const k = items[i].kind;
-      if (k === "single" || k === "opsGroup") {
+      if (k === "single" || k === "opsGroup" || k === "editRun") {
         lastRenderableIdx = i;
         break;
       }
@@ -3782,7 +3869,7 @@ function ChatPaneForSession({
         let laterRowExists = false;
         for (let j = i + 1; j < end; j++) {
           const nextItem = items[j];
-          if (nextItem.kind === "single" || nextItem.kind === "opsGroup") {
+          if (nextItem.kind === "single" || nextItem.kind === "opsGroup" || nextItem.kind === "editRun") {
             laterRowExists = true;
           }
           if (
@@ -3828,7 +3915,6 @@ function ChatPaneForSession({
                   blocks={it.blocks}
                   turnActive
                   hasFollowingText={hasFollowingText}
-                  showTicker={false}
                   thinkingActive={thinkingActive}
                   projectPath={projectPath}
                 />
@@ -3855,6 +3941,22 @@ function ChatPaneForSession({
             ),
           });
         }
+      } else if (it.kind === "editRun") {
+        // 同文件编辑组行（EditRunRow）：与 ops 卡同档的上边距；块照常喂给
+        // 台头（实时操作 ticker / N 步依赖 liveLedgerBlocks，漏喂会丢运行中
+        // Edit 的可见性）。收拢态整行隐藏——与单张 Edit/Write 卡的
+        // isProcessCollapsibleBlock 行为一致，台头展开后全量流可见。
+        liveLedgerBlocks.push(...it.blocks);
+        rows.push({
+          key: `edit:${it.liveKey ?? it.anchorId}`,
+          node: (
+            <div className="mt-[var(--chat-block-gap)]">
+              <RenderErrorBoundary>
+                <EditRunRow blocks={it.blocks} beforeMap={beforeMap} live projectPath={projectPath} />
+              </RenderErrorBoundary>
+            </div>
+          ),
+        });
       } else if (it.kind === "single") {
         // 兜底：哨兵没带元数据时取正文首行消息自带的（同一回合的 opener），
         // 保证台头的模型徽标与走时基准永远正确。
@@ -4050,6 +4152,27 @@ function ChatPaneForSession({
                   <span className="chat-caret" aria-hidden />
                 </div>
               )}
+            </div>
+          </div>
+        );
+      }
+      if (item.kind === "editRun") {
+        // Defensive fallback mirroring the opsGroup branch: live edit runs
+        // are consumed by wrapLiveSpine and never reach a standalone list
+        // cell — this only renders if the spine extraction ever skips.
+        return (
+          <div className="px-[var(--chat-gutter)]">
+            <div
+              className={cn(
+                "mx-auto max-w-5xl",
+                item.tightTop
+                  ? "mt-[var(--chat-block-gap)]"
+                  : "mt-[var(--chat-row-gap-assistant)]",
+              )}
+            >
+              <RenderErrorBoundary>
+                <EditRunRow blocks={item.blocks} beforeMap={beforeMap} live projectPath={projectPath} />
+              </RenderErrorBoundary>
             </div>
           </div>
         );
@@ -4371,6 +4494,12 @@ function ChatPaneForSession({
                 // two runs CAN share one anchor, and duplicate keys recycle
                 // one cell for two rows (see the partition comment).
                 if (item.kind === "opsGroup") return item.liveKey ?? `ops:${item.anchorId}`;
+                // Live edit run: same contract as the ops run — keyed by its
+                // first contributing message; the run only ever APPENDS (new
+                // same-file edits join the trailing run), so the key is
+                // stable while the group grows and its expand state survives
+                // LegendList recycling during streaming.
+                if (item.kind === "editRun") return item.liveKey ?? `edit:${item.anchorId}`;
                 // Use turnMeta.startedAt as stable key — it's set once when the turn
                 // begins and never changes, so the TurnPanel (and expanded Edit cards
                 // inside it) survive LegendList recycling during streaming.

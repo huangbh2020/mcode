@@ -74,7 +74,14 @@ export function coerceEffortValue(
 ): string {
   if (!levels || levels.length === 0) return value;
   if (levels.some((l) => l.value === value)) return value;
-  return defaultEffortForLevels(levels);
+  // Snap chain per contract: declared neutral slot → medium → keep the raw
+  // value (never invent a level the user didn't pick; a stale persisted slot
+  // on a narrowed ladder stays inert until the user chooses again). Note this
+  // deliberately differs from defaultEffortForLevels (reset semantics, which
+  // picks the ladder's first level when there is no neutral slot).
+  if (levels.some((l) => l.value === "default")) return "default";
+  if (levels.some((l) => l.value === "medium")) return "medium";
+  return value;
 }
 
 /** The thinking-level options the effort UI should offer for the CURRENT

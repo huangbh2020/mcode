@@ -35,6 +35,18 @@ export const SessionRepo = {
     const s = sessions.get(id);
     if (s) s.updatedAt = Date.now();
   },
+  /** Mirrors the real repo: claudeSessionId of terminal-kind rows (optionally
+   *  per provider) — the importer uses it to exclude terminal-owned pi
+   *  sessions from import. */
+  listTerminalClaudeSessionIds(providerId?: string): string[] {
+    const out: string[] = [];
+    for (const s of sessions.values()) {
+      if (s.kind !== "terminal" || !s.claudeSessionId) continue;
+      if (providerId && s.providerId !== providerId) continue;
+      out.push(s.claudeSessionId);
+    }
+    return out;
+  },
 };
 
 export const MessageRepo = {

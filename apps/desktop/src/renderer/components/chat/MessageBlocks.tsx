@@ -48,7 +48,7 @@ import { ToolPathDisplay } from "./ToolPathDisplay.js";
 import { MediaGallery, type MediaBlock, type ToolMeta } from "./mediaGallery.js";
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
-import { formatPathWithMaxDirsText } from "@renderer/lib/path.js";
+import { formatPathWithMaxDirsText, sameEditPath } from "@renderer/lib/path.js";
 import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import { BUILT_IN_COMMANDS } from "@renderer/lib/slashCommands.js";
 
@@ -212,6 +212,13 @@ const MessageBlocks = memo(function MessageBlocks({
               toolMetaById={toolMetaById}
             />
           </RenderErrorBoundary>
+        ) : seg.kind === "editRun" ? (
+          <RenderErrorBoundary key={segKeys[i]}>
+            {/* Message-level path renders display blocks; tool cards here are
+                glyph-quiet (no liveTurn), so the run passes no live flag —
+                mirroring the sibling BlockView call. */}
+            <EditRunRow blocks={seg.blocks} beforeMap={beforeMap} projectPath={projectPath} />
+          </RenderErrorBoundary>
         ) : seg.kind === "media" ? (
           <RenderErrorBoundary key={segKeys[i]}>
             <MediaGallery blocks={seg.blocks} toolMetaById={toolMetaById} />
@@ -248,6 +255,7 @@ export type ProceduralBlock = ThinkingBlock | ToolUseBlock;
 type Segment =
   | { kind: "single"; block: Block; defaultOpen?: boolean }
   | { kind: "batch"; blocks: ProceduralBlock[] }
+  | { kind: "editRun"; blocks: ToolUseBlock[] }
   | { kind: "media"; blocks: MediaBlock[] }
   | { kind: "attachments"; blocks: Extract<Block, { kind: "attachment" }>[] };
 
@@ -305,6 +313,36 @@ const WRITE_EDIT_TOOL_NAMES = new Set([
   "write", "edit", "multiedit", "notebookedit",
 ]);
 
+/** Classify a block as an Edit/Write diff row — the two card kinds that carry
+ *  the +/- line-count badges — returning the block narrowed to `tool_use`
+ *  plus its file path; null for everything else. Grouping and rendering MUST
+ *  both go through this classifier: a block that joins an edit-run is
+ *  guaranteed to render as an EditToolCard / WriteToolCard, while one with
+ *  malformed input (null here) falls to GenericToolCard today and simply
+ *  breaks the run — identical behavior on both sides. MultiEdit/NotebookEdit
+ *  stay out on purpose: their generic card shows no diff row, and it doubles
+ *  as a run break (adjacent-only grouping). Exported for ChatPane's live
+ *  partition, which merges these rows across assistant messages while the
+ *  turn streams. Returned as a payload object (not a type predicate) because
+ *  the grouping loops need the path alongside the narrowed block, and a
+ *  predicate can't carry both. */
+export function fileEditRowInfo(block: Block): { block: ToolUseBlock; path: string } | null {
+  if (block.kind !== "tool_use") return null;
+  let path: string | null = null;
+  if (block.toolName === "Edit" || block.toolName === "edit") {
+    path = getNormalizedEditInput(block.input)?.filePath ?? null;
+  } else if (block.toolName === "Write" || block.toolName === "write") {
+    path = getNormalizedWriteInput(block.input)?.filePath ?? null;
+  }
+  return path === null ? null : { block, path };
+}
+
+/** Path-only view of {@link fileEditRowInfo} for render-side lookups on
+ *  already-typed tool_use blocks (the group header's ToolPathDisplay). */
+export function fileEditRowPath(block: Block): string | null {
+  return fileEditRowInfo(block)?.path ?? null;
+}
+
 /** Interactive/meta/planning tools that require standalone visibility and user focus. */
 const STANDALONE_INTERACTIVE_TOOL_NAMES = new Set([
   "Task", "task",
@@ -326,11 +364,6 @@ export function isFoldableBlock(b: Block): b is ProceduralBlock {
   }
   return false;
 }
-/** Narrow a fold-run member to its tool-call half (thinking has no status/
- *  result machinery — the group header only reads those off tool calls). */
-function isToolBlock(b: ProceduralBlock): b is ToolUseBlock {
-  return b.kind === "tool_use";
-}
 
 /** Linear scan over a turn's blocks, producing render segments.
  *
@@ -343,10 +376,19 @@ function isToolBlock(b: ProceduralBlock): b is ToolUseBlock {
  *   - text / error / other display blocks -> standalone and break the run too
  *     (a narration line splits the surrounding calls into two groups).
  *   - Read and the file-mutation tools (Write/Edit/MultiEdit) remain standalone:
- *     their cards carry the file path and diff which are high-value signals. */
+ *     their cards carry the file path and diff which are high-value signals.
+ *   - EXCEPTION to the standalone rule: ADJACENT same-file Edit/Write rows
+ *     (per fileEditRowPath) accumulate into an `editRun` and render as ONE
+ *     collapsible group with summed +/- counts (2026-11-18, user request) —
+ *     a burst of edits to one file takes a single row, not N. Any other block
+ *     (narration, thinking, a different file's edit, a generic tool card)
+ *     breaks the run: adjacent-only grouping. A length-1 run stays a plain
+ *     `single` so the common case is unchanged. */
 function groupBlocks(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   let run: ProceduralBlock[] = [];
+  let editRun: ToolUseBlock[] = [];
+  let editRunPath: string | null = null;
   let media: MediaBlock[] = [];
   let atts: Extract<Block, { kind: "attachment" }>[] = [];
   const flushTools = () => {
@@ -357,6 +399,17 @@ function groupBlocks(blocks: Block[]): Segment[] {
         out.push({ kind: "batch", blocks: run });
       }
       run = [];
+    }
+  };
+  const flushEditRun = () => {
+    if (editRun.length > 0) {
+      if (editRun.length === 1) {
+        out.push({ kind: "single", block: editRun[0], defaultOpen: false });
+      } else {
+        out.push({ kind: "editRun", blocks: editRun });
+      }
+      editRun = [];
+      editRunPath = null;
     }
   };
   const flushMedia = () => {
@@ -372,28 +425,53 @@ function groupBlocks(blocks: Block[]): Segment[] {
     }
   };
   for (const b of blocks) {
+    // Classified BEFORE the foldable check on the un-narrowed Block —
+    // isFoldableBlock's predicate excludes tool_use from its negative
+    // branch, so an edit-row test after it can't type-check. Edit/Write are
+    // never foldable, so checking first is semantically identical.
+    const editRow = fileEditRowInfo(b);
     if (b.kind === "image" || b.kind === "video") {
       // Media blocks (screenshots / script-generated videos) share one
       // tile-row segment — a mixed run renders as one wrap row of uniform
       // tiles with a shared lightbox.
       flushTools();
+      flushEditRun();
       media.push(b);
     } else if (b.kind === "attachment") {
       flushTools();
+      flushEditRun();
       flushMedia();
       atts.push(b);
+    } else if (editRow !== null) {
+      // Edit/Write diff row: extend the open same-file run, or start a new
+      // one. Ops runs and edit runs are mutually exclusive at any point in
+      // the stream (a block lands in one or the other), so the flush order
+      // between them never matters.
+      flushTools();
+      flushMedia();
+      flushAttachments();
+      if (editRun.length > 0 && editRunPath !== null && sameEditPath(editRunPath, editRow.path)) {
+        editRun.push(editRow.block);
+      } else {
+        flushEditRun();
+        editRun.push(editRow.block);
+        editRunPath = editRow.path;
+      }
     } else if (isFoldableBlock(b)) {
+      flushEditRun();
       flushAttachments();
       flushMedia();
       run.push(b);
     } else {
       flushTools();
+      flushEditRun();
       flushMedia();
       flushAttachments();
       out.push({ kind: "single", block: b, defaultOpen: false });
     }
   }
   flushTools();
+  flushEditRun();
   flushMedia();
   flushAttachments();
   return out;
@@ -407,7 +485,7 @@ function MultiBatchToolGroup({
   beforeMap,
   turnActive = false,
   hasFollowingText = false,
-  showTicker = true,
+  thinkingActive = false,
   projectPath,
 }: {
   blocks: ProceduralBlock[];
@@ -420,10 +498,14 @@ function MultiBatchToolGroup({
   /** Whether normal user-facing prose text has been emitted after this tool group.
    *  When true, the tool group card auto-collapses to keep the focus on the reply text. */
   hasFollowingText?: boolean;
-  /** Whether to render this group's own current-op ticker. Off when the group
-   *  sits inside a running-ledger body: the ledger HEAD already shows the
-   *  turn's current operation, so a per-group ticker would just repeat it. */
-  showTicker?: boolean;
+  /** The turn is live AND this group holds the streaming tail whose last block
+   *  is a thinking block — i.e. the model is thinking RIGHT NOW inside this
+   *  group. Distinct from `turnActive`: without this check EVERY thinking-
+   *  tailed group in the turn claims to be running (2026-11-18 fix — the
+   *  header showed "思考" on all of them, in theme colour, long after those
+   *  thoughts finished). Computed by the callers (wrapLiveSpine / TurnPanel /
+   *  MessageBlocks) which know where the streaming tail is. */
+  thinkingActive?: boolean;
   projectPath?: string | null;
 }) {
   // 默认收起（2026-11-17）：运行中不再自动展开——运行态的台头本身显示当前
@@ -464,77 +546,59 @@ function MultiBatchToolGroup({
   const holdFold = useFoldHold();
   const { t } = useI18n();
 
-  const toolBlocks = blocks.filter(isToolBlock);
-  const aggregateStatus: "running" | "done" | "error" = toolBlocks.some((b) => b.status === "running")
-    ? "running"
-    : toolBlocks.some((b) => b.status === "error")
-      ? "error"
-      : "done";
-
   // The newest tool currently executing inside this group (drives the header ticker).
   const runningTool = useMemo(() => {
-    for (let i = toolBlocks.length - 1; i >= 0; i--) {
-      if (toolBlocks[i].status === "running") return toolBlocks[i];
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.kind === "tool_use" && b.status === "running") return b;
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks]);
 
-  // Find the actively executing operation to display prominently on the header
-  const activeOp = useMemo(() => {
-    // 1. Look for a running tool
+  // "正在执行"的判定（2026-11-18 修正）：组内有 running 工具，或本组持有
+  // 正在流式的思考尾。旧实现只看「末块是 thinking && turnActive」，把回合里
+  // 所有 thinking 尾组（早已完结的也算）全部标成 running——满屏绿"思考"。
+  const isLiveRunning = Boolean(
+    turnActive && (runningTool || (thinkingActive && lastBlock?.kind === "thinking")),
+  );
+
+  // The operation the "running" header shows: an in-flight tool wins (newest
+  // first), otherwise the live-tail thinking.
+  const liveOp = runningTool
+    ? {
+        name: toolDisplayName(t, runningTool.toolName),
+        detail: toolSummary(runningTool.toolName, runningTool.input),
+      }
+    : isLiveRunning && lastBlock?.kind === "thinking"
+      ? { name: t("chatStream.thinking"), detail: summarize(lastBlock.text) }
+      : null;
+
+  // Completed-state header: per-type tally in first-appearance order, keyed by
+  // the LOCALIZED display name so Bash/bash variants merge into one entry
+  // (思考×1 · 执行命令×2 …). Replaces the old "last op: detail" hint — the
+  // trailing thinking block used to shadow the tools that actually ran.
+  // Neutral colour: the emerald theme colour is reserved for the ONE
+  // genuinely-running group (2026-11-18).
+  const typeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const b of blocks) {
+      const name = b.kind === "thinking" ? t("chatStream.thinking") : toolDisplayName(t, b.toolName);
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([name, n]) => ({ name, n }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocks, t]);
+
+  // Completed groups: semantic icon from the last executed tool (any status);
+  // a tool-less (pure thinking) group keeps the brain glyph.
+  const lastToolBlock = useMemo(() => {
     for (let i = blocks.length - 1; i >= 0; i--) {
       const b = blocks[i];
-      if (b.kind === "tool_use" && b.status === "running") {
-        return {
-          kind: "tool" as const,
-          toolName: b.toolName,
-          name: toolDisplayName(t, b.toolName),
-          detail: toolSummary(b.toolName, b.input),
-          status: "running" as const,
-        };
-      }
-    }
-    // 2. If the last block is thinking and turn is active, model is actively thinking
-    const last = blocks[blocks.length - 1];
-    if (last?.kind === "thinking" && turnActive) {
-      return {
-        kind: "thinking" as const,
-        name: t("chatStream.thinking"),
-        detail: summarize(last.text),
-        status: "running" as const,
-      };
-    }
-    // 3. Fallback to latest executed block in the batch
-    if (last) {
-      if (last.kind === "thinking") {
-        return {
-          kind: "thinking" as const,
-          name: t("chatStream.thinking"),
-          detail: summarize(last.text),
-          status: "done" as const,
-        };
-      }
-      return {
-        kind: "tool" as const,
-        toolName: last.toolName,
-        name: toolDisplayName(t, last.toolName),
-        detail: toolSummary(last.toolName, last.input),
-        status: last.status,
-      };
+      if (b.kind === "tool_use") return b;
     }
     return null;
-  }, [blocks, turnActive, t]);
-
-  // Single-thinking specialization: when the batch consists solely of one thinking segment
-  const firstBlock = blocks[0];
-  const isSingleThinking = blocks.length === 1 && firstBlock?.kind === "thinking";
-
-  const label = isSingleThinking
-    ? t("chatStream.thinking")
-    : t("chatStream.opCount", { n: blocks.length });
-
-  const isLiveRunning = turnActive && activeOp?.status === "running";
+  }, [blocks]);
 
   return (
     <div className="my-0.5 [font-size:var(--chat-fs-sm)]">
@@ -545,62 +609,46 @@ function MultiBatchToolGroup({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1 text-left text-content-muted hover:bg-surface-muted/40 hover:text-content transition-colors select-none group"
       >
-        {/* Leading icon: pulse on running, or semantic icon matching activeOp (thinking / tool) */}
+        {/* Leading icon: pulse on the running group; semantic icon on settled
+            ones (last executed tool, brain for pure-thinking groups). */}
         {isLiveRunning ? (
           <span className="shrink-0 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-        ) : activeOp?.kind === "thinking" || isSingleThinking ? (
-          <IconBrain size={13} className="shrink-0 text-content-subtle" />
-        ) : activeOp?.kind === "tool" && activeOp.toolName ? (
-          <ToolIcon name={activeOp.toolName} className="shrink-0 text-content-subtle" />
+        ) : lastToolBlock ? (
+          <ToolIcon name={lastToolBlock.toolName} className="shrink-0 text-content-subtle" />
         ) : (
-          <IconStack2 size={13} className="shrink-0 text-content-subtle" />
+          <IconBrain size={13} className="shrink-0 text-content-subtle" />
         )}
 
         {/* 1. Collapsed + actively executing: prominently show which
                tool/thinking is running right now. Expanded hides it — the
                open body below already shows the live cards, so the header
-               falls back to the plain count label. */}
-        {isLiveRunning && activeOp && !open ? (
+               falls back to the op name. */}
+        {isLiveRunning && liveOp && !open ? (
           <span className="flex items-center gap-1.5 min-w-0 truncate">
             <span className="shrink-0 font-medium text-emerald-600 dark:text-emerald-400 font-mono text-xs">
-              {activeOp.name}
+              {liveOp.name}
             </span>
-            {activeOp.detail && (
+            {liveOp.detail && (
               <span className="min-w-0 truncate font-mono text-[11px] text-content">
-                {activeOp.detail}
+                {liveOp.detail}
               </span>
             )}
           </span>
-        ) : isLiveRunning && activeOp ? (
+        ) : isLiveRunning && liveOp ? (
           /* 2. Expanded while running: show only the executing operation's
              name (执行命令 / 更新任务 …) — its detail lives in the open body
-             right below, and the old "N 个操作" count is gone. */
+             right below. */
           <span className="flex items-center gap-1.5 min-w-0 truncate">
             <span className="shrink-0 whitespace-nowrap font-medium text-emerald-600 dark:text-emerald-400 font-mono text-xs">
-              {activeOp.name}
+              {liveOp.name}
             </span>
           </span>
         ) : (
-          /* 3. Normal / completed state: show last operation hint directly (no "N个操作" label) */
-          <span className="flex items-center gap-1.5 min-w-0 truncate">
-            {isSingleThinking && firstBlock?.kind === "thinking" ? (
-              <>
-                <span className="shrink-0 whitespace-nowrap font-medium text-content">{label}</span>
-                <span className="min-w-0 truncate text-content-subtle text-[11px]">
-                  {summarize(firstBlock.text)}
-                </span>
-              </>
-            ) : activeOp?.detail ? (
-              <span className="min-w-0 truncate font-mono text-[11px] text-content-subtle">
-                {activeOp.name}: {activeOp.detail}
-              </span>
-            ) : null}
+          /* 3. Completed: per-type tally, neutral colour — "思考×1 · 执行命令×2".
+             The emerald theme colour never appears here (2026-11-18). */
+          <span className="min-w-0 truncate font-mono text-[11px] text-content-subtle">
+            {typeCounts.map((c) => t("chatStream.typeCount", { name: c.name, n: String(c.n) })).join(" · ")}
           </span>
-        )}
-
-        {/* Live current-operation ticker (if present and runningTool is available) */}
-        {!isLiveRunning && turnActive && showTicker && runningTool && (
-          <CurrentOpTicker op={runningTool} turnActive={turnActive} />
         )}
 
         {/* Right side aligned: chevron */}
@@ -1063,6 +1111,10 @@ export function TurnPanel({
                       projectPath={projectPath}
                     />
                   </RenderErrorBoundary>
+                ) : seg.kind === "editRun" ? (
+                  <RenderErrorBoundary key={segKeys[i]}>
+                    <EditRunRow blocks={seg.blocks} beforeMap={beforeMap} live={turnActive} projectPath={projectPath} />
+                  </RenderErrorBoundary>
                 ) : seg.kind === "media" ? (
                   <RenderErrorBoundary key={segKeys[i]}>
                     <MediaGallery blocks={seg.blocks} />
@@ -1361,7 +1413,6 @@ export function BatchToolGroup(props: {
   beforeMap?: BeforeContentMap;
   turnActive?: boolean;
   hasFollowingText?: boolean;
-  showTicker?: boolean;
   /** The turn is live AND this run is the turn's tail (its last block is the
    *  one streaming). Only meaningful when that last block is thinking — it
    *  drives the standalone thinking card's shimmer sweep. Multi-block runs
@@ -1989,6 +2040,21 @@ function EditToolCard({
   );
 }
 
+/** Look up a file's pre-turn content from the turn.files map. The payload
+ *  carries absolute paths, but the tool's file_path may be relative — try an
+ *  exact match first, then a suffix match (absolute path ending with the given
+ *  path segments). Undefined → no before available. Extracted from
+ *  WriteToolCard so the edit-run group header can sum a Write member's
+ *  +/- with the exact same semantics. */
+function lookupBefore(beforeMap: BeforeContentMap | undefined, filePath: string): string | undefined {
+  if (!beforeMap || beforeMap.size === 0) return undefined;
+  if (beforeMap.has(filePath)) return beforeMap.get(filePath);
+  for (const [abs, b] of beforeMap) {
+    if (abs === filePath || abs.endsWith(filePath)) return b;
+  }
+  return undefined;
+}
+
 /** Write tool card: shows the new file content preview. No diff because
  *  Write is a full-file replace. Collapsed by default like the other cards —
  *  the user expands to see the content preview. */
@@ -2019,20 +2085,10 @@ function WriteToolCard({
   const { t } = useI18n();
   const lineCount = content ? content.split("\n").length : 0;
 
-  // Look up the pre-turn content for this file. The turn.files payload
-  // carries absolute paths, but the Write tool's file_path may be relative
-  // — try an exact match first, then a suffix match (absolute path ending
-  // with the given path segments). Undefined → no before available (turn
-  // still running, or file is brand-new), and we fall back to a plain
-  // new-content preview instead of a diff.
-  const before = useMemo(() => {
-    if (!beforeMap || beforeMap.size === 0) return undefined;
-    if (beforeMap.has(filePath)) return beforeMap.get(filePath);
-    for (const [abs, b] of beforeMap) {
-      if (abs === filePath || abs.endsWith(filePath)) return b;
-    }
-    return undefined;
-  }, [beforeMap, filePath]);
+  // Look up the pre-turn content for this file (undefined → no before
+  // available (turn still running, or file is brand-new), and we fall back
+  // to a plain new-content preview instead of a diff).
+  const before = useMemo(() => lookupBefore(beforeMap, filePath), [beforeMap, filePath]);
 
   // Diff old (pre-turn on-disk) vs new (Write input). Recomputed only when
   // the inputs actually change. When `before` is undefined we render the
@@ -2087,6 +2143,119 @@ function WriteToolCard({
               </pre>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A run of ≥2 consecutive same-file Edit/Write rows merged into ONE
+ *  collapsible group (2026-11-18, user request): the header shows the file
+ *  path once with the members' +/- line counts SUMMED on the right, collapsed
+ *  by default — a burst of edits to one file takes a single row instead of N.
+ *  Expanding reveals the member cards, each still individually collapsible to
+ *  its diff. A single-block run renders as the plain card via ToolCard so the
+ *  common case stays byte-identical to before. Fed by both surfaces that
+ *  derive runs: groupBlocks (TurnPanel / message fallback) and ChatPane's
+ *  live partition (exported for the running turn's cross-message rows). */
+export function EditRunRow({
+  blocks,
+  beforeMap,
+  live,
+  projectPath,
+}: {
+  blocks: ToolUseBlock[];
+  beforeMap?: BeforeContentMap;
+  live?: boolean;
+  projectPath?: string | null;
+}) {
+  if (blocks.length === 1) {
+    return (
+      <ToolCard block={blocks[0]} defaultOpen={false} beforeMap={beforeMap} liveTurn={live} projectPath={projectPath} />
+    );
+  }
+  return <EditRunGroup blocks={blocks} beforeMap={beforeMap} live={live} projectPath={projectPath} />;
+}
+
+/** The ≥2-member group body (split from EditRunRow so the length-1 fast path
+ *  stays hook-free). Header identity comes from the FIRST member: the row the
+ *  group grew from keeps its icon/label/path while later edits only grow the
+ *  counters — no relabel flash as the run extends mid-stream. */
+function EditRunGroup({
+  blocks,
+  beforeMap,
+  live,
+  projectPath,
+}: {
+  blocks: ToolUseBlock[];
+  beforeMap?: BeforeContentMap;
+  live?: boolean;
+  projectPath?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const holdFold = useFoldHold();
+  const { t } = useI18n();
+  const head = blocks[0];
+  // Summed +/- across members: Edit diffs its old/new strings; Write diffs
+  // against the pre-turn disk content when turn.files has it, falling back
+  // to counting the new content as additions (a fresh file is all adds).
+  // Recomputed when a member lands or its result/status patch flips the
+  // blocks array identity — the same cadence WriteToolCard already pays.
+  const { adds, dels } = useMemo(() => {
+    let adds = 0;
+    let dels = 0;
+    for (const b of blocks) {
+      const edit = b.toolName === "Edit" || b.toolName === "edit" ? getNormalizedEditInput(b.input) : null;
+      if (edit) {
+        const s = diffSummary(lineDiff(edit.oldString, edit.newString));
+        adds += s.adds;
+        dels += s.dels;
+        continue;
+      }
+      const write = b.toolName === "Write" || b.toolName === "write" ? getNormalizedWriteInput(b.input) : null;
+      if (write) {
+        const before = lookupBefore(beforeMap, write.filePath);
+        if (before !== undefined) {
+          const s = diffSummary(lineDiff(before, write.content));
+          adds += s.adds;
+          dels += s.dels;
+        } else {
+          adds += write.content ? write.content.split("\n").length : 0;
+        }
+      }
+    }
+    return { adds, dels };
+  }, [blocks, beforeMap]);
+  const anyRunning = blocks.some((b) => b.status === "running");
+  const anyError = blocks.some((b) => b.status === "error");
+
+  return (
+    <div className="[font-size:var(--chat-fs-sm)]">
+      <button
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
+        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
+      >
+        <ToolIcon name={head.toolName} className="shrink-0 text-content-subtle" />
+        <span className={cn("shrink-0 font-medium text-content-muted", anyRunning && !!live && "shimmer-text")}>
+          {toolDisplayName(t, head.toolName)}
+        </span>
+        <ToolPathDisplay filePath={fileEditRowPath(head) ?? ""} className="min-w-0 flex-1" />
+        {anyError && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
+          <span className="tabular-nums text-content-subtle">{t("chatStream.editGroup.count", { n: blocks.length })}</span>
+          {adds > 0 && <span className="text-success">+{adds}</span>}
+          {dels > 0 && <span className="text-danger">−{dels}</span>}
+          <Chevron open={open} />
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-1 border-l border-edge py-2 pl-2">
+          {blocks.map((b) => (
+            <ToolCard key={b.toolCallId} block={b} defaultOpen={false} beforeMap={beforeMap} liveTurn={live} projectPath={projectPath} />
+          ))}
         </div>
       )}
     </div>
