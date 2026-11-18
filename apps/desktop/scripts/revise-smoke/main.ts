@@ -17,6 +17,8 @@
  *     keeps untouched lines byte-identical and re-stringifies re-linked ones
  *   - the "wiped empty" detector (countSdkPromptRows === 0)
  *   - atomic file rewrite round-trip
+ *   - opencode staged revert: candidate collection (user rows only) +
+ *     alignment against projected session messages (opencodeRevise.ts)
  *
  * Pure module — no electron, no DB.
  */
@@ -35,6 +37,12 @@ import {
   rewriteTranscriptFile,
   loadTranscript,
 } from "@main/lib/claudeTranscript.js";
+import {
+  alignOpencodeMessages,
+  opencodeUserCandidates,
+  positionalOpencodeMessage,
+  type OpencodeMessageLike,
+} from "@main/providers/opencode-sdk/opencodeRevise.js";
 
 let failed = 0;
 function assert(cond: boolean, msg: string): void {
@@ -308,6 +316,95 @@ function main(): void {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  // ── 11. OpenCode staged revert — candidate collection + alignment ──
+  // Fixture shaped like GET /api/session/{id}/message rows (SessionMessage
+  // union; SDK 1.19.3 types). Only `type:"user"` rows are prompt candidates.
+  {
+    const msgs: OpencodeMessageLike[] = [
+      { id: "msg-u1", type: "user", text: "prompt-11", time: { created: 11_000 } },
+      { id: "msg-a1", type: "assistant", text: "reply", time: { created: 12_000 } },
+      { id: "msg-s1", type: "shell", command: "ls", time: { created: 12_500 } },
+      { id: "msg-u2", type: "user", text: "prompt-21", time: { created: 21_000 } },
+      { id: "msg-ms1", type: "model-switched", text: "switched", time: { created: 21_500 } },
+      { id: "msg-a2", type: "assistant", text: "reply2", time: { created: 22_000 } },
+      { id: "msg-u3", type: "user", text: "prompt-31", time: { created: 31_000 } },
+      { id: "msg-syn1", type: "synthetic", text: "notice", time: { created: 31_500 } },
+    ];
+    assert(
+      opencodeUserCandidates(msgs).length === 3,
+      "candidate collection keeps user rows only (assistant/shell/model-switched/synthetic excluded)",
+    );
+    assert(
+      opencodeUserCandidates(msgs)[0].timestampMs === 11_000 && opencodeUserCandidates(msgs)[0].key === "msg-u1",
+      "candidates carry the opencode message id and its created timestamp",
+    );
+    assert(
+      opencodeUserCandidates([{ id: "u", type: "user", time: {} }])[0].timestampMs === null,
+      "missing created timestamp degrades to null (floor skipped, text-only matching)",
+    );
+
+    const gui = [
+      { id: "g1", createdAt: 12_000, text: "prompt-11" },
+      { id: "g2", createdAt: 22_000, text: "prompt-21" },
+      { id: "g3", createdAt: 32_000, text: "prompt-31" },
+    ];
+    const map = alignOpencodeMessages(gui, msgs);
+    assert(
+      map.get(0) === "msg-u1" && map.get(1) === "msg-u2" && map.get(2) === "msg-u3",
+      "clean 1:1 alignment across interleaved non-user rows",
+    );
+
+    // Orphan provider rows (a failed sendTurn left provider entries with no
+    // GUI row) must be skipped by the LCS.
+    const msgsOrphans: OpencodeMessageLike[] = [
+      { id: "u1", type: "user", text: "prompt-11", time: { created: 11_000 } },
+      { id: "orphan-1", type: "user", text: "prompt-21", time: { created: 15_000 } },
+      { id: "orphan-2", type: "user", text: "prompt-31", time: { created: 16_000 } },
+      { id: "u2", type: "user", text: "prompt-41", time: { created: 41_000 } },
+      { id: "u3", type: "user", text: "prompt-51", time: { created: 51_000 } },
+    ];
+    const guiOrphans = [
+      { id: "g1", createdAt: 12_000, text: "prompt-11" },
+      { id: "g2", createdAt: 42_000, text: "prompt-41" },
+      { id: "g3", createdAt: 52_000, text: "prompt-51" },
+    ];
+    const mapOrphans = alignOpencodeMessages(guiOrphans, msgsOrphans);
+    assert(
+      mapOrphans.get(0) === "u1" && mapOrphans.get(1) === "u2" && mapOrphans.get(2) === "u3",
+      "orphan provider user rows skipped by LCS",
+    );
+
+    // Timestamp floor: a stale duplicate written long before the GUI row
+    // must not swallow the match.
+    const stale: OpencodeMessageLike[] = [
+      { id: "old", type: "user", text: "继续", time: { created: 1_000 } },
+    ];
+    assert(
+      !alignOpencodeMessages([{ id: "late", createdAt: 60_000, text: "继续" }], stale).has(0),
+      "timestamp floor rejects opencode rows written long before the GUI row",
+    );
+
+    // Display text vs full model prompt: prefix compatibility (file tags fold
+    // around the prose on the provider side).
+    const folded: OpencodeMessageLike[] = [
+      { id: "u1", type: "user", text: "fix the bug\n\n<file>D:\proj\a.ts</file>", time: { created: 1_000 } },
+    ];
+    assert(
+      alignOpencodeMessages([{ id: "g", createdAt: 1_000, text: "fix the bug" }], folded).get(0) === "u1",
+      "GUI display text aligns as a prefix of the opencode prompt text",
+    );
+
+    // Positional tail-count fallback (image-only prompts carry no text).
+    const imgOnly: OpencodeMessageLike[] = [
+      { id: "u1", type: "user", text: "", time: { created: 1_000 } },
+      { id: "u2", type: "user", text: "", time: { created: 2_000 } },
+      { id: "u3", type: "user", text: "", time: { created: 3_000 } },
+    ];
+    assert(positionalOpencodeMessage(3, 1, imgOnly) === "u2", "middle gui row maps positionally (image-only prompts)");
+    assert(positionalOpencodeMessage(3, 0, imgOnly) === "u1" && positionalOpencodeMessage(3, 2, imgOnly) === "u3", "tail positional ends map 1:1");
+    assert(positionalOpencodeMessage(5, 1, imgOnly) === null, "out-of-range from-end returns null");
   }
 
   if (failed > 0) {

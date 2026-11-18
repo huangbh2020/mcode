@@ -9,8 +9,24 @@
 import type { RuntimeEvent } from "@contracts/runtime";
 import type { ProviderContext, TurnHandle } from "@contracts/provider";
 import { OpencodeProvider } from "@main/providers/opencode-sdk/OpencodeProvider.js";
+import { disposeOpenCodeServer, ensureOpenCodeServer } from "@main/providers/opencode-sdk/opencodeServerManager.js";
+import { collectOpenCodeMcpConfig } from "@main/providers/opencode-sdk/opencodeMcp.js";
 
-const FREE_MODEL = "opencode/minimax-m3.1-flash-free";
+/** First free model on the current list — the free-model names rotate across
+ *  CLI releases (minimax-m3.1-flash-free went stale on 2.3.2), so the probe
+ *  picks dynamically instead of pinning one. */
+async function pickFreeModel(): Promise<string> {
+  try {
+    const server = await ensureOpenCodeServer(await collectOpenCodeMcpConfig(process.cwd()));
+    const res = await server.fetch("/api/model");
+    const body = (await res.json()) as { data?: Array<{ id?: string; providerID?: string; free?: boolean }> };
+    const free = (body.data ?? []).find((m) => m.free && m.providerID && m.id);
+    if (free) return `${free.providerID}/${free.id}`;
+  } catch (err) {
+    console.warn("[model pick]", (err as Error).message);
+  }
+  return "opencode/hy4-flash-free";
+}
 const BUDGET_MS = 240_000;
 
 async function main() {
@@ -44,6 +60,8 @@ async function main() {
   };
 
   console.log("— startTurn (bash-forcing prompt, acceptEdits) —");
+  const model = await pickFreeModel();
+  console.log("using model:", model);
   let handle: TurnHandle;
   try {
     handle = await provider.startTurn(
@@ -51,7 +69,7 @@ async function main() {
         sessionId: "probe-e2e-gui",
         prompt: "Use the bash tool to run exactly: echo mcode-probe, then tell me the output.",
         cwd: process.cwd(),
-        model: FREE_MODEL,
+        model,
         permissionMode: "acceptEdits",
         turnNumber: 1,
       },
@@ -113,7 +131,12 @@ async function main() {
   process.exit(pass ? 0 : 1);
 }
 
-main().catch((err) => {
-  console.error("PROBE FAILED:", err);
-  process.exit(1);
-});
+main()
+  .catch((err) => {
+    console.error("PROBE FAILED:", err);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    // Kill the spawned server before exiting (Windows orphans otherwise pile up).
+    disposeOpenCodeServer();
+  });

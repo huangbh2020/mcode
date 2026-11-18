@@ -38,6 +38,8 @@ import type {
   StartTurnRequest,
   ProviderContext,
   ProviderCapabilities,
+  ProviderReviseInput,
+  ProviderReviseResult,
   TurnHandle,
 } from "@contracts/provider";
 import type { ModelRef } from "@opencode-ai/sdk/v2/types";
@@ -46,6 +48,7 @@ import { resolveOpenCodeCliPath } from "./opencodeBinaryResolve.js";
 import { collectOpenCodeMcpConfig } from "./opencodeMcp.js";
 import { resolveOpenCodeModelContext } from "./opencodeModels.js";
 import { OpencodeMessageAdapter } from "./OpencodeMessageAdapter.js";
+import { alignOpencodeMessages, positionalOpencodeMessage } from "./opencodeRevise.js";
 import {
   handleOpenCodePermissionAsked,
   handleOpenCodeQuestionAsked,
@@ -101,7 +104,113 @@ export class OpencodeProvider implements AgentProvider {
     permissionModes: OPENCODE_PERMISSION_MODES,
     builtinModels: [], // dynamic: /api/model after login (Zen free models need no login)
     supportsCustomEndpoint: false, // official login only — by design
+    // Conversation-level revision via the v2 server's native staged revert
+    // (revert/stage → revert/commit) — see reviseConversation below.
+    supportsConversationRevision: true,
   };
+
+  /**
+   * Conversation-level revision, opencode implementation: the v2 server's
+   * NATIVE staged revert (endpoints verified against the official OpenAPI +
+   * the installed CLI 2.3.2 binary; boundary semantics read from upstream
+   * core/src/session/revert.ts + projector.ts). On commit the projector
+   * HARD-DELETES every message with seq >= the boundary's seq — boundary
+   * message INCLUDED — so the boundary IS the target message ("drop it and
+   * everything after"), exactly Mcode's retract range. `files: false` is
+   * load-bearing: stage applies snapshot file restore by default, and Mcode's
+   * retract contract leaves disk files untouched (the confirm dialog says so
+   * — file rollback is the separate「撤销本轮」feature). The session row
+   * survives a full revert (prompting an emptied session just starts fresh),
+   * so `cleared` is never needed — same as pi.
+   */
+  async reviseConversation(input: ProviderReviseInput): Promise<ProviderReviseResult> {
+    const opencodeSessionId = input.providerSessionId;
+    if (!opencodeSessionId) {
+      input.log.info("opencode revise: no session bound, skipping revert");
+      return {};
+    }
+    if (!resolveOpenCodeCliPath()) {
+      // Sessions live in opencode's own SQLite — reinstalling the CLI brings
+      // the context BACK, so a DB-only revision here would split the views.
+      throw new Error("未找到 OpenCode CLI:请先安装 v2(npm install -g @opencode/cli)");
+    }
+    // Same fingerprint as startTurn (MCP block included) — a live server is
+    // reused as-is; a dead one respawns (sessions are db-backed, and the
+    // host gates revision on an idle session).
+    const mcp = await collectOpenCodeMcpConfig(input.cwd);
+    const server = await ensureOpenCodeServer(mcp);
+    const sid = encodeURIComponent(opencodeSessionId);
+
+    /* ── Projected messages → alignment candidates. Pagination follows the
+     *    cursor to the end. NO query params beyond cursor (verified live on
+     *    CLI 2.3.2: `order`/`limit` get 400'd — protocol drift again; the
+     *    default page order is DESC with extra non-conversation rows, e.g.
+     *    "idle", so candidates are sorted ascending by time.created
+     *    client-side). A dead session (404 / network) means the provider
+     *    context is already lost — DB-only revision, same degrade as codex's
+     *    thread/resume failure. ── */
+    let messages: Parameters<typeof alignOpencodeMessages>[1] = [];
+    try {
+      const seenCursors = new Set<string>();
+      let cursor = "";
+      for (;;) {
+        const res = await server.fetch(
+          `/api/session/${sid}/message${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+        );
+        if (!res.ok) {
+          const detail = await res.text().catch(() => "");
+          throw new Error(`message list HTTP ${res.status}: ${detail.slice(0, 200)}`);
+        }
+        const body = (await res.json()) as {
+          data?: unknown;
+          cursor?: { next?: string };
+        };
+        const rows = Array.isArray(body.data) ? (body.data as typeof messages) : [];
+        messages = messages.concat(rows);
+        const next = typeof body.cursor?.next === "string" ? body.cursor.next : "";
+        if (!next || seenCursors.has(next)) break;
+        seenCursors.add(next);
+        cursor = next;
+      }
+      messages.sort((a, b) => (a.time?.created ?? 0) - (b.time?.created ?? 0));
+    } catch (err) {
+      input.log.warn(
+        `opencode revise: cannot list session messages (${(err as Error).message}); provider context already lost`,
+      );
+      return {};
+    }
+
+    const guiIndex = input.guiUserRows.findIndex((r) => r.id === input.target.id);
+    const targetMessageId =
+      (guiIndex >= 0 ? alignOpencodeMessages(input.guiUserRows, messages).get(guiIndex) : undefined) ??
+      positionalOpencodeMessage(input.guiUserRows.length, Math.max(guiIndex, 0), messages);
+    if (!targetMessageId) {
+      // Refuse rather than revert at a guessed point — a wrong boundary
+      // deletes the wrong exchanges from the model's context invisibly.
+      throw new Error("cannot locate the message's entry in the opencode session");
+    }
+
+    /* ── Stage (boundary at the target, files untouched) then commit. A
+     *    failed commit is rolled back via revert-clear so no staged boundary
+     *    lingers (the next prompt would otherwise auto-commit it while the
+     *    GUI rows are still in place). ── */
+    const stageRes = await server.fetch(`/api/session/${sid}/revert/stage`, {
+      method: "POST",
+      body: JSON.stringify({ messageID: targetMessageId, files: false }),
+    });
+    if (!stageRes.ok && stageRes.status !== 204) {
+      const detail = (await stageRes.text().catch(() => "")).slice(0, 200);
+      throw new Error(`revert stage ${stageRes.status}: ${detail || "(no body)"}`);
+    }
+    const commitRes = await server.fetch(`/api/session/${sid}/revert/commit`, { method: "POST" });
+    if (!commitRes.ok && commitRes.status !== 204) {
+      const detail = (await commitRes.text().catch(() => "")).slice(0, 200);
+      await server.fetch(`/api/session/${sid}/revert`, { method: "DELETE" }).catch(() => undefined);
+      throw new Error(`revert commit ${commitRes.status}: ${detail || "(no body)"}`);
+    }
+    input.log.info(`opencode revise: reverted session at message ${targetMessageId}`);
+    return {};
+  }
 
   async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
     const ac = new AbortController();
