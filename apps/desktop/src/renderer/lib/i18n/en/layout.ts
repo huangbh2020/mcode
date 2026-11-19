@@ -95,8 +95,7 @@ export const en = {
   "layout.stream.statusFailed": "Failed",
   "layout.stream.statusDone": "Done",
   "layout.stream.unmerged": "Unmerged",
-  "layout.stream.empty": "No sessions yet",
-  "layout.stream.showMore": "Show more ({n} left)",
+  "layout.stream.empty": "No open sessions",
 
   /* ── project groups ── */
   "layout.moveToGroup": "Move to group",

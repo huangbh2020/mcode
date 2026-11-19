@@ -98,8 +98,7 @@ export const zh = {
   "layout.stream.statusFailed": "失败",
   "layout.stream.statusDone": "完成",
   "layout.stream.unmerged": "未合并",
-  "layout.stream.empty": "暂无会话",
-  "layout.stream.showMore": "显示更多（还有 {n} 条）",
+  "layout.stream.empty": "暂无打开的会话",
 
   /* ── project groups ── */
   "layout.moveToGroup": "移动到分组",

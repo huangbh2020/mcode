@@ -21,10 +21,12 @@
  *  - The tree view stays fully responsible for project management; the scope
  *    dropdown only FILTERS (plus an "add project" entry).
  *
- * Data: the same store buckets the tree reads — pinnedSessions for the
- * pinned block, the streamSessions aggregate (session.listAll) for the live
- * list, archivedSessionsByProject for the shelf. Mutations mark streamDirty
- * and this view refetches its first page (see sessionStore).
+ * Data: the list mirrors the CENTER TAB BAR — only sessions currently open
+ * (`openTabs`, tab-strip order) are rendered; rows resolve from the same
+ * store buckets the tab strip reads (project windows / pinned / the
+ * streamSessions aggregate / archived / orch workers). The aggregate still
+ * refetches when streamDirty is set (see sessionStore) — it feeds row
+ * resolution, not the visible list.
  */
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
@@ -151,10 +153,12 @@ function StreamSidebarBase() {
   const { t } = useI18n();
   const projects = useSessionStore((s) => s.projects);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  // The visible list is the open-tab mirror — this is the filter source.
+  const openTabs = useSessionStore((s) => s.openTabs);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
   const streamSessions = useSessionStore((s) => s.streamSessions);
-  const streamHasMore = useSessionStore((s) => s.streamHasMore);
-  const streamTotal = useSessionStore((s) => s.streamTotal);
+  const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
+  const orchWorkersById = useSessionStore((s) => s.orchWorkersById);
   const streamDirty = useSessionStore((s) => s.streamDirty);
   const archivedSessionsByProject = useSessionStore((s) => s.archivedSessionsByProject);
   const runningBySession = useSessionStore((s) => s.runningBySession);
@@ -174,7 +178,6 @@ function StreamSidebarBase() {
   const archivedViewOpen = useSessionStore((s) => s.archivedViewOpen);
 
   const loadStreamSessions = useSessionStore((s) => s.loadStreamSessions);
-  const loadMoreStreamSessions = useSessionStore((s) => s.loadMoreStreamSessions);
   const ensureWorktreeInfo = useSessionStore((s) => s.ensureWorktreeInfo);
   // Split-view aware session open (member focus / focused-slot takeover /
   // plain openTab outside split view) — same entry semantics as the tree
@@ -359,9 +362,43 @@ function StreamSidebarBase() {
     [projectById, worktreeInfoByRepo],
   );
 
+  // ── Open-tabs mirror. The stream lists ONLY the sessions currently open
+  // in the center tab bar (`openTabs`), in tab-strip order — it's a richer
+  // view of the open tabs, not a session history. Rows resolve from the
+  // same buckets the tab strip reads; an id whose row hasn't landed yet
+  // (hydration race) is skipped and appears once its row is in a bucket.
+  // Scheduled-task sessions (kind="automation") stay excluded — they render
+  // only in the right panel's「定时任务」tab.
+  const isChat = (s: { kind: string }): boolean => s.kind !== "automation";
+  const sessionById = useMemo(() => {
+    const map = new Map<string, Session>();
+    const add = (list: Session[] | undefined) => {
+      if (!list) return;
+      for (const s of list) if (!map.has(s.id)) map.set(s.id, s);
+    };
+    for (const list of Object.values(sessionsByProject)) add(list);
+    add(pinnedSessions);
+    for (const list of Object.values(archivedSessionsByProject)) add(list);
+    add(streamSessions);
+    for (const [id, w] of Object.entries(orchWorkersById)) {
+      if (w && !map.has(id)) map.set(id, w);
+    }
+    return map;
+  }, [sessionsByProject, pinnedSessions, archivedSessionsByProject, streamSessions, orchWorkersById]);
+  const openTabSessions = useMemo(
+    () =>
+      openTabs
+        .map((id) => sessionById.get(id))
+        .filter((s): s is Session => s != null && isChat(s) && scopeMatches(s)),
+    [openTabs, sessionById, scopeMatches],
+  );
+  const pinnedList = useMemo(() => openTabSessions.filter((s) => s.pinnedAt != null), [openTabSessions]);
+  const liveSessions = useMemo(() => openTabSessions.filter((s) => s.pinnedAt == null), [openTabSessions]);
+
   // ── Live duration ticker: only ticks while something is running.
-  const anyRunning = streamSessions.some((s) => runningBySession[s.id] || orchRunningAt[s.id] != null) ||
-    pinnedSessions.some((s) => runningBySession[s.id] || orchRunningAt[s.id] != null);
+  const anyRunning =
+    liveSessions.some((s) => runningBySession[s.id] || orchRunningAt[s.id] != null) ||
+    pinnedList.some((s) => runningBySession[s.id] || orchRunningAt[s.id] != null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
     if (!anyRunning) return;
@@ -520,19 +557,6 @@ function StreamSidebarBase() {
     [projectById, projectColors, nowTick, activeSessionId, runningBySession, runningTurnStartedAt,
       orchRunningAt, pendingQuestionBySession, turnErrorBySession, unreadBySession, worktreeOf,
       localBranchOf, openSession, startSession, setSessionPinned, archiveSession, deleteSession, registerNode],
-  );
-
-  // Scheduled-task sessions (kind="automation") render only in the right
-  // panel's「定时任务」tab — the stream never lists them (the initiator
-  // badge on the parent row is the stream's only task surface).
-  const isChat = (s: { kind: string }): boolean => s.kind !== "automation";
-  const liveSessions = useMemo(
-    () => streamSessions.filter((s) => isChat(s) && scopeMatches(s)),
-    [streamSessions, scopeMatches],
-  );
-  const pinnedList = useMemo(
-    () => pinnedSessions.filter((s) => isChat(s) && scopeMatches(s)),
-    [pinnedSessions, scopeMatches],
   );
 
   const { effective: effectiveTheme } = useTheme();
@@ -739,7 +763,7 @@ function StreamSidebarBase() {
         </Menu.Root>
       </div>
 
-      {/* Flat list: pinned cards ─ hairline ─ live cards ─ show more. */}
+      {/* Flat list: open tabs only — pinned cards ─ hairline ─ live cards. */}
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
         {liveSessions.length === 0 && pinnedList.length === 0 ? (
           <div className="px-2 py-8 text-center text-content-subtle [font-size:var(--rp-fs-sm)]">
@@ -750,24 +774,6 @@ function StreamSidebarBase() {
             {pinnedList.map((s) => renderCard(s, { pinned: true }))}
             {pinnedList.length > 0 && <div className="mx-2.5 my-1.5 h-px bg-edge/60" aria-hidden />}
             {liveSessions.map((s) => renderCard(s, { pinned: false }))}
-            {streamHasMore && (
-              <li>
-                <button
-                  onClick={() => void loadMoreStreamSessions()}
-                  className={cn(
-                    "w-full rounded px-2.5 py-1.5 text-left text-content-subtle transition-colors [font-size:var(--rp-fs-sm)]",
-                    "hover:bg-surface-hover/60 hover:text-accent",
-                  )}
-                >
-                  {t("layout.stream.showMore", {
-                    // streamTotal counts the CURRENT scope's unpinned rows
-                    // (the server filters by scope; pinned never counted) —
-                    // so the remainder is total minus the loaded live rows.
-                    n: Math.max(streamTotal - liveSessions.length, 0),
-                  })}
-                </button>
-              </li>
-            )}
           </ul>
         )}
 
