@@ -722,6 +722,14 @@ class RuntimeManager {
     } catch {
       /* ignore */
     }
+    const row = SessionRepo.get(sessionId);
+    if (row) {
+      try {
+        providerRegistry.get(row.providerId)?.disposeSession?.(sessionId);
+      } catch {
+        /* ignore */
+      }
+    }
     approvalBridge.rejectAll(sessionId);
     // Release any OpenAI bridge this session was holding, so the ref count
     // drops and the shared server can shut down when no session needs it.

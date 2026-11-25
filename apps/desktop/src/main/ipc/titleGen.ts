@@ -32,9 +32,8 @@ import { AutomationRepo, SessionRepo, SettingRepo } from "@main/store/repositori
 import { sendToRenderer } from "@main/window.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { resolveModelForGitOp } from "@main/ipc/git.js";
-import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
-import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
-import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
+import { buildCustomEnv, resolveActiveModel, type ClaudeCliEnv } from "@main/providers/claude-sdk/customEnv.js";
+import { runClaudeOneShot } from "@main/providers/claude-sdk/claudeOneShot.js";
 import { log } from "@main/lib/logger.js";
 import {
   TERMINAL_TITLE_SYSTEM_PROMPT,
@@ -160,14 +159,13 @@ async function runTitleQuery(
   }
   if (!customModelId) return null;
 
-  const { query } = await loadClaudeSdk();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 60000); // 60s timeout
 
   let releaseBridge: (() => void) | undefined;
   try {
     let model: string | undefined;
-    let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
+    let env: ClaudeCliEnv | undefined;
 
     const resolved = await resolveModelForGitOp(customModelId, customModelRole);
     if (!resolved.ok) {
@@ -181,46 +179,18 @@ async function runTitleQuery(
     // title is generated for rather than the process-wide fallback.
     env = buildCustomEnv(cfg, { sessionId: session.id });
 
-    // Resolve the real on-disk binary path (unpacks from asar in a packaged
-    // app). See git.ts:generateCommitMessage for the full rationale.
-    const binaryPath = resolveSdkBinaryPath();
-
-    const q = query({
-      // Fenced shell — never the raw user input (slash-command + injection
-      // safety, see buildTitleGenPrompt / buildTerminalTitlePrompt).
+    // One reply from the user's Claude CLI. The title is the text of the last
+    // assistant message. `tools: []` is the hard guarantee for the "user
+    // input is title-fuel only" contract: no builtin tools are even loaded,
+    // so nothing in the user message can drive file/bash/network actions.
+    let { lastText: title } = await runClaudeOneShot({
       prompt: userPrompt,
-      options: {
-        abortController: ac,
-        maxTurns: 1,
-        model,
-        env,
-        // Hard guarantee for the "user input is title-fuel only" contract:
-        // no builtin tools are even loaded, so nothing in the user message
-        // can drive file/bash/network actions during title generation.
-        tools: [],
-        // Fixed system prompt guarantees a clean, short title.
-        systemPrompt,
-        settingSources: ["project", "local"],
-        includePartialMessages: false,
-        ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
-      },
+      systemPrompt,
+      model,
+      env,
+      tools: [],
+      abortController: ac,
     });
-
-    // 3. Collect the assistant's text response.
-    let title = "";
-    for await (const m of q) {
-      if (m.type === "assistant") {
-        const content = (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content;
-        if (Array.isArray(content)) {
-          title = content
-            .filter((b) => b.type === "text" && b.text)
-            .map((b) => b.text!)
-            .join("\n");
-        }
-      }
-      if (m.type === "result") break;
-    }
-
     clearTimeout(timer);
     if (!title.trim()) {
       log.warn(`titleGen: empty response for ${session.id}`);

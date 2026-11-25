@@ -1,14 +1,23 @@
 /**
- * Claude Agent SDK provider — wraps `query()` from @anthropic-ai/claude-agent-sdk
- * and implements the AgentProvider interface from @contracts/provider.
+ * Claude provider — drives the USER'S Claude CLI and implements the
+ * AgentProvider interface from @contracts/provider.
  *
- * This replaces the legacy ClaudeRuntime (spawn + NDJSON parse).
- * The SDK bundles its own claude binary, so ClaudePathResolver is no longer needed.
+ * No Agent SDK package sits in the path. The provider spawns the `claude` the
+ * user installed (lib/claudeExecutable.ts) through cliTransport.ts /
+ * claudeCliQuery.ts, which speak the CLI's own headless protocol (stream-json
+ * frames + control requests). Mcode hosts the CLI rather than reshaping it:
+ * it renders what the CLI emits — approval, question and plan dialogs are the
+ * CLI's own control requests, answered from the renderer — and enforces the
+ * permission rails. Nothing AMBIENT is appended to the CLI's system prompt;
+ * the only fragments are ones the user switched on themselves (see the
+ * system-prompt appends in startTurn).
+ *
+ * The file and class keep their historical names: the provider id
+ * "claude-sdk" is persisted in SQLite, and the docs and smoke scripts refer
+ * to these names.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { is } from "@main/utils.js";
-import type { Options, CanUseTool, OnUserDialog, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentProvider,
   StartTurnRequest,
@@ -20,17 +29,24 @@ import type {
 import { effortLevelValuesForModel } from "@contracts/customModel";
 import type { AskUserQuestionItem, PermissionMode } from "@contracts/runtime";
 import { SdkMessageAdapter, parseQuestions, type AdapterCarryover } from "./SdkMessageAdapter.js";
-import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEnv.js";
-import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
-import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
 import {
-  CLAUDE_IDENTITY_PROMPT,
-  CLAUDE_PLAN_MODE_NUDGE,
-  CLAUDE_TASK_TRACKING_NUDGE,
-  SCHEDULED_TASK_PROPOSAL_NUDGE,
-  joinPromptSections,
-} from "@main/lib/systemPrompt.js";
-import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
+  buildCustomEnv,
+  MCODE_CONFIG_DIR,
+  resolveActiveModel,
+} from "./customEnv.js";
+import { buildShadowingSettingsEnv } from "@main/lib/claudeSettingsSync.js";
+import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
+import type { ClaudeUserInputMessage } from "./claudeStreamTypes.js";
+import type { CanUseTool, OnUserDialog } from "./claudeProtocol.js";
+import {
+  assertClaudeCliUsable,
+  ClaudeCliUnavailableError,
+  runClaudeCliQuery,
+  type ClaudeCliOptions,
+  type CliQuery,
+} from "./claudeCliQuery.js";
+import type { HostMcpServerSpec } from "./hostMcpHttp.js";
+import { SCHEDULED_TASK_PROPOSAL_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
 import { resolveAgentSkillInjections } from "@main/lib/agentSkills.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
@@ -43,8 +59,13 @@ import {
 } from "@main/lib/fileSnapshot.js";
 import { guardBashCommand } from "@main/lib/bashWriteGuard.js";
 import { guardReadPath } from "@main/lib/readGuard.js";
-import { resolveSdkBinaryPath } from "./sdkBinaryPath.js";
-import { loadClaudeSdk } from "./sdkLoader.js";
+import {
+  MIN_CLAUDE_CLI_VERSION,
+  compareVersions,
+  probeClaudeCliVersion,
+  resolveClaudeExecutable,
+} from "@main/lib/claudeExecutable.js";
+import { killProcessTree } from "@main/lib/procTree.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { samePath } from "@main/lib/pathGuard.js";
 import { getMcpManagement, readProjectMcpServers } from "@main/lib/mcpConfig.js";
@@ -68,7 +89,7 @@ import { resolveSubagentModelValue } from "@main/lib/subagentModel.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
 import {
   ORCH_PLAN_MCP_SERVER,
-  buildOrchPlanMcpServerAsync,
+  buildOrchPlanHostServer,
   buildOrchPlanNudge,
   isOrchPlanTool,
 } from "@main/orchestrator/planTool.js";
@@ -97,46 +118,29 @@ import {
 } from "@main/browser/agentBrowserTools.js";
 import { gateBrowserNavigation } from "@main/browser/domainGate.js";
 
-// Lazy-load the Agent SDK so the (large) module and its bundled claude binary
-// stay out of the main-process startup path. The SDK is only needed once the
-// user sends their first message or a health check runs - both happen well
-// after the window is visible. Mirrors the node-pty lazy-load pattern in
-// TerminalManager.ts. Goes through sdkLoader so a managed runtime install's
-// version-paired wrapper is honored (see sdkLoader.ts).
-let queryFn: typeof import("@anthropic-ai/claude-agent-sdk").query | null = null;
-async function loadQuery(): Promise<typeof import("@anthropic-ai/claude-agent-sdk").query> {
-  if (!queryFn) {
-    const sdk = await loadClaudeSdk();
-    queryFn = sdk.query;
-  }
-  return queryFn;
-}
-
 /** Anthropic image content-block media-type allowlist — mirrors
  *  SendTurnImageSchema.mimeType (the zod enum already restricts to this set). */
 type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
-/** A queue-backed prompt feed: the provider pushes one SDKUserMessage per
- *  LOGICAL turn, and the SDK's streamInput keeps consuming the iterable for
- *  the lifetime of the CLI process (each yielded message becomes one stdin
- *  line = the CLI's next user turn — the SDK's native multi-turn streaming
- *  input; `isSingleUserTurn` is only true for string prompts). The iterable
- *  ends when `close()` is called, which is what lets the CLI process exit:
- *  the provider closes the feed when the turn is over AND the process has
- *  nothing left to babysit (no running subagents, no live background bash
- *  commands — a lingering dev server keeps the process and the feed alive,
- *  and follow-up turns keep riding it). */
+/** A queue-backed prompt feed: the provider pushes one user message per
+ *  LOGICAL turn, and the transport keeps writing them to the CLI's stdin for
+ *  the lifetime of the CLI process (each message is one stdin line = the
+ *  CLI's next user turn). The iterable ends when `close()` is called, which
+ *  is what lets the CLI process exit: the provider closes the feed when the
+ *  turn is over AND the process has nothing left to babysit (no running
+ *  subagents, no live background bash commands — a lingering dev server keeps
+ *  the process and the feed alive, and follow-up turns keep riding it). */
 interface PromptFeed {
-  push(m: SDKUserMessage): void;
+  push(m: ClaudeUserInputMessage): void;
   close(): void;
-  iterable: AsyncIterable<SDKUserMessage>;
+  iterable: AsyncIterable<ClaudeUserInputMessage>;
 }
 
 function makePromptFeed(): PromptFeed {
-  const queue: SDKUserMessage[] = [];
+  const queue: ClaudeUserInputMessage[] = [];
   let ended = false;
   let wake: (() => void) | null = null;
-  const iterable: AsyncIterable<SDKUserMessage> = (async function* () {
+  const iterable: AsyncIterable<ClaudeUserInputMessage> = (async function* () {
     while (true) {
       if (queue.length > 0) {
         yield queue.shift()!;
@@ -166,14 +170,14 @@ function makePromptFeed(): PromptFeed {
 }
 
 /**
- * Build the SDKUserMessage for one logical turn: a text block (with the
+ * Build the stdin user message for one logical turn: a text block (with the
  * `/schedule` natural-language rewrite — the CLI treats a leading slash as an
  * internal command and would exit on an unrecognized one) plus any inline
  * base64 image blocks (the same inline-encoding the Claude Code CLI uses for
  * user-attached images). Image-only turns send no text block (the images
  * still reach the model).
  */
-function buildTurnUserMessage(req: StartTurnRequest): SDKUserMessage {
+function buildTurnUserMessage(req: StartTurnRequest): ClaudeUserInputMessage {
   const content: (
     | { type: "text"; text: string }
     | { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } }
@@ -200,15 +204,15 @@ function buildTurnUserMessage(req: StartTurnRequest): SDKUserMessage {
     type: "user",
     message: { role: "user", content },
     parent_tool_use_id: null,
-  } satisfies SDKUserMessage;
+  } satisfies ClaudeUserInputMessage;
 }
 
 /** Per-logical-turn completion tracker. The TurnHandle's `done` resolves when
  *  the ADAPTER's logical end fires (result seen, subagents idle, bash
- *  patience respected) — NOT when the CLI process exits. The process may keep
- *  running for a long time after the turn is over (a dev server it started);
- *  the SDK generator keeps draining in the background so late roster edges
- *  and post-turn resume content still land. */
+   *  patience respected) — NOT when the CLI process exits. The process may keep
+   *  running for a long time after the turn is over (a dev server it started);
+   *  the message stream keeps draining in the background so late roster edges
+   *  and post-turn resume content still land. */
 interface TurnTracker {
   promise: Promise<void>;
   /** Idempotent resolve. */
@@ -246,7 +250,7 @@ interface LiveTransport {
   feedClosed: boolean;
   /** The live query; replaced by the transport-retry loop. stopTask routes
    *  here so per-task stop works across (and after) logical turns. */
-  query: Query;
+  query: CliQuery;
   /** Everything the CLI process bakes in at spawn (model, env, mode, cwd…).
    *  A follow-up whose fingerprint differs reaps the process and respawns —
    *  per-process options can't change mid-flight. */
@@ -269,7 +273,7 @@ interface LiveTransport {
  *  deliberately excluded: turn 1 of a fresh session spawns with no CLI
  *  session id and turn 2 resumes with one — same process identity either
  *  way (follow-ups never re-resume; fresh spawns use the current binding). */
-function transportFingerprint(req: StartTurnRequest, options: Options): string {
+function transportFingerprint(req: StartTurnRequest, options: ClaudeCliOptions): string {
   return JSON.stringify({
     cwd: req.cwd,
     model: options.model ?? null,
@@ -277,84 +281,42 @@ function transportFingerprint(req: StartTurnRequest, options: Options): string {
     permissionMode: options.permissionMode ?? null,
     skills: options.skills ?? null,
     orchestration: req.orchestration === true,
-    binary: options.pathToClaudeCodeExecutable ?? null,
+    binary: options.executable?.command ?? null,
     env: options.env ?? null,
-    mcp: Object.keys(options.mcpServers ?? {}).sort(),
+    mcp: [
+      ...Object.keys(options.mcpServers ?? {}),
+      ...Object.keys(options.hostMcpServers ?? {}),
+    ].sort(),
     settings: options.settings ?? null,
-    systemAppend:
-      typeof options.systemPrompt === "object" &&
-      options.systemPrompt !== null &&
-      !Array.isArray(options.systemPrompt) &&
-      options.systemPrompt.type === "preset"
-        ? options.systemPrompt.append ?? ""
-        : "",
+    systemAppend: options.systemPrompt?.type === "preset" ? options.systemPrompt.append ?? "" : "",
   });
 }
 
-// `createSdkMcpServer` builds an in-process MCP server that surfaces custom
-// tools to the model without spawning a subprocess. It's a pure constructor
-// (no binary, no I/O), but we lazy-load it alongside query() to keep the SDK
-// module out of the startup path.
-let createMcpServerFn: typeof import("@anthropic-ai/claude-agent-sdk").createSdkMcpServer | null = null;
-async function loadCreateMcpServer(): Promise<
-  typeof import("@anthropic-ai/claude-agent-sdk").createSdkMcpServer
-> {
-  if (!createMcpServerFn) {
-    const sdk = await loadClaudeSdk();
-    createMcpServerFn = sdk.createSdkMcpServer;
-  }
-  return createMcpServerFn;
-}
-
-/** Warm the Agent SDK module in idle time, well after the window is visible.
- *  The lazy imports above keep the (large) module off the startup path, but
- *  without this the FIRST turn pays the parse cost inline in startTurn,
- *  right on the send→first-reply critical path. A deferred fire-and-forget
- *  import moves it into the gap while the user is still finding their
- *  project / typing their first message. Errors are swallowed — loadQuery()
- *  retries on real first use and surfaces failures through the normal turn
- *  error path. */
-export function preloadClaudeSdk(): void {
-  setTimeout(() => {
-    void loadQuery().catch(() => {});
-    void loadCreateMcpServer().catch(() => {});
-  }, SDK_PRELOAD_DELAY_MS);
-}
-
-/** Delay before the SDK preload fires (see preloadClaudeSdk). Long enough to
- *  stay out of the startup window-creation burst, short enough to finish
- *  before a user realistically sends their first message. */
-const SDK_PRELOAD_DELAY_MS = 3_000;
-
 /**
- * Build the in-process MCP server that exposes the `browser_*` tools to
- * Claude (the SDK equivalent of Pi's `pi.registerTool`). Each tool's handler
- * delegates to the shared `agentBrowserTools` implementation so both
- * providers drive the browser identically.
+ * Build the host MCP server that exposes the `browser_*` tools to Claude (the
+ * counterpart of Pi's `pi.registerTool`; served to the CLI over loopback
+ * HTTP — see hostMcpHttp.ts). Each tool's handler delegates to the shared
+ * `agentBrowserTools` implementation so both providers drive the browser
+ * identically.
  *
- * Claude surfaces each tool to canUseTool as `mcp__mcode-browser__<name>`;
+ * The CLI surfaces each tool to canUseTool as `mcp__mcode-browser__<name>`;
  * the read-only ones (list/snapshot/screenshot) are auto-approved by
  * `shouldAutoApprove`, while navigate/click go through the normal approval
  * prompt. Screenshots return an image content block that the store parses
  * from the tool_result to render inline.
  */
-async function buildBrowserMcpServer(
+function buildBrowserMcpTools(
   projectPath: string,
-  ctx: ProviderContext,
   sessionId: string,
-  /** Resolved at CALL time, not construction time: the browser MCP server
-   *  lives as long as the CLI process (the persistent transport), which now
-   *  serves several logical turns — a statically captured turn number would
-   *  pin every follow-up turn's screenshots into the first turn's directory. */
+  /** Resolved at CALL time, not construction time: the server lives as long
+   *  as the CLI process (the persistent transport), which serves several
+   *  logical turns — a statically captured turn number would pin every
+   *  follow-up turn's screenshots into the first turn's directory. */
   getTurnNumber: () => number | undefined,
-) {
-  const createSdkMcpServer = await loadCreateMcpServer();
-
-  return createSdkMcpServer({
-    name: BROWSER_MCP_SERVER,
+): HostMcpServerSpec {
+  return {
     version: "1.0.0",
-    instructions:
-      "Mcode 应用内浏览器控制工具。" + BROWSER_TOOLS_FLOW,
+    instructions: "Mcode 应用内浏览器控制工具。" + BROWSER_TOOLS_FLOW,
     alwaysLoad: true,
     tools: [
       {
@@ -671,7 +633,7 @@ async function buildBrowserMcpServer(
         },
         handler: async (args: Record<string, unknown>) => {
           // The returned image content block flows back to the model via the
-          // SDK and is also surfaced to the user: the claude binary round-
+          // CLI and is also surfaced to the user: the claude binary round-
           // trips the tool_result content (including the image) back as a user
           // message, which SdkMessageAdapter transparently forwards as a
           // ToolResultEvent; the store then extracts the image (in Anthropic
@@ -694,16 +656,17 @@ async function buildBrowserMcpServer(
         },
       },
     ],
-  });
+  };
 }
 
 /** Tools that mutate files on disk — auto-approved under `acceptEdits`
  *  mode without prompting the user. Mirrors Claude Code's own grouping. */
 const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
-/** The MCP server name under which the browser tools are registered (via
- *  `createSdkMcpServer` below). The SDK surfaces each tool to canUseTool as
- *  `mcp__<server>__<tool>`, so the composed prefix is `mcp__mcode-browser__`. */
+/** The MCP server name under which the browser tools are registered (a host
+ *  MCP server served over loopback HTTP — see buildBrowserMcpTools). The CLI
+ *  surfaces each tool to canUseTool as `mcp__<server>__<tool>`, so the
+ *  composed prefix is `mcp__mcode-browser__`. */
 const BROWSER_MCP_SERVER = "mcode-browser";
 const BROWSER_MCP_PREFIX = `mcp__${BROWSER_MCP_SERVER}__`;
 
@@ -756,19 +719,19 @@ function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): 
 
 /** Max provider-level retries for a TRANSPORT failure (stdio break, binary
  *  crash, network timeout). API-level transient errors (429 / overloaded /
- *  5xx) are retried separately by the SDK itself — surfaced via `api_retry`
+ *  5xx) are retried separately by the CLI itself — surfaced via `api_retry`
  *  system messages the adapter now logs — and do NOT consume this budget,
  *  because those end the iterator cleanly with a `result{subtype:"error"}`
  *  rather than throwing. This wrapper only catches the thrown-exception case
- *  the SDK's own retry loop doesn't cover. */
+ *  the CLI's own retry loop doesn't cover. */
 const CLAUDE_MAX_TRANSPORT_RETRIES = 3;
 
 /** True for a thrown error that warrants a transport-level retry. Covers
  *  stream/stdio breaks, network failures, timeouts, and HTTP 429/5xx that
- *  escape the SDK's retry loop and surface as a thrown exception (possible on
+ *  escape the CLI's retry loop and surface as a thrown exception (possible on
  *  non-Anthropic gateways). AbortError is excluded (it's a user stop, handled
  *  separately). Auth/config errors are excluded (retrying won't help). The
- *  SDK's thrown errors aren't strongly typed, so this is a message-based
+ *  transport's errors aren't strongly typed, so this is a message-based
  *  heuristic — intentionally permissive on the side of retrying transient-
  *  sounding failures. */
 function isRetryableTransportError(err: unknown): boolean {
@@ -784,7 +747,7 @@ function isRetryableTransportError(err: unknown): boolean {
   if (/network|enotfound|getaddrinfo|fetch failed|failed to fetch/.test(msg)) return true;
   // EOF / premature close.
   if (/eof|premature|unexpected end|closed before/.test(msg)) return true;
-  // HTTP 429 / 5xx that escaped the SDK retry (rare; custom gateways).
+  // HTTP 429 / 5xx that escaped the CLI's retry (rare; custom gateways).
   if (/429|rate limit|overloaded|too many requests|5\d{2}|server error|service unavailable|bad gateway|gateway timeout/.test(msg)) return true;
   return false;
 }
@@ -824,6 +787,10 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
    *  turns while background work runs (services); follow-up turns ride the
    *  same process instead of spawning a second CLI on the session file. */
   private transports = new Map<string, LiveTransport>();
+  /** Sessions in which the user invoked `/schedule`: once they did, every
+   *  later turn carries the scheduled-task proposal instructions (see the
+   *  system-prompt appends in startTurn). In-memory, app lifetime. */
+  private scheduleSessions = new Set<string>();
   readonly capabilities: ProviderCapabilities = {
     supportsApproval: true,
     supportsResume: true,
@@ -947,18 +914,6 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // transport), so the value must be read at call time, not captured.
     const turnNumberBox: { n: number | undefined } = { n: req.turnNumber };
 
-    // UI "Plan" mode → run the CLI under `default` and steer the model into
-    // plan mode via the EnterPlanMode tool instead. The CLI's plan
-    // permission-mode reliably kills the ExitPlanMode approval round-trip
-    // when a turn resumes right after a backgrounded subagent completes
-    // (rule-layer instant deny recorded as "Tool permission request failed:
-    // AbortError: Stream closed", permission_denials → "Permission denied
-    // (ExitPlanMode)"; observed on CLI 2.1.218 AND 2.1.238, 2026-08-26 — the
-    // ask never reaches canUseTool/onUserDialog). Under `default` the
-    // EnterPlanMode→ExitPlanMode flow is the battle-proven path. Safety is
-    // preserved host-side: the ApprovalBridge still sees the config-level
-    // "plan" mode, so shouldAutoApprove prompts for every mutating tool.
-    const isUiPlanMode = req.permissionMode === "plan";
     // Look up the session's snapshot via the module-scope registry.
     // The runtime creates it lazily on first sendTurn and clears it
     // between turns; the provider only reads. No-op fallbacks if the
@@ -995,37 +950,34 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // plugin injection further down.
     const agentSkills = await resolveAgentSkillInjections(req.cwd);
 
-    const options: Options = {
+    // Sessions that already ran a `/schedule` request: from then on every
+    // turn carries the scheduled-task proposal instructions, so a follow-up
+    // ("把时间改到十点") can still produce a proposal card. In-memory for the
+    // app's lifetime — after a restart the model falls back on the format it
+    // sees in its own earlier replies in the transcript.
+    if (/^\/schedule\b/i.test(req.prompt.trim())) this.scheduleSessions.add(req.sessionId);
+
+    const options: ClaudeCliOptions = {
       abortController: ac,
       cwd: req.cwd,
       model: req.model && req.model !== "default" ? req.model : undefined,
-      // Per-turn reasoning effort. The contract's `EffortLevel` is now an open
-      // string (so providers can declare their own levels); the SDK's own
-      // `EffortLevel` is a narrow union (low/medium/high/xhigh/max). We collapse
-      // "default" to `undefined` (don't pass the option) and cast the rest --
-      // only the five named levels reach the wire, validated by the UI's
-      // capabilities.thinkingLevels list.
+      // Per-turn reasoning effort. "default" collapses to `undefined` (don't
+      // pass the flag). Only the levels the UI's capabilities.thinkingLevels
+      // list offers reach the wire (`--effort`).
       // See https://platform.claude.com/docs/en/build-with-claude/effort
       // EXCEPT on OpenAI-protocol bridge turns, where the level takes the
       // internal-header path instead (see isOpenAiBridge above) — passing it
       // here would make the binary emit an Anthropic `thinking` budget.
       effort:
-        !isOpenAiBridge && req.effort && req.effort !== "default"
-          ? (req.effort as Options["effort"])
-          : undefined,
-      // Permission mode: the contract is an open string; the SDK's type is a
-      // narrow union. The UI only offers claude's declared modes for this
-      // provider (see capabilities.permissionModes), so the cast is safe. The
-      // UI "plan" mode is translated to "default" (see isUiPlanMode above);
-      // the UI "isolated" mode (project isolation) runs the CLI under
-      // acceptEdits — the boundary itself is enforced host-side in canUseTool
-      // (reads confined, writes/bash write-targets denied outside cwd), which
-      // the SDK-level mode knows nothing about.
-      permissionMode: (isUiPlanMode
-        ? "default"
-        : req.permissionMode === "isolated"
-          ? "acceptEdits"
-          : req.permissionMode) as Options["permissionMode"],
+        !isOpenAiBridge && req.effort && req.effort !== "default" ? req.effort : undefined,
+      // Permission mode. The UI's "plan" is the CLI's own native `plan` mode
+      // — Mcode adds no steering prompt; ExitPlanMode's approval arrives as
+      // the CLI's `request_user_dialog` (see onUserDialog below). The UI
+      // "isolated" mode (project isolation) runs the CLI under acceptEdits —
+      // the boundary itself is enforced host-side in canUseTool (reads
+      // confined, writes/bash write-targets denied outside cwd), which the
+      // CLI's mode knows nothing about.
+      permissionMode: req.permissionMode === "isolated" ? "acceptEdits" : req.permissionMode,
       resume: req.resumeProviderSessionId ?? undefined,
       includePartialMessages: true,
       // Forward the subagents' full conversation (text/thinking included, not
@@ -1037,13 +989,13 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       forwardSubagentText: true,
       // Skills: when the user picked specific skills in the composer, pass them
       // as an explicit allowlist so the model's `Skill` tool can actually reach
-      // them. This is REQUIRED because query() runs the bundled binary with
-      // `--input-format stream-json`, under which the CLI does NOT re-parse
+      // them. This is REQUIRED because the CLI runs with
+      // `--input-format stream-json`, under which it does NOT re-parse
       // `/name` slash commands from the prompt text — the `/name` literals the
       // composer inlines are display-only and would never trigger the Skill
       // tool on their own. With no picks, fall back to 'all' so the model can
-      // still self-discover/autoloader skills. Do NOT also add 'Skill' to
-      // allowedTools. See sdk.d.ts Options.skills.
+      // still self-discover/autoloader skills (the allowlist rides
+      // `--allowedTools Skill` / `Skill(<name>)`).
       //
       // `.agent/skills` / `.agents/skills` skills reach the CLI through the
       // plugin loader, which registers them under the `<ns>:<dirName>`
@@ -1055,30 +1007,27 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         req.skills && req.skills.length > 0
           ? req.skills.map((n) => agentSkills?.qualifiedNames.get(n) ?? n)
           : "all",
-      // SDK #359: On Windows there is a timing/buffering race in the stdio
-      // control-stream transport that causes "Tool permission request failed:
-      // AbortError: Tool permission stream closed before response received"
-      // for subagent/MCP tools (WebSearch, WebFetch, etc.). Setting debug:true
-      // forces synchronous control-channel flushing and eliminates the race.
+      // On Windows a timing/buffering race in the CLI's stdio control channel
+      // caused "Tool permission request failed: AbortError: Tool permission
+      // stream closed before response received" for subagent/MCP tools
+      // (WebSearch, WebFetch, etc.). `--debug` makes the CLI flush that
+      // channel synchronously and eliminates the race — a CLI-side property,
+      // so it applies the same with Mcode's own transport.
       // See https://github.com/anthropics/claude-agent-sdk-typescript/issues/359
       debug: process.platform === "win32" ? true : undefined,
     };
 
-    // The runtime binary comes from the managed install
-    // (userData/runtimes, downloaded via Settings → Agent Runtimes) or, in
-    // dev, from node_modules. Point the SDK at the real on-disk path — the
-    // asar-unpacked fallback in sdkBinaryPath.ts only matters for builds that
-    // still bundle the platform package. Missing runtime (packaged, not yet
-    // downloaded) → friendly error instead of the SDK's cryptic spawn
-    // failure. See sdkBinaryPath.ts for the full rationale.
-    const binaryPath = resolveSdkBinaryPath();
-    if (binaryPath) {
-      options.pathToClaudeCodeExecutable = binaryPath;
-    } else if (is.prod) {
-      throw new Error(
-        "Claude 未安装。请到 设置 → Agent 点击安装(Claude is not installed — open Settings → Agent and install it).",
+    // The runtime is the user's own Claude CLI (PATH / native installer) —
+    // nothing is bundled. Resolve it here so a missing or too-old CLI
+    // surfaces as the friendly "not installed / update it" card before
+    // anything else is set up.
+    const executable = resolveClaudeExecutable();
+    if (!executable) {
+      throw new ClaudeCliUnavailableError(
+        "未检测到 Claude CLI。请先安装:npm install -g @anthropic-ai/claude-code,或到 设置 → Agent 安装(Claude CLI not found on PATH).",
       );
     }
+    options.executable = await assertClaudeCliUsable(executable);
 
     // Plan files location: the bundled CLI forces the model to write its plan
     // to a file before calling ExitPlanMode (the tool errors with "No plan file
@@ -1089,11 +1038,12 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // GLOBAL ~/.claude/plans/ directory instead of staying project-scoped.
     //
     // We set it to ".claude/plans" (relative to cwd = project root) via the
-    // flag-settings layer (Options.settings), which has the highest
+    // flag-settings layer (`--settings`), which has the highest
     // user-controlled priority and applies regardless of `settingSources`.
     // Add ".claude/plans/" to .gitignore to keep these ephemeral drafts out of
-    // version control.
-    options.settings = { plansDirectory: ".claude/plans", todoFeatureEnabled: true };
+    // version control. It is a path preference, not an instruction: the model
+    // is told nothing it would not be told by the stock CLI.
+    options.settings = { plansDirectory: ".claude/plans" };
 
     // Always redirect the claude binary's user-level config root to Mcode's
     // own directory (~/.mcode) via CLAUDE_CONFIG_DIR. This decouples Mcode from
@@ -1103,46 +1053,40 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // feature places them). Applied to BOTH the standard and custom-endpoint
     // paths so behavior is consistent.
     //
-    // The SDK's Options.env REPLACES the subprocess env entirely (per sdk.d.ts),
-    // so we always spread process.env first - otherwise PATH/HOME disappear and
-    // the binary can't boot.
+    // The child's env REPLACES the inherited environment entirely, so we
+    // always spread process.env first - otherwise PATH/HOME disappear and
+    // the CLI can't boot.
     if (req.apiConfig) {
       // Custom endpoint: buildCustomEnv layers on auth, per-tier model bindings,
       // gateway request headers, and CLAUDE_CONFIG_DIR on top of process.env.
-      // The session id names the gateway's session header (gateways that
-      // require one want a stable id per conversation, not per request).
-      // On OpenAI-protocol configs the thinking level rides the internal
-      // effort header (validated above against the model's declaration).
+      // We ALSO shadow any managed env keys written into ~/.mcode/settings.json
+      // via flag-tier `--settings.env`, so concurrent GUI sessions on different
+      // providers/models never get overwritten by the synced disk file.
       options.env = buildCustomEnv(req.apiConfig, {
         sessionId: req.sessionId,
         thinkingEffort: bridgeThinkingEffort,
       });
+      options.settings = {
+        ...(typeof options.settings === "object" ? options.settings : {}),
+        env: buildShadowingSettingsEnv(req.apiConfig, {
+          sessionId: req.sessionId,
+          thinkingEffort: bridgeThinkingEffort,
+        }),
+      };
     } else {
       // Standard Anthropic endpoint: still redirect the config root so Mcode
       // manages its own skills/settings, but no auth/model overrides needed.
       options.env = {
         ...process.env,
         CLAUDE_CONFIG_DIR: MCODE_CONFIG_DIR,
-        CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
       };
     }
 
-    // Subagent model pin (per provider config, settings panel「模型配置」):
-    // CLAUDE_CODE_SUBAGENT_MODEL is the binary's native channel for routing
-    // Task-tool subagents. Layered AFTER the block above so the pin overrides
-    // the custom-endpoint path's default mirror of the main model. The value
-    // is re-checked against the config's model list (see subagentModel.ts) —
-    // a stale id is dropped with a warning rather than injected, because a
-    // broken id here kills the Task tool with 503s (the exact failure the
-    // tier-mirroring exists to prevent). Official-endpoint turns and configs
-    // without a pin keep following the main model.
+    // Subagent model pin (tierModels.subagent / legacy subagentModel):
+    // layered AFTER the block above so the pin overrides any fallback.
     const pinnedSubagentModel = resolveSubagentModelValue(req.apiConfig);
     if (pinnedSubagentModel) {
       options.env = { ...options.env, CLAUDE_CODE_SUBAGENT_MODEL: pinnedSubagentModel };
-    } else if (req.apiConfig?.subagentModel) {
-      ctx.log.warn(
-        `subagent model pin ignored: id ${JSON.stringify(req.apiConfig.subagentModel)} not in config ${req.apiConfig.baseUrl} model list`,
-      );
     }
 
     // Bash tool shell: force Git Bash when one is resolvable. claude.exe's own
@@ -1151,7 +1095,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // `D:\...` paths the model emits. Git Bash's MSYS runtime converts them
     // natively, and the canUseTool Bash branch below normalizes the remaining
     // dialects to `D:/...` form. Only set when a real Git Bash is found;
-    // otherwise leave the SDK's default resolution untouched.
+    // otherwise leave the CLI's default resolution untouched.
     if (process.platform === "win32") {
       const gitBash = resolveGitBash();
       if (gitBash) {
@@ -1164,12 +1108,12 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // ~/.mcode - the cc-switch-controlled ~/.claude/settings.json is never
     // read (the config root moved). The "user" source now resolves to
     // ~/.mcode/settings.json (which Mcode controls), and user-level skills
-    // under ~/.mcode/skills/ are discovered by the binary's auto-load. The
+    // under ~/.mcode/skills/ are discovered by the CLI's auto-load. The
     // previous settingSources:["project","local"] workaround is no longer
     // needed and was actively harmful: it disabled user-level skill discovery.
 
-    // Diagnostic: dump the effective env actually handed to the SDK
-    // subprocess, so model-routing failures against third-party gateways can
+    // Diagnostic: dump the effective env actually handed to the CLI
+    // process, so model-routing failures against third-party gateways can
     // be triaged without a packet capture. Only the Anthropic-* / Claude-*
     // vars matter for routing; PATH/HOME/etc are filtered out for brevity.
     // Mask the auth token (keep first 2 / last 4) - never log cleartext.
@@ -1195,22 +1139,21 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       const tok = e.ANTHROPIC_AUTH_TOKEN ?? e.ANTHROPIC_API_KEY;
       diagEnv.__authTokenMasked = tok ? `${tok.slice(0, 2)}***${tok.slice(-4)} (mode=${e.ANTHROPIC_API_KEY ? "api_key" : "auth_token"})` : "(none)";
       ctx.log.info(
-        `claude custom env: selectedModel=${req.apiConfig.selectedModel} betas=${JSON.stringify(options.betas ?? null)} env=${JSON.stringify(diagEnv)}`,
+        `claude custom env: selectedModel=${req.apiConfig.selectedModel} env=${JSON.stringify(diagEnv)}`,
       );
     }
 
     // --- canUseTool bridge ---
-    // Three kinds of tool calls route through here:
+    // Three kinds of tool calls arrive here as the CLI's `can_use_tool` control
+    // requests:
     //  (a) AskUserQuestion — BLOCKS via ctx.requestUserInput (Deferred). The
-    //      user's answers come back as `updatedInput.answers`, the SDK hands
-    //      them to the model, and the SAME turn continues. This is the only
-    //      way the conversation proceeds after a question — see
-    //      https://code.claude.com/docs/en/agent-sdk/user-input. Returning
+    //      user's answers go back as `updatedInput.answers`, the CLI hands
+    //      them to the model, and the SAME turn continues. Returning
     //      null here (the old behavior) left the tool blocked indefinitely
     //      while onUserDialog cancelled it, ending the turn prematurely.
     //  (b) ExitPlanMode — BLOCKS via ctx.requestPlanApproval (Deferred). The
     //      model has drafted a plan in plan mode and needs user approval to
-    //      proceed. Allow → SDK exits plan mode for this turn; deny → stays
+    //      proceed. Allow → the CLI exits plan mode for this turn; deny → stays
     //      in plan mode and the model can revise.
     //  (c) every other tool — standard host-moderated approval via
     //      ctx.requestApproval.
@@ -1238,13 +1181,13 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
           questions,
         });
         // User closed the question card without answering: deny the tool so
-        // the SDK surfaces it to the model as a clear error and the SAME
+        // the CLI surfaces it to the model as a clear error and the SAME
         // turn continues (the model decides how to proceed).
         if (decision.dismissed) {
           return { behavior: "deny", message: "用户关闭了提问,未提供答案,请继续当前任务" };
         }
-        // Build the SDK's expected answers map: { [question.text]: label }.
-        // SDK accepts a string (single label or comma-joined) per question.
+        // Build the answers map the CLI expects: { [question.text]: label }.
+        // The CLI accepts a string (single label or comma-joined) per question.
         const sdkAnswers: Record<string, string> = {};
         for (const q of questions) {
           const v = decision.answers[q.question];
@@ -1258,16 +1201,16 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       }
 
       if (toolName === "ExitPlanMode") {
-        // Fallback path: newer SDK versions route ExitPlanMode approval through
+        // Fallback path: the CLI routes ExitPlanMode approval through
         // onUserDialog (request_user_dialog) instead of canUseTool, so this
         // branch is typically NOT reached. It's kept as a defensive fallback
-        // for SDK versions / code paths that still use can_use_tool. The real
+        // for CLI code paths that still use can_use_tool. The real
         // handling lives in onUserDialog above.
         ctx.log.info("canUseTool: ExitPlanMode fallback path hit (expected to be handled by onUserDialog)");
         // Plan mode: the model has drafted a plan and is asking the user to
         // approve it before execution. The plan text arrives in input.plan
-        // (the SDK's ExitPlanModeInput type omits it, but it's present at
-        // runtime). Allow → SDK exits plan mode for this turn; deny → SDK
+        // (the tool's documented input omits it, but it's present at
+        // runtime). Allow → the CLI exits plan mode for this turn; deny → the CLI
         // stays in plan mode and the model can revise. See
         // https://docs.snowflake.com/en/user-guide/cortex-code-agent-sdk/user-input
         if (!requestPlanApproval) {
@@ -1304,7 +1247,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       // to native Windows paths and (2) deny writes that resolve outside the
       // project working directory in EVERY permission mode except
       // bypassPermissions/dontAsk (the user explicitly opted out of all
-      // checks there). The normalized path rides back to the SDK via
+      // checks there). The normalized path rides back to the CLI via
       // `updatedInput` so the actual write lands at the corrected location.
       // The strict deny runs BEFORE the always-allowed gate below — the
       // project boundary wins over a per-tool grant.
@@ -1357,7 +1300,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       // bash commands. Only Git Bash understands `/d/...` (MSYS conversion);
       // neither dialect works in PowerShell or WSL bash. Rewrite both to
       // native `D:/...` form so the command succeeds in whatever shell the
-      // SDK resolves. The normalized command rides back via `updatedInput`
+      // CLI resolves. The normalized command rides back via `updatedInput`
       // (same mechanism as the file-path guard above) — the approval dialog
       // also shows the corrected command. Backslash-native paths (`D:\...`)
       // are left alone; those are fixed by steering the shell to Git Bash
@@ -1417,7 +1360,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       //  (1) "always allow" — the user previously granted this tool with
       //      the always checkbox; skip the prompt for the rest of the session.
       //  (2) permission mode — bypassPermissions/dontAsk auto-allows every
-      //      tool; acceptEdits auto-allows file-editing tools. The SDK's own
+      //      tool; acceptEdits auto-allows file-editing tools. The CLI's own
       //      permissionMode option is fixed at query() start, but our host
       //      gate reads the LIVE value so a mid-turn flip applies to the
       //      next tool right away. Out-of-project writes never reach these
@@ -1456,22 +1399,21 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     options.canUseTool = canUseTool;
 
     // --- onUserDialog bridge ---
-    // SDK 0.3.x routes ExitPlanMode's user-approval step through
-    // `request_user_dialog` control requests (dialogKind-based), NOT through
-    // canUseTool. The CLI is fail-closed: it only emits a dialog kind declared
-    // in `supportedDialogKinds` - without the declaration the flow degrades to
+    // ExitPlanMode's user-approval step arrives as a `request_user_dialog`
+    // control request (dialogKind-based), NOT through canUseTool. The CLI is
+    // fail-closed: it only emits a dialog kind declared in
+    // `supportedDialogKinds` - without the declaration the flow degrades to
     // its no-dialog behavior (the turn aborts with "Tool permission request
     // failed: AbortError: Stream closed") and the approval UI never shows.
-    // See sdk.d.ts OnUserDialog / supportedDialogKinds docs.
     //
     // The real dialogKind for ExitPlanMode is `permission_exit_plan_mode_v2`,
-    // confirmed by analyzing the bundled claude.exe v2.1.218 binary: the
+    // confirmed by analyzing the claude.exe v2.1.218 binary: the
     // ExitPlanMode tool (var `oz`, name "ExitPlanMode") is mapped to dialog
     // `fcr` whose `.kind` is "permission_exit_plan_mode_v2" in the LBy routing
     // table (KUe({matches:(e)=>e===oz, dialog:fcr, build:qZu})). The CLI gates
     // emission on `ewt() && (twt() ?? []).includes(dialogKind)`, so a mismatch
     // silently suppresses the dialog. The legacy guesses below are kept as
-    // defensive fallbacks in case a future SDK version renames the kind.
+    // defensive fallbacks in case the CLI renames the kind.
     const EXIT_PLAN_DIALOG_KINDS = new Set([
       "permission_exit_plan_mode_v2", // real value (claude.exe v2.1.218)
       "exit_plan_mode", // legacy guess - defensive
@@ -1486,7 +1428,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       // (renderer shows <PlanApprovalPrompt>). The model's plan text lives in
       // payload.plan (the qZu build fn sets {requestId, toolName,
       // permissionResult, plan, planFilePath, usage}); fall back to the older
-      // payload.input.plan shape for SDK versions that nested it there.
+      // payload.input.plan shape for CLI versions that nested it there.
       if (EXIT_PLAN_DIALOG_KINDS.has(request.dialogKind) || typeof (request.payload as { plan?: unknown })?.plan === "string") {
         if (!requestPlanApproval) {
           return { behavior: "cancelled" as const };
@@ -1521,39 +1463,31 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
           result: { approved: false, reason: decision.reason ?? "Plan rejected by user" },
         };
       }
-      // Unrecognized dialog kind — SDK requires `cancelled` so the CLI applies
-      // its default behavior for that dialog.
+      // Unrecognized dialog kind — `cancelled` makes the CLI apply its default
+      // behavior for that dialog.
       return { behavior: "cancelled" as const };
     };
     options.onUserDialog = onUserDialog;
     options.supportedDialogKinds = Array.from(EXIT_PLAN_DIALOG_KINDS);
 
-    // --- systemPrompt appends ---
-    // (0) Claude identity: always appended (every platform, every turn) so the
-    //     model answers "who/what are you" by introducing itself as Mcode's
-    //     assistant rather than a bare Claude CLI/API.
-    // (1) Windows path hint: Claude's training data is saturated with
-    //     WSL-style `/mnt/<drive>/...` paths; whether those actually resolve
-    //     depends on the bash the CLI spawns, which varies by machine (Git
-    //     Bash → native `D:\...` only; no Git Bash → WSL, where `/mnt/...` is
-    //     the only absolute form). `detectBashEnv("claude")` mirrors the CLI's
-    //     resolution (Git Bash from the git install root, WSL as fallback) so
-    //     the hint tells the model the truth. The canUseTool guard normalizes
-    //     the file tools anyway, but this hint cuts how often the model emits
-    //     wrong-form paths in the first place — including inside Bash commands
-    //     (e.g. `cat > /mnt/d/...`), which the guard can't intercept.
-    // (2) AskUserQuestion sentinel fallback when the native tool is missing.
-    // Identity is always present, so the preset+append is always active —
-    // the `claude_code` preset (full Claude Code tool guidance + safety rules)
-    // becomes the base on every platform, with our fragments appended on top.
+    // --- system prompt appends ---
+    // The model gets the CLI's OWN system prompt. Nothing ambient is layered
+    // on top — no product identity, no task-tracking or path-dialect coaching,
+    // no plan-mode steering (the UI's "plan" is the CLI's native plan mode):
+    // a Claude session here is told exactly what the stock CLI tells it. The
+    // only fragments are ones the user switched on themselves, and each one
+    // is the working part of a Mcode feature that cannot exist without it:
+    //  (1) `/schedule` — the user invoked it in this session: the proposal
+    //      block contract the schedule card is rendered from.
+    //  (2) orchestration — the user turned 自动编排 on for this turn: the
+    //      planner brief for the orch_submit_plan tool mounted below.
+    //  (3) the user's own custom prompt (设置 → 编排) — their words, not ours.
+    // Because the append is baked into the process, it is part of the
+    // transport fingerprint: a turn whose append differs respawns.
     const appends: string[] = [];
-    appends.push(CLAUDE_IDENTITY_PROMPT);
-    appends.push(CLAUDE_TASK_TRACKING_NUDGE);
-    appends.push(SCHEDULED_TASK_PROPOSAL_NUDGE);
-    // (3) 会话内编排拆解(orchestration 标记):规划者指令(角色/工具用法/
-    //     可用模型面/硬约束)追加为系统提示段,orch_submit_plan 工具在下方
-    //     mcpServers 处挂载。构建需要读模型面(Pi/Codex 水合清单),失败只
-    //     降级为无提示 —— 工具缺失时模型自然按普通回合回答,不出错。
+    if (this.scheduleSessions.has(req.sessionId)) {
+      appends.push(SCHEDULED_TASK_PROPOSAL_NUDGE);
+    }
     if (req.orchestration) {
       try {
         const planNudge = await buildOrchPlanNudge(req.sessionId);
@@ -1562,60 +1496,41 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         ctx.log.warn(`orchestration planner nudge unavailable: ${(err as Error).message}`);
       }
     }
-    if (process.platform === "win32") {
-      appends.push(bashPathHintFor(detectBashEnv("claude")));
+    if (appends.length > 0) {
+      options.systemPrompt = {
+        type: "preset",
+        preset: "claude_code",
+        append: joinPromptSections(...appends),
+      };
     }
-    if (isUiPlanMode) {
-      appends.push(CLAUDE_PLAN_MODE_NUDGE);
-    }
-    if (!this.capabilities.supportsAskUserQuestion) {
-      appends.push(ASK_SYSTEM_PROMPT);
-    }
-    options.systemPrompt = {
-      type: "preset",
-      preset: "claude_code",
-      // Blank-line section separation (shared with the Pi provider's injector)
-      // — a bare space glues the Chinese identity section onto the English
-      // path hint and the model reads them as one run-on paragraph.
-      append: joinPromptSections(...appends),
-    };
 
-    // --- In-process MCP server: browser tools ---
-    // Exposes `browser_*` tools (navigate/snapshot/click/screenshot/list) as an
-    // MCP server running in this process (no subprocess). The SDK surfaces each
-    // to canUseTool as `mcp__mcode-browser__<name>`; read-only tools are
-    // auto-approved (see shouldAutoApprove). Claude can't register custom tools
-    // directly (unlike Pi's pi.registerTool), so an in-process MCP server is the
-    // supported mechanism for same-process tool handlers. See sdk.d.ts
-    // `createSdkMcpServer`.
-    //
-    // The settings panel's MCP section gates this injection: when the built-in
-    // server is disabled there, the turn runs without it. User-scope servers
-    // (~/.mcode/.claude.json mcpServers) need no injection here — the binary
-    // loads them via the "user" setting source; disabled ones are simply
-    // absent from the file. Project .mcp.json servers are governed per-turn by
-    // the explicit approval lists below, which replace the CLI's first-use
-    // approval dialog (our onUserDialog bridge cancels unknown kinds, so an
-    // unlisted server would never load anyway).
+    // --- Host MCP server: browser tools ---
+    // Exposes `browser_*` tools (navigate/snapshot/click/screenshot/list) as
+    // an MCP server running in this process and served to the CLI over
+    // loopback HTTP (see hostMcpHttp.ts). The CLI surfaces each tool to
+    // canUseTool as `mcp__mcode-browser__<name>`; read-only tools are
+    // auto-approved (see shouldAutoApprove). Mcode's own feature — the stock
+    // CLI has no in-app browser — and switched off from the settings panel's
+    // MCP section (browserDisabled). User-scope servers (~/.mcode/.claude.json
+    // mcpServers) need no injection here — the CLI loads them via the "user"
+    // setting source; disabled ones are simply absent from the file. Project
+    // .mcp.json servers are governed per-turn by the explicit approval lists
+    // below, which replace the CLI's first-use approval dialog (our
+    // onUserDialog bridge cancels unknown kinds, so an unlisted server would
+    // never load anyway).
     // --- Per-turn host-side config reads (parallelized) ---
     // Everything below used to be awaited one after another, putting the sum
-    // of five settings/file reads (+ the plugin tree scan) on the critical
-    // path before query() can even spawn the CLI. They're mutually
-    // independent, so they run as one Promise.all batch; the only ordering
-    // that matters is where results land on `options` afterwards, which
-    // mirrors the original sequential composition exactly (mcpServers ←
-    // browser server, settings ← MCP lists → outputStyle → plugin hooks).
-    // One scan feeds both plugin consumers: the plugins option below and the
-    // plugin-MCP merge (which accepts a precomputed set to avoid a second
-    // directory scan).
+    // of several settings/file reads (+ the plugin tree scan) on the critical
+    // path before the CLI can even be spawned. They're mutually independent,
+    // so they run as one Promise.all batch; the only ordering that matters is
+    // where results land on `options` afterwards (settings ← MCP lists →
+    // outputStyle → plugin hooks). One scan feeds both plugin consumers: the
+    // plugins option below and the plugin-MCP merge (which accepts a
+    // precomputed set to avoid a second directory scan).
     const enabledPluginsPromise = getEnabledPlugins();
-    const [mcpState, browserServer, projectMcpRecord, outputStyle, customPrompt, enabledPlugins, pluginMcp] =
+    const [mcpState, projectMcpRecord, outputStyle, customPrompt, enabledPlugins, pluginMcp] =
       await Promise.all([
         getMcpManagement(),
-        // Pure constructor after the (cached) SDK import — building it
-        // unconditionally is free; only ATTACHING it below is gated on the
-        // browserDisabled setting.
-        buildBrowserMcpServer(req.cwd, ctx, req.sessionId, () => turnNumberBox.n),
         readProjectMcpServers(req.cwd),
         getOutputStyleSetting(),
         getCustomPromptSetting(),
@@ -1624,23 +1539,18 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       ]);
 
     if (!mcpState.browserDisabled) {
-      options.mcpServers = { [BROWSER_MCP_SERVER]: browserServer };
+      options.hostMcpServers = {
+        [BROWSER_MCP_SERVER]: buildBrowserMcpTools(req.cwd, req.sessionId, () => turnNumberBox.n),
+      };
     }
-    // 会话内编排拆解:挂 orch_submit_plan 工具(进程内 MCP,纯数据提交)。
+    // 会话内编排拆解:挂 orch_submit_plan 工具(宿主 MCP,纯数据提交)。
     // 模型提交后 main 侧钳制建卡,渲染端经 plan.proposed 事件挂画布 ——
     // 见 orchestrator/planTool.ts。普通回合不挂,零上下文开销。
     if (req.orchestration) {
-      try {
-        const orchServer = await buildOrchPlanMcpServerAsync(
-          req.sessionId,
-          await loadCreateMcpServer(),
-        );
-        const servers = options.mcpServers ?? {};
-        servers[ORCH_PLAN_MCP_SERVER] = orchServer;
-        options.mcpServers = servers;
-      } catch (err) {
-        ctx.log.warn(`orchestration plan tool unavailable: ${(err as Error).message}`);
-      }
+      options.hostMcpServers = {
+        ...options.hostMcpServers,
+        [ORCH_PLAN_MCP_SERVER]: buildOrchPlanHostServer(req.sessionId),
+      };
     }
     const projectMcpNames = Object.keys(projectMcpRecord);
     if (projectMcpNames.length > 0) {
@@ -1649,8 +1559,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
           .filter((e) => samePath(e.projectPath, req.cwd))
           .map((e) => e.name),
       );
-      // These approval lists live on the Settings interface (options.settings),
-      // not on Options itself.
+      // These approval lists are settings (they ride `--settings`).
       options.settings = {
         ...(typeof options.settings === "object" ? options.settings : {}),
         enabledMcpjsonServers: projectMcpNames.filter((n) => enabledSet.has(n)),
@@ -1658,7 +1567,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       };
     }
 
-    // Output style (settings panel): same Settings-not-Options trap as the
+    // Output style (settings panel): a setting, like the
     // MCP lists above. The CLI reads the style once at session start and has
     // no runtime switch control request, so the selection only shapes NEW
     // turns — which is exactly the per-turn granularity Mcode wants (every
@@ -1671,24 +1580,30 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       };
     }
 
-    // User's custom prompt (settings → 编排): appended as the LAST section so
-    // it reads as the highest-priority user instruction, after every built-in
-    // fragment. The appends array + systemPrompt assignment above run before
-    // the parallel read batch, so merge onto options.systemPrompt here rather
-    // than pushing onto `appends`. Read is batched with the other settings.
+    // User's custom prompt (settings → 编排): the user's own words, appended as
+    // the LAST section so it reads as the highest-priority instruction, after
+    // the feature fragments above. The appends array + systemPrompt assignment
+    // above run before the parallel read batch, so merge onto
+    // options.systemPrompt here rather than pushing onto `appends`.
     if (customPrompt) {
       const sp = options.systemPrompt;
-      if (sp && typeof sp === "object" && sp.type === "preset") {
+      if (sp && sp.type === "preset") {
         sp.append = joinPromptSections(sp.append ?? "", customPrompt);
+      } else {
+        options.systemPrompt = {
+          type: "preset",
+          preset: "claude_code",
+          append: joinPromptSections(customPrompt),
+        };
       }
     }
 
     // --- Plugins (settings → Plugins; docs/plugin-feasibility.md v1) ---
-    // Enabled plugins ride the SDK's native loader: skills/commands/agents
-    // are assembled by the CLI engine per turn (zero host-side copying). Two
-    // host-side rails:
-    //  1. skipMcpDiscovery — Mcode owns plugin MCP connections and injects
-    //     them into options.mcpServers below under "<plugin>__<server>"
+    // Enabled plugins ride the CLI's native loader (`--plugin-dir`):
+    // skills/commands/agents are assembled by the CLI engine per turn (zero
+    // host-side copying). Two host-side rails:
+    //  1. skipMcpDiscovery — Mcode owns plugin MCP connections and puts them
+    //     into the --mcp-config file below under "<plugin>__<server>"
     //     (session-level granularity; the MCP panel lists/toggles them).
     //  2. disableAllHooks — v1 runs NO plugin hooks. Hooks would otherwise
     //     be executed natively by the CLI engine; they are parsed + shown in
@@ -1718,12 +1633,11 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         };
       }
       if (pluginMcp.length > 0) {
-        const servers = options.mcpServers ?? {};
+        const servers = { ...(options.mcpServers ?? {}) };
         for (const [name, config] of pluginMcp) {
-          // Contracts McpServerConfig is transport-shape-compatible with the
-          // SDK's McpServerConfig union (stdio/http/sse); the cast is for the
-          // passthrough extras the SDK type doesn't model.
-          servers[name] = config as unknown as NonNullable<Options["mcpServers"]>[string];
+          // The contracts' McpServerConfig is already the CLI's --mcp-config
+          // entry shape (stdio / http / sse); passthrough extras ride along.
+          servers[name] = config as unknown as Record<string, unknown>;
         }
         options.mcpServers = servers;
       }
@@ -1773,7 +1687,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
 
     // ── Fresh transport: spawn the CLI process for this turn ──
     const feed = makePromptFeed();
-    const q = (await loadQuery())({ prompt: feed.iterable, options });
+    const q = await this.spawnQuery(feed, options, ctx);
     const turn = makeTurnTracker();
     const transport: LiveTransport = {
       sessionId: req.sessionId,
@@ -1792,22 +1706,22 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     transport.drain = this.runDrain(req, ctx, transport, options, turn, configured, snapshot);
     feed.push(buildTurnUserMessage(req));
     ctx.log.info(
-      `claude turn start: session=${req.sessionId} uiMode=${req.permissionMode} sdkMode=${(typeof options.permissionMode === "string" ? options.permissionMode : "default")} transport=fresh`,
+      `claude turn start: session=${req.sessionId} uiMode=${req.permissionMode} cliMode=${options.permissionMode ?? "default"} transport=fresh`,
     );
 
     return {
       done: turn.promise,
       interrupt: () => ac.abort(),
       isRunning: () => !turn.isEnded() && !ac.signal.aborted,
-      // Per-task stop (SDK `stop_task` control request): kills ONE running
-      // CLI task — a long-running bash command (a dev server) — without
-      // aborting the turn. Valid while the CLI PROCESS is alive, including
-      // after the turn's logical end (the process lingers, babysitting
-      // background work; the 运行命令 panel's stop button must keep working
-      // there). NOTE we deliberately do NOT declare `perTaskStopAffordance`
-      // — without the declaration an interrupt kills background tasks too
-      // (the CLI's fail-closed rule), which keeps Mcode's stop button
-      // meaning "stop everything".
+      // Per-task stop (the CLI's `stop_task` control request): kills ONE
+      // running CLI task — a long-running bash command (a dev server) —
+      // without aborting the turn. Valid while the CLI PROCESS is alive,
+      // including after the turn's logical end (the process lingers,
+      // babysitting background work; the 运行命令 panel's stop button must
+      // keep working there). NOTE we deliberately do NOT declare
+      // `perTaskStopAffordance` — without the declaration an interrupt kills
+      // background tasks too (the CLI's fail-closed rule), which keeps
+      // Mcode's stop button meaning "stop everything".
       stopTask: async (taskId: string) => {
         if (transport.done || transport.ac.signal.aborted) {
           throw new Error("回合已结束,无法停止任务(turn already finished)");
@@ -1815,6 +1729,21 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         await transport.query.stopTask(taskId);
       },
     };
+  }
+
+  /** Spawn a fresh CLI process for one transport — the first turn, or a
+   *  transport-level retry: same launch options, a new prompt feed. The
+   *  kill is a process-TREE kill: on win32 a bare SIGKILL reaches only the
+   *  CLI itself and orphans whatever it started (a dev server the model
+   *  launched). */
+  private spawnQuery(feed: PromptFeed, options: ClaudeCliOptions, ctx: ProviderContext): Promise<CliQuery> {
+    return runClaudeCliQuery(feed.iterable, {
+      ...options,
+      log: ctx.log,
+      hardKill: (child) => {
+        if (typeof child.pid === "number") void killProcessTree(child.pid);
+      },
+    });
   }
 
   /** Build a per-logical-turn adapter wired to the transport's controls:
@@ -1860,19 +1789,19 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
    *  Now the turn ends at the adapter's logical end; this loop only shepherds
    *  the stream and finalizes whatever turn is current when the process dies.
    *
-   *  Transport-level retry loop: the SDK already retries API-level transient
+   *  Transport-level retry loop: the CLI already retries API-level transient
    *  errors (429 / overloaded / 5xx) internally — surfaced via `api_retry`
-   *  system messages the adapter logs — and those close the iterator cleanly
+   *  system messages the adapter logs — and those close the stream cleanly
    *  with a `result{subtype:"error"}` (handled by handleResult, not this
-   *  catch). This wrapper catches only the THROWN-exception case the SDK
-   *  doesn't cover: stdio breaks, binary crashes, network timeouts — and
+   *  catch). This wrapper catches only the THROWN-exception case the CLI
+   *  doesn't cover: stdio breaks, process crashes, network timeouts — and
    *  only retries when NO assistant content has streamed yet (recreating
    *  later would orphan the partial output). */
   private async runDrain(
     req: StartTurnRequest,
     ctx: ProviderContext,
     transport: LiveTransport,
-    options: Options,
+    options: ClaudeCliOptions,
     turn: TurnTracker,
     configured: ClaudeContextWindowTag | undefined,
     snapshot: FileSnapshot,
@@ -1919,15 +1848,15 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
               await transport.adapter.flushFinal();
               return;
             }
-            // Fresh feed + query + adapter for the retry.
+            // Fresh feed + process + adapter for the retry.
             // options.abortController (the transport's ac) is shared, so a
             // user stop still cancels the retried attempt. options.resume
-            // re-attaches to the same SDK session so the conversation context
+            // re-attaches to the same CLI session so the conversation context
             // carries over. The retry re-sends the user message (the
             // abandoned process never answered) and inherits the roster.
             transport.feed.close();
             const retryFeed = makePromptFeed();
-            activeQuery = (await loadQuery())({ prompt: retryFeed.iterable, options });
+            activeQuery = await this.spawnQuery(retryFeed, options, ctx);
             transport.feed = retryFeed;
             transport.feedClosed = false;
             transport.query = activeQuery;
@@ -1936,7 +1865,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
             continue;
           }
           // Non-retryable, content already started, or retries exhausted.
-          ctx.log.error(`claude SDK error: ${(err as Error).message}`);
+          ctx.log.error(`claude cli error: ${(err as Error).message}`);
           ctx.emit({
             type: "error",
             sessionId: req.sessionId,
@@ -1966,10 +1895,9 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
   }
 
   /** Follow-up turn on a LIVE transport: push the user message into the
-   *  running CLI's stdin (streaming-input multi-turn — the SDK treats each
-   *  yielded message as the next user turn of the same process) and swap in
-   *  a fresh per-turn adapter. No spawn, no --resume, no second writer on
-   *  the session file. */
+   *  running CLI's stdin (each stdin line is the CLI's next user turn of the
+   *  same process) and swap in a fresh per-turn adapter. No spawn, no
+   *  --resume, no second writer on the session file. */
   private startFollowupTurn(
     req: StartTurnRequest,
     ctx: ProviderContext,
@@ -2019,7 +1947,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
   }
 
   /** Close the prompt feed (adapter's idle signal: turn over, nothing left
-   *  to babysit). The SDK ends stdin; the CLI process exits and the drain's
+   *  to babysit). Ending stdin lets the CLI process exit and the drain's
    *  flushFinal runs the exit-path safety nets. Idempotent. */
   private closeTransportFeed(t: LiveTransport, log: ProviderContext["log"]): void {
     if (t.feedClosed || t.done || t.ac.signal.aborted) return;
@@ -2028,26 +1956,24 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     t.feed.close();
   }
 
+  /** Is the user's Claude CLI there and new enough? `--version` only — it
+   *  proves as much as the old probe did (a session `system/init` says
+   *  nothing about auth either) without starting a session, calling a model
+   *  or leaving a transcript behind. */
   async healthCheck(): Promise<{ ok: boolean; version?: string; error?: string }> {
     try {
-      // A quick probe: spawn a minimal query and capture the system/init message
-      // to verify the SDK binary is functional.
-      const binaryPath = resolveSdkBinaryPath();
-      const q = (await loadQuery())({
-        prompt: "",
-        options: {
-          maxTurns: 0,
-          includePartialMessages: false,
-          ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
-        },
-      });
-      // We just need the first system/init message to confirm the binary works.
-      for await (const m of q) {
-        if (m.type === "system" && m.subtype === "init") {
-          return { ok: true, version: (m as { claude_code_version?: string }).claude_code_version };
-        }
+      const executable = resolveClaudeExecutable();
+      if (!executable) {
+        return { ok: false, error: "Claude CLI not found on PATH" };
       }
-      return { ok: false, error: "No system/init message received" };
+      const version = await probeClaudeCliVersion(executable);
+      if (!version) {
+        return { ok: false, error: "claude --version returned nothing" };
+      }
+      if (compareVersions(version, MIN_CLAUDE_CLI_VERSION) < 0) {
+        return { ok: false, version, error: `Claude CLI ${version} is older than ${MIN_CLAUDE_CLI_VERSION}` };
+      }
+      return { ok: true, version };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
     }

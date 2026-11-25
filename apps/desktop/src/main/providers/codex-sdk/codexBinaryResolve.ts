@@ -3,7 +3,7 @@
  * npm package (platform-specific optionalDependencies like
  * `@openai/codex-darwin-arm64` carry the actual executable).
  *
- * WHY THIS EXISTS — same story as sdkBinaryPath.ts (Claude): in a packaged
+ * WHY THIS EXISTS — Electron's asar cannot be executed: in a packaged
  * Electron app the resolved path lives INSIDE `app.asar`, and
  * child_process.spawn cannot execute a binary inside the asar virtual
  * filesystem. electron-builder's `asarUnpack` copies matching files to

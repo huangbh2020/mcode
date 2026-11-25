@@ -52,6 +52,8 @@ const PROVIDER_ICONS: Record<string, ProviderIconMeta> = {
   // OpenCode GUI provider — same official mark (shared with the terminal CLI
   // entry; both surfaces identify the same backend).
   "opencode-sdk": { Icon: OpenCodeBrandIcon, color: "text-content", dot: "#9CA3AF", label: "OpenCode" },
+  // Antigravity ACP Chat provider — shares the official Antigravity brand mark.
+  "antigravity-acp": { Icon: AntigravityBrandIcon, color: "", dot: "#3186FF", label: "Antigravity" },
 };
 
 export function getProviderIcon(providerId: string | null | undefined): ProviderIconMeta {

@@ -18,9 +18,8 @@ import { AutomationScheduleSchema, type AutomationSchedule } from "@contracts/au
 import { UI_TITLE_GEN_MODEL_SETTING_KEY } from "@contracts/ipc";
 import { SettingRepo } from "@main/store/repositories.js";
 import { resolveModelForGitOp } from "@main/ipc/git.js";
-import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
-import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
-import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
+import { buildCustomEnv, resolveActiveModel, type ClaudeCliEnv } from "@main/providers/claude-sdk/customEnv.js";
+import { runClaudeOneShot } from "@main/providers/claude-sdk/claudeOneShot.js";
 import { log } from "@main/lib/logger.js";
 
 export interface ScheduleIntent {
@@ -102,14 +101,13 @@ export async function parseScheduleIntent(text: string): Promise<ScheduleIntent 
     }
   }
 
-  const { query } = await loadClaudeSdk();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
 
   let releaseBridge: (() => void) | undefined;
   try {
     let model: string | undefined;
-    let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
+    let env: ClaudeCliEnv | undefined;
 
     if (customModelId) {
       const resolved = await resolveModelForGitOp(customModelId, customModelRole);
@@ -124,35 +122,14 @@ export async function parseScheduleIntent(text: string): Promise<ScheduleIntent 
     // No explicit title-gen model configured → run on default credential
     // discovery (no model/env overrides). Failure below degrades to null.
 
-    const binaryPath = resolveSdkBinaryPath();
-    const q = query({
+    const { text: raw } = await runClaudeOneShot({
       prompt: buildUserPrompt(text, new Date()),
-      options: {
-        abortController: ac,
-        maxTurns: 1,
-        model,
-        env,
-        tools: [],
-        systemPrompt: SYSTEM_PROMPT,
-        settingSources: ["project", "local"],
-        includePartialMessages: false,
-        ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
-      },
+      systemPrompt: SYSTEM_PROMPT,
+      model,
+      env,
+      tools: [],
+      abortController: ac,
     });
-
-    let raw = "";
-    for await (const m of q) {
-      if (m.type === "assistant") {
-        const content = (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content;
-        if (Array.isArray(content)) {
-          raw += content
-            .filter((b) => b.type === "text" && b.text)
-            .map((b) => b.text!)
-            .join("\n");
-        }
-      }
-      if (m.type === "result") break;
-    }
     clearTimeout(timer);
 
     const json = extractJson(raw);

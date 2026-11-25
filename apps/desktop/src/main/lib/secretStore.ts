@@ -41,6 +41,11 @@ import type {
   AuthMode,
   Protocol,
   CustomModelEntry,
+  ClaudeTierModels,
+  ClaudeMenuRoleKey,
+  ClaudeRoleKey,
+  ClaudeTierRoleMeta,
+  ClaudeTierRoleMetaMap,
 } from "@contracts/customModel";
 import { resolveProtocol } from "@contracts/customModel";
 import { sanitizeCustomHeaders } from "@main/providers/upstreamHeaders.js";
@@ -200,6 +205,63 @@ function flattenRoles(roles: LegacyRoleBindings): CustomModelEntry[] {
   return entries;
 }
 
+const CLAUDE_ROLE_META_KEYS: readonly ClaudeRoleKey[] = [
+  "sonnet",
+  "opus",
+  "fable",
+  "haiku",
+  "subagent",
+];
+
+/** Normalize `tierModels` + legacy `subagentModel` into a clean sparse record
+ *  (or undefined when all five tier slots are blank). */
+function sanitizeTierModels(
+  t?: ClaudeTierModels,
+  legacySubagent?: string,
+): ClaudeTierModels | undefined {
+  const defaultModel = t?.defaultModel?.trim() || undefined;
+  const sonnet = t?.sonnet?.trim() || undefined;
+  const opus = t?.opus?.trim() || undefined;
+  const fable = t?.fable?.trim() || undefined;
+  const haiku = t?.haiku?.trim() || undefined;
+  const subagent = (t?.subagent ?? legacySubagent)?.trim() || undefined;
+  if (!defaultModel && !sonnet && !opus && !fable && !haiku && !subagent) return undefined;
+
+  const roleByVal: Record<ClaudeRoleKey, string | undefined> = {
+    sonnet,
+    opus,
+    fable,
+    haiku,
+    subagent,
+  };
+  const roleMeta: ClaudeTierRoleMetaMap = {};
+  if (t?.roleMeta) {
+    for (const key of CLAUDE_ROLE_META_KEYS) {
+      if (!roleByVal[key]) continue;
+      const raw = t.roleMeta[key];
+      if (!raw) continue;
+      const displayName = key !== "subagent" ? raw.displayName?.trim() || undefined : undefined;
+      const supports1m = raw.supports1m === true ? true : undefined;
+      if (displayName || supports1m !== undefined || raw.supports1m === false) {
+        const entry: ClaudeTierRoleMeta = {};
+        if (displayName) entry.displayName = displayName;
+        if (raw.supports1m !== undefined) entry.supports1m = raw.supports1m;
+        if (Object.keys(entry).length > 0) roleMeta[key] = entry;
+      }
+    }
+  }
+
+  return {
+    ...(defaultModel ? { defaultModel } : {}),
+    ...(sonnet ? { sonnet } : {}),
+    ...(opus ? { opus } : {}),
+    ...(fable ? { fable } : {}),
+    ...(haiku ? { haiku } : {}),
+    ...(subagent ? { subagent } : {}),
+    ...(Object.keys(roleMeta).length > 0 ? { roleMeta } : {}),
+  };
+}
+
 /** Promote any legacy meta record to the flat model-list shape.
  *  Already-migrated records pass through untouched (the legacy `roles` ghost,
  *  if present, survives until the next save). */
@@ -209,6 +271,10 @@ function migrateMeta(raw: Record<string, unknown>): MigratedMeta {
   // default and keeps old configs behaving exactly as before.
   const meta = raw as unknown as MigratedMeta;
   const withProtocol: MigratedMeta = meta.protocol ? meta : { ...meta, protocol: "anthropic" };
+  const tierModels = sanitizeTierModels(withProtocol.tierModels, withProtocol.subagentModel);
+  const withTiers: MigratedMeta = tierModels
+    ? { ...withProtocol, tierModels, subagentModel: tierModels.subagent }
+    : withProtocol;
 
   // The flat shape carries models as an array of {id, supports1m} OBJECTS.
   // The OLDEST shape also used an array — of plain strings — so distinguish
@@ -217,7 +283,7 @@ function migrateMeta(raw: Record<string, unknown>): MigratedMeta {
     Array.isArray(raw.models) &&
     raw.models.every((m) => m != null && typeof m === "object" && !Array.isArray(m))
   ) {
-    return withProtocol; // already flat shape
+    return withTiers; // already flat shape
   }
 
   // Rebuild the role map from whichever legacy shape the record carries.
@@ -292,6 +358,7 @@ export const CustomModelStore = {
     const keys = readKeyMap();
     return metas.map((m) => {
       const cleartext = keys[m.id] ? decrypt(keys[m.id]) : "";
+      const tierModels = sanitizeTierModels(m.tierModels, m.subagentModel);
       return {
         id: m.id,
         name: m.name,
@@ -300,7 +367,8 @@ export const CustomModelStore = {
         protocol: resolveProtocol(m.protocol),
         authTokenMasked: maskToken(cleartext),
         models: m.models,
-        subagentModel: m.subagentModel,
+        tierModels,
+        subagentModel: tierModels?.subagent,
         disableNonEssentialTraffic: m.disableNonEssentialTraffic ?? true,
         timeoutMs: m.timeoutMs,
         customHeaders: m.customHeaders,
@@ -318,14 +386,16 @@ export const CustomModelStore = {
     const keys = readKeyMap();
     const now = Date.now();
     const disableTraffic = input.disableNonEssentialTraffic ?? true;
-    // Subagent pin must reference a model this config actually serves; a stale
-    // id (e.g. the model row was removed in the same edit) is dropped rather
-    // than persisted — see ApiConfig.subagentModel.
-    const validIds = new Set(input.models.map((m) => m.id));
-    const subagentModel =
-      input.subagentModel && validIds.has(input.subagentModel)
-        ? input.subagentModel
-        : undefined;
+    const models: CustomModelEntry[] = input.models.map((m) => {
+      const displayName = m.displayName?.trim() || undefined;
+      return {
+        ...m,
+        id: m.id.trim(),
+        ...(displayName ? { displayName } : {}),
+      };
+    });
+    const tierModels = sanitizeTierModels(input.tierModels, input.subagentModel);
+    const subagentModel = tierModels?.subagent;
     // Extra headers are sanitized on write as well as on read (see readMeta),
     // so a caller bypassing the settings form can't persist a name/value the
     // request path would silently drop — or that fetch() would reject outright.
@@ -345,7 +415,8 @@ export const CustomModelStore = {
         baseUrl: input.baseUrl,
         authMode: resolveAuthMode(input.authMode),
         protocol: resolveProtocol(input.protocol),
-        models: input.models,
+        models,
+        tierModels,
         subagentModel,
         disableNonEssentialTraffic: disableTraffic,
         timeoutMs: input.timeoutMs,
@@ -361,7 +432,8 @@ export const CustomModelStore = {
         baseUrl: input.baseUrl,
         authMode: resolveAuthMode(input.authMode),
         protocol: resolveProtocol(input.protocol),
-        models: input.models,
+        models,
+        tierModels,
         subagentModel,
         disableNonEssentialTraffic: disableTraffic,
         timeoutMs: input.timeoutMs,
@@ -398,9 +470,10 @@ export const CustomModelStore = {
    *   2. a legacy ROLE key ("sonnet" / "haiku" / …) still persisted on
    *      pre-refactor sessions — resolved through the migration ghost so
    *      those sessions keep pointing at the same gateway model;
-   *   3. anything else (e.g. the model was deleted) → the first entry.
+   *   3. when `selected` is omitted (e.g. syncing settings.json), prefer
+   *      `tierModels.defaultModel` if present in `models`, else `models[0]`.
    */
-  resolveApiConfig(id: string, selected?: string): ApiConfig | undefined {
+  resolveApiConfig(id: string, selected?: string, selectedRole?: ClaudeMenuRoleKey): ApiConfig | undefined {
     const metas = readMeta();
     const meta = metas.find((m) => m.id === id);
     if (!meta) return undefined;
@@ -412,14 +485,19 @@ export const CustomModelStore = {
     const models = meta.models.filter((m) => m.id.trim());
     if (models.length === 0) return undefined;
 
+    const tierModels = sanitizeTierModels(meta.tierModels, meta.subagentModel);
     let resolved = selected && models.some((m) => m.id === selected) ? selected : undefined;
     if (!resolved && selected && (LEGACY_ROLE_KEYS as readonly string[]).includes(selected)) {
       resolved = meta.roles?.[selected as LegacyRoleKey]?.requestModel?.trim();
     }
+    if (!resolved && !selected && tierModels?.defaultModel) {
+      if (models.some((m) => m.id === tierModels.defaultModel)) {
+        resolved = tierModels.defaultModel;
+      }
+    }
     const selectedModel = resolved ?? models[0].id;
-    // Drop a pin the model list no longer contains (the UI validates on
-    // save; this is the belt-and-suspenders for hand-edited JSON).
-    const pinned = meta.subagentModel;
+    const validSelectedRole =
+      selectedRole && tierModels?.[selectedRole] === selectedModel ? selectedRole : undefined;
 
     return {
       baseUrl: meta.baseUrl,
@@ -427,9 +505,10 @@ export const CustomModelStore = {
       authMode: resolveAuthMode(meta.authMode),
       protocol: resolveProtocol(meta.protocol),
       selectedModel,
+      ...(validSelectedRole ? { selectedRole: validSelectedRole } : {}),
       models,
-      subagentModel:
-        pinned && models.some((m) => m.id === pinned) ? pinned : undefined,
+      tierModels,
+      subagentModel: tierModels?.subagent,
       disableNonEssentialTraffic: meta.disableNonEssentialTraffic ?? true,
       timeoutMs: meta.timeoutMs,
       // Already normalized by readMeta; forwarded verbatim so both delivery

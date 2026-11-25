@@ -6,7 +6,8 @@ import { IconCheck, IconChevronDown, IconLock, IconSettings } from "@renderer/li
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
-import type { RuntimeAgentId } from "@contracts/ipc";
+import { api } from "@renderer/lib/api.js";
+import type { AntigravityCliStatus, ClaudeCliStatus, RuntimeAgentId } from "@contracts/ipc";
 
 /** Provider id → runtime agent ("claude-sdk" → "claude", …). Providers
  *  outside the runtime-backed trio (future ones) map to null and are never
@@ -81,6 +82,13 @@ export function ProviderDropdown({
   const runtimes = useSessionStore((s) => s.runtimes);
   const reloadRuntimes = useSessionStore((s) => s.reloadRuntimes);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
+  // Claude left the managed-runtime set (2026-11-24): its sessions spawn the
+  // USER'S CLI, so its availability comes from the CLI probe, not the
+  // runtimes list (which no longer carries a claude row). null = not yet
+  // probed — treated as available so the item doesn't flash grey before the
+  // answer lands (and on the web shell, where the call is unsupported).
+  const [claudeCli, setClaudeCli] = useState<ClaudeCliStatus | null>(null);
+  const [agyCli, setAgyCli] = useState<AntigravityCliStatus | null>(null);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   // The active thread has messages → its provider is locked. (Controlled
   // mode skips the lock: the editor's SDK is always choosable.)
@@ -90,15 +98,26 @@ export function ProviderDropdown({
     return bucket !== undefined && bucket.length > 0;
   });
 
-  // Availability per provider, derived from the runtime list. Before the list
-  // hydrates (and on the web shell, where reloadRuntimes no-ops) it's empty —
-  // treat every provider as available rather than flashing everything greyed.
+  // Availability per provider, derived from the runtime list — except
+  // claude-sdk and antigravity-acp, which key on the user's CLI probes.
+  // Before the list hydrates (and on the web shell, where reloadRuntimes
+  // no-ops) it's empty — treat every provider as available rather than
+  // flashing everything greyed.
   const runtimeByAgent = new Map(runtimes.map((r) => [r.agent, r]));
   const isAvailable = (pid: string): boolean => {
+    if (pid === "claude-sdk") return claudeCli === null || claudeCli.usable;
+    if (pid === "antigravity-acp") return agyCli === null || agyCli.usable;
     const agent = runtimeAgentFor(pid);
     if (agent === null || runtimes.length === 0) return true;
     const rt = runtimeByAgent.get(agent);
     return rt !== undefined && rt.source !== null;
+  };
+  /** Menu-row subtitle for an unavailable provider ("Runtime not installed" /
+   *  "CLI too old — update it"). */
+  const unavailableLabel = (pid: string): string => {
+    if (pid === "claude-sdk" && claudeCli?.reason === "too-old") return t("chat.provider.cliTooOld");
+    if (pid === "antigravity-acp" && agyCli?.reason === "too-old") return t("chat.provider.cliTooOld");
+    return t("chat.provider.notInstalled");
   };
 
   // Single-provider installs need no picker.
@@ -169,7 +188,20 @@ export function ProviderDropdown({
       onOpenChange={(next) => {
         // Refresh availability when (re)opening — installs from the settings
         // panel (or first hydration races) are reflected on the next open.
-        if (next) void reloadRuntimes();
+        // `force` also drops the main-side ~10-min CLI caches, so a CLI the
+        // user installed OUTSIDE Mcode shows up on the next open; a probe is
+        // one `claude --version` spawn, cheap for a user-opened menu.
+        if (next) {
+          void reloadRuntimes();
+          void api.runtimes
+            .claudeCli({ force: true })
+            .then(setClaudeCli)
+            .catch(() => setClaudeCli(null));
+          void api.antigravity
+            .cliStatus({ force: true })
+            .then(setAgyCli)
+            .catch(() => setAgyCli(null));
+        }
         setOpen(next);
       }}
     >
@@ -211,7 +243,7 @@ export function ProviderDropdown({
                   </span>
                   {!available ? (
                     <span className="shrink-0 text-[11px] text-content-subtle">
-                      {t("chat.provider.notInstalled")}
+                      {unavailableLabel(p.id)}
                     </span>
                   ) : activeItem ? (
                     <IconCheck size={14} className="shrink-0" />

@@ -77,7 +77,6 @@
  * {@link ../../upstreamHeaders.ts}.
  */
 import type { ApiConfig, CustomModelEntry } from "@contracts/customModel";
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -97,6 +96,10 @@ import {
  *  Mcode's turns, and user-level skills live under ~/.mcode/skills where
  *  Mcode's import feature places them. */
 export const MCODE_CONFIG_DIR = path.join(homedir(), ".mcode");
+
+/** The Claude CLI child's environment. It REPLACES the subprocess environment
+ *  entirely, so every builder spreads `process.env`` first. */
+export type ClaudeCliEnv = Record<string, string | undefined>;
 
 /** Session id handed to a gateway that requires one when the caller has no
  *  Mcode session to name — the connection probe, title generation, the
@@ -142,7 +145,119 @@ export function strip1MSuffix(model: string): string {
 export function resolveActiveModel(cfg: ApiConfig): string | undefined {
   const entry = resolveSelectedEntry(cfg);
   if (!entry) return undefined;
-  return entry.supports1m ? with1MSuffix(entry.id) : entry.id;
+  const roleMeta = cfg.selectedRole ? cfg.tierModels?.roleMeta?.[cfg.selectedRole] : undefined;
+  const supports1m =
+    roleMeta?.supports1m !== undefined ? roleMeta.supports1m : Boolean(entry.supports1m);
+  return supports1m ? with1MSuffix(entry.id) : entry.id;
+}
+
+/** All Claude CLI environment variable keys managed by Mcode's custom-endpoint
+ *  env builder and `settings.json` sync. Used both to clear stale keys when
+ *  switching providers and to shadow ~/.mcode/settings.json via `--settings`. */
+export const CLAUDE_MANAGED_ENV_KEYS = [
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_SMALL_FAST_MODEL",
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+  "API_TIMEOUT_MS",
+  "ANTHROPIC_CUSTOM_HEADERS",
+] as const;
+
+/**
+ * Resolve the pure `Record<string, string>` of Claude CLI environment variables
+ * for an `ApiConfig` (without spreading `process.env` or setting
+ * `CLAUDE_CONFIG_DIR`). Shared by {@link buildCustomEnv}, `--settings.env`
+ * isolation in `ClaudeAgentSdkProvider`, and `settings.json` sync so all three
+ * paths emit identical model/tier/header mappings.
+ */
+export function buildClaudeSettingsEnv(
+  cfg: ApiConfig,
+  opts?: { sessionId?: string; thinkingEffort?: string; inheritedCustomHeaders?: string },
+): Record<string, string> {
+  const env: Record<string, string> = {};
+
+  env.ANTHROPIC_BASE_URL = cfg.baseUrl;
+
+  if (cfg.authMode === "api_key") {
+    env.ANTHROPIC_API_KEY = cfg.authToken;
+  } else {
+    env.ANTHROPIC_AUTH_TOKEN = cfg.authToken;
+  }
+
+  // Resolve primary model + per-tier overrides. Any blank tier falls back to
+  // the selected model's bare id so third-party gateways never fail with
+  // unknown built-in Anthropic model names (503).
+  const entry = resolveSelectedEntry(cfg);
+  const bare = entry?.id ? strip1MSuffix(entry.id) : "";
+  const pickTier = (raw?: string): string => {
+    const trimmed = raw?.trim();
+    return trimmed ? strip1MSuffix(trimmed) : bare;
+  };
+  const haiku = pickTier(cfg.tierModels?.haiku);
+  const sonnet = pickTier(cfg.tierModels?.sonnet);
+  const opus = pickTier(cfg.tierModels?.opus);
+  const subagent = pickTier(cfg.tierModels?.subagent ?? cfg.subagentModel);
+  const fable = pickTier(cfg.tierModels?.fable) || opus;
+
+  if (haiku) {
+    env.ANTHROPIC_DEFAULT_HAIKU_MODEL = haiku;
+    env.ANTHROPIC_SMALL_FAST_MODEL = haiku;
+  }
+  if (sonnet) {
+    env.ANTHROPIC_DEFAULT_SONNET_MODEL = sonnet;
+    env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME = sonnet;
+  }
+  if (opus) {
+    env.ANTHROPIC_DEFAULT_OPUS_MODEL = opus;
+  }
+  if (fable) {
+    env.ANTHROPIC_DEFAULT_FABLE_MODEL = fable;
+  }
+  if (subagent) {
+    env.CLAUDE_CODE_SUBAGENT_MODEL = subagent;
+  }
+
+  if (cfg.disableNonEssentialTraffic) {
+    env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  }
+
+  const mainModel = resolveActiveModel(cfg);
+  if (mainModel) {
+    env.ANTHROPIC_MODEL = mainModel;
+  }
+
+  if (cfg.timeoutMs && cfg.timeoutMs > 0) {
+    env.API_TIMEOUT_MS = String(cfg.timeoutMs);
+  }
+
+  if (cfg.protocol === "anthropic") {
+    const upstreamHeaders = resolveUpstreamHeaders(
+      {
+        ...parseCustomHeaderLines(opts?.inheritedCustomHeaders),
+        ...cfg.customHeaders,
+      },
+      cfg.baseUrl,
+      opts?.sessionId ? `mcode-${opts.sessionId}` : PROCESS_SESSION_ID,
+    );
+    if (Object.keys(upstreamHeaders).length > 0) {
+      env.ANTHROPIC_CUSTOM_HEADERS = formatCustomHeaderLines(upstreamHeaders);
+    }
+  } else if (cfg.protocol === "openai" && isValidEffortHeaderValue(opts?.thinkingEffort)) {
+    env.ANTHROPIC_CUSTOM_HEADERS = formatCustomHeaderLines({
+      ...parseCustomHeaderLines(opts?.inheritedCustomHeaders),
+      [MCODE_EFFORT_HEADER]: opts.thinkingEffort,
+    });
+  }
+
+  return env;
 }
 
 /**
@@ -159,139 +274,26 @@ export function resolveActiveModel(cfg: ApiConfig): string | undefined {
 export function buildCustomEnv(
   cfg: ApiConfig,
   opts?: { sessionId?: string; thinkingEffort?: string },
-): NonNullable<Options["env"]> {
-  const env: NonNullable<Options["env"]> = { ...process.env };
+): ClaudeCliEnv {
+  const env: ClaudeCliEnv = { ...process.env };
+  const overrides = buildClaudeSettingsEnv(cfg, {
+    ...opts,
+    inheritedCustomHeaders: env.ANTHROPIC_CUSTOM_HEADERS,
+  });
 
-  env.ANTHROPIC_BASE_URL = cfg.baseUrl;
-
-  // Auth: gateways differ in which header they read. The official API uses
-  // x-api-key (ANTHROPIC_API_KEY); most third-party gateways expect
-  // Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). When in token mode we
-  // explicitly clear ANTHROPIC_API_KEY so the SDK doesn't send both and
-  // confuse the gateway (and vice-versa).
-  //
-  // NOTE: DeepSeek's official Claude Code guide uses ANTHROPIC_AUTH_TOKEN
-  // (Bearer). The UI defaults to auth_token for this reason. If a user picks
-  // api_key and the gateway returns an opaque 404 (not 401), authMode is a
-  // likely culprit — some gateways hide endpoint existence on bad auth.
+  // Explicitly clear the inactive auth channel from inherited process.env so
+  // the CLI never sends both Authorization and x-api-key.
   if (cfg.authMode === "api_key") {
-    env.ANTHROPIC_API_KEY = cfg.authToken;
     env.ANTHROPIC_AUTH_TOKEN = undefined;
   } else {
-    env.ANTHROPIC_AUTH_TOKEN = cfg.authToken;
     env.ANTHROPIC_API_KEY = undefined;
   }
 
-  // Resolve the model driving this turn. The flat model list has no per-tier
-  // bindings, so the SELECTED model is mirrored onto every background-tier
-  // env var (bare id — never the `[1m]` suffix; see the file header). This
-  // replaces both the old per-role binding table and its subagent fallback:
-  // with a flat list there is nothing to differentiate, and unbound tiers
-  // falling back to Anthropic's built-in model names was exactly what broke
-  // the Task tool on third-party gateways.
-  const entry = resolveSelectedEntry(cfg);
-  if (entry) {
-    const bare = entry.id;
-    env.ANTHROPIC_DEFAULT_HAIKU_MODEL = bare;
-    env.ANTHROPIC_DEFAULT_SONNET_MODEL = bare;
-    env.ANTHROPIC_DEFAULT_OPUS_MODEL = bare;
-    env.ANTHROPIC_DEFAULT_FABLE_MODEL = bare;
-    env.CLAUDE_CODE_SUBAGENT_MODEL = bare;
-    // Legacy haiku alias: older Claude Code builds read ANTHROPIC_SMALL_FAST_MODEL
-    // (37 hits in the v0.3.218 binary) before ANTHROPIC_DEFAULT_HAIKU_MODEL
-    // existed. Mirror the same bare id so background "small/fast" requests
-    // route correctly on builds that still consult the legacy name.
-    env.ANTHROPIC_SMALL_FAST_MODEL = bare;
-    // DeepSeek private convention: ANTHROPIC_DEFAULT_SONNET_MODEL_NAME records
-    // the logical sonnet model name WITHOUT the `[1m]` suffix. The gateway
-    // consults this for internal routing. Always the bare name.
-    env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME = bare;
-  }
-
-  // Non-essential traffic (telemetry, etc.) — almost always desirable to
-  // disable on a third-party gateway, since those endpoints don't exist there
-  // and produce noise/errors.
-  if (cfg.disableNonEssentialTraffic) {
-    env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
-  }
-
-  // Pin the primary turn's model via ANTHROPIC_MODEL. This is the channel the
-  // binary uses to route the foreground request; it's what DeepSeek's official
-  // Claude Code integration configures. Carries the `[1m]` suffix when the
-  // selected model declares supports1m, so a 1M-context turn is routed
-  // correctly. (We deliberately do NOT also pass Options.model / --model —
-  // see the file header; one channel is enough and avoids disagreement.)
-  const mainModel = resolveActiveModel(cfg);
-  if (mainModel) {
-    env.ANTHROPIC_MODEL = mainModel;
-  }
-
-  // Per-request timeout (ms). The SDK honors API_TIMEOUT_MS.
-  if (cfg.timeoutMs && cfg.timeoutMs > 0) {
-    env.API_TIMEOUT_MS = String(cfg.timeoutMs);
-  }
-
-  // Gateway request headers. The binary forwards ANTHROPIC_CUSTOM_HEADERS on
-  // every API request, which is exactly the channel a direct (anthropic-
-  // protocol) endpoint needs. Two parts:
-  //
-  //   - whatever the user configured on the endpoint (routing hints, tenant
-  //     ids, a home-grown auth scheme);
-  //   - an auto session id for gateways that refuse to route without one
-  //     (OpenCode Zen's "Go" plan answers `400 MissingSessionID` otherwise).
-  //     Named after the Mcode session so one conversation keeps one id, which
-  //     is what the gateway wants it for (routing + prompt caching).
-  //
-  // Merged OVER any inherited OS-level value: ANTHROPIC_CUSTOM_HEADERS is a
-  // documented Claude Code knob, and someone may have set it globally (e.g. as
-  // a workaround before this field existed). Clobbering it would silently
-  // break their setup.
-  //
-  // Skipped for the `openai` protocol: there the baseUrl has already been
-  // rewritten to the local bridge, so these headers would be addressed to
-  // localhost rather than the gateway — the bridge owns upstream headers for
-  // that protocol (and injects its own session id, since only it still knows
-  // the real gateway host).
-  if (cfg.protocol === "anthropic") {
-    const upstreamHeaders = resolveUpstreamHeaders(
-      {
-        ...parseCustomHeaderLines(env.ANTHROPIC_CUSTOM_HEADERS),
-        ...cfg.customHeaders,
-      },
-      cfg.baseUrl,
-      opts?.sessionId ? `mcode-${opts.sessionId}` : PROCESS_SESSION_ID,
-    );
-    if (Object.keys(upstreamHeaders).length > 0) {
-      env.ANTHROPIC_CUSTOM_HEADERS = formatCustomHeaderLines(upstreamHeaders);
-    }
-  } else if (cfg.protocol === "openai" && isValidEffortHeaderValue(opts?.thinkingEffort)) {
-    // OpenAI-protocol bridge path: the thinking level can't go through the
-    // binary (it would be rendered as an Anthropic `thinking` budget the
-    // OpenAI-protocol endpoint can't read), so it rides our internal header
-    // instead. The binary attaches ANTHROPIC_CUSTOM_HEADERS to every API
-    // request — including the ones addressed to the local bridge — and the
-    // bridge translates the header into `reasoning_effort` /
-    // `enable_thinking` per the model's declaration. Merged over any inherited
-    // OS-level value for the same reason as the anthropic branch above; the
-    // bridge never forwards this header to the real gateway.
-    env.ANTHROPIC_CUSTOM_HEADERS = formatCustomHeaderLines({
-      ...parseCustomHeaderLines(env.ANTHROPIC_CUSTOM_HEADERS),
-      [MCODE_EFFORT_HEADER]: opts.thinkingEffort,
-    });
-  }
+  Object.assign(env, overrides);
 
   // Always redirect the claude binary's user-level config root to Mcode's
-  // own directory (~/.mcode). This is the key mechanism that makes user-level
-  // skills load on custom endpoints: with the config root moved here, the
-  // binary's user skill auto-load scans ~/.mcode/skills/ (where Mcode's import
-  // feature places skills) instead of ~/.claude/skills/. It also means the
-  // cc-switch-controlled ~/.claude/settings.json is never read, so we no
-  // longer need to drop "user" from settingSources to protect the env.
+  // own directory (~/.mcode).
   env.CLAUDE_CONFIG_DIR = MCODE_CONFIG_DIR;
-
-  // Enable todo / task tracking tools (TaskCreate, TaskUpdate, TaskList, TaskGet)
-  // for all models, bypassing the binary's hardcoded model allowlist.
-  env.CLAUDE_CODE_ENABLE_TODO_TOOLS = "1";
 
   return env;
 }

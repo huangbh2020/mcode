@@ -9,11 +9,13 @@
  *
  *   managed  — the on-demand install under userData/runtimes (this panel's
  *              install/remove operate on it)
- *   dev      — node_modules of a development checkout (pi/codex devDeps,
- *              claude's SDK platform optionalDependency); absent in packaged
- *              builds
+ *   dev      — node_modules of a development checkout (pi/codex devDeps);
+ *              absent in packaged builds
  *   bundled  — a legacy build that still ships the payload in
  *              app.asar.unpacked
+ *
+ * Claude is not part of this: its sessions run the user's own CLI
+ * (lib/claudeExecutable.ts).
  *
  * Pure node — no electron import (shares modules with the headless codex
  * smoke chain).
@@ -92,38 +94,6 @@ export function installedManagedPayload(
 
 /* ── fallback probes (dev node_modules / legacy bundled) ── */
 
-function probeClaudeFallback(): RuntimeAvailability | null {
-  try {
-    // The SDK's exports map doesn't expose ./package.json — resolve its main
-    // entry instead, then switch to ITS require so pnpm's virtual-store
-    // siblings (the platform binary package) resolve.
-    const req = createRequire(import.meta.url);
-    const sdkEntry = req.resolve("@anthropic-ai/claude-agent-sdk");
-    const sdkReq = createRequire(sdkEntry);
-    const suffix = `${process.platform}-${process.arch}`;
-    const names = process.platform === "win32" ? ["claude.exe"] : ["claude"];
-    for (const name of names) {
-      let resolved: string | null = null;
-      try {
-        resolved = sdkReq.resolve(`@anthropic-ai/claude-agent-sdk-${suffix}/${name}`);
-      } catch {
-        continue;
-      }
-      const unpacked = toUnpackedPath(resolved);
-      if (!existsSync(unpacked)) continue;
-      return {
-        source: classifyFallbackPath(unpacked),
-        // The binary sits at the platform package root — version next to it.
-        version: readPkgVersion(join(dirname(unpacked), "package.json")),
-        path: unpacked,
-      };
-    }
-  } catch {
-    // SDK package not reachable from this context
-  }
-  return null;
-}
-
 function probeCodexFallback(): RuntimeAvailability | null {
   const binary = resolveBundledCodexBinaryPath();
   if (!binary) return null;
@@ -167,8 +137,11 @@ export function probeRuntimeAvailability(agent: RuntimeAgentId): RuntimeAvailabi
   const managed = installedManagedPayload(agent);
   if (managed) return { source: "managed", version: managed.version, path: managed.entry };
   switch (agent) {
+    // Not a managed runtime: Claude sessions run the user's own CLI
+    // (lib/claudeExecutable.ts). The managed-dir probe above still reports a
+    // copy an older Mcode left behind until the startup cleanup removes it.
     case "claude":
-      return probeClaudeFallback();
+      return null;
     case "codex":
       return probeCodexFallback();
     case "pi":

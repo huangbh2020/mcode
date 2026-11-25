@@ -1,14 +1,17 @@
 /**
  * Shared system-prompt fragments — provider-neutral text appended to the base
- * system prompt of every agent turn.
+ * system prompt of an agent turn.
  *
- * Kept in one place so the Claude provider (`systemPrompt.append`) and the Pi
- * provider (`before_agent_start` extension) never drift, mirroring the
+ * Kept in one place so providers never drift, mirroring the
  * `ASK_SYSTEM_PROMPT` pattern in `askQuestion.ts`.
  *
  * Fragments that MUST differ per SDK (engine name, driver, disambiguation)
  * live here too, as explicit `*_IDENTITY_PROMPT` variants — one per provider —
  * so each can be tuned independently without cross-contamination.
+ *
+ * There is NO Claude identity prompt any more (2026-11-24): a Claude session
+ * runs the stock CLI and gets the stock CLI's system prompt — nothing
+ * ambient is appended (see ClaudeAgentSdkProvider's "system prompt appends").
  */
 
 /**
@@ -20,19 +23,6 @@
 export function joinPromptSections(...sections: string[]): string {
   return sections.filter(Boolean).join("\n\n");
 }
-
-/**
- * Product-identity prompt (Claude variant): an always-on self-naming rule —
- * not just an "if asked" correction — so the model presents itself as Mcode's
- * assistant in ordinary replies too, instead of defaulting to "Claude Code".
- * The engine attribution (Claude 模型) is disclosed only when the user asks.
- */
-export const CLAUDE_IDENTITY_PROMPT = [
-  `## 你的身份`,
-  `你是 Mcode 的 AI 编程助手——Mcode 是基于 Claude Agent SDK 构建的桌面端 AI 编程 IDE(提供会话管理、文件/git/终端、浏览器预览等能力),你运行在其中。`,
-  `在所有回复中自称"Mcode 的 AI 编程助手"(可简称 Mcode 助手);不要自称 Claude Code、Claude CLI、Claude,也不要提及网页版 Claude。`,
-  `仅当用户明确追问底层模型时,才如实说明你由 Claude 模型驱动、由 Mcode 应用承载。`,
-].join("\n");
 
 /**
  * Product-identity prompt (Pi variant). Same Mcode identity as the Claude
@@ -66,22 +56,10 @@ export const CODEX_IDENTITY_PROMPT = [
 ].join("\n");
 
 /**
- * Plan-mode nudge (Claude variant): appended ONLY when the user picked the
- * "Plan" permission mode in Mcode's UI. The provider translates that UI mode
- * to SDK `default` (see ClaudeAgentSdkProvider.startTurn for why — the CLI's
- * plan permission-mode breaks the ExitPlanMode approval round-trip on turn
- * resume), so the model must enter plan mode itself via the EnterPlanMode
- * tool for ExitPlanMode's approval flow to engage.
- */
-export const CLAUDE_PLAN_MODE_NUDGE = [
-  `## 计划模式`,
-  `用户在 Mcode 界面选择了「计划模式」:先调研、后实施。请先用只读工具(Read/Grep/Glob/WebSearch 等)完成调研,然后调用 EnterPlanMode 工具进入计划模式;形成方案后把计划写入计划文件,并调用 ExitPlanMode 请求用户批准,获得批准后才开始实施。`,
-  `等待计划批准期间不要修改任何文件。若用户否决了计划,根据反馈修订后再次调用 ExitPlanMode。`,
-].join("\n");
-
-/**
- * Scheduled task proposal nudge: appended to guide the model to create or
- * refine scheduled tasks when the user uses `/schedule` or asks for scheduled/cron automation.
+ * Scheduled task proposal nudge: guides the model to create or refine
+ * scheduled tasks. Appended ONLY to sessions in which the user invoked
+ * `/schedule` (the Claude provider keeps per-session memory of that) — it is
+ * the contract the schedule card is rendered from, not an ambient instruction.
  */
 export const SCHEDULED_TASK_PROPOSAL_NUDGE = [
   `## 定时任务与周期调度需求指引 (/schedule)`,
@@ -106,19 +84,3 @@ export const SCHEDULED_TASK_PROPOSAL_NUDGE = [
   '```',
   `3. 若用户对之前的提案提出调整意见(如修改时间、变更提示词细节等)，结合历史上下文进行调整，并在回复中再次输出完整的最新 \`\`\`scheduled_task_proposal 代码块。`,
 ].join("\n");
-
-/**
- * Task tracking nudge (Claude variant): guides the model to proactively
- * break down multi-step tasks using TaskCreate and track execution progress
- * with TaskUpdate, so the user interface can display real-time task progress
- * in the top-right activity capsule.
- */
-export const CLAUDE_TASK_TRACKING_NUDGE = [
-  `## 任务拆解与进度跟踪 (Task Tracking)`,
-  `当用户提出了需要多步执行、代码重构、多文件修改、复杂功能实现或排障等非单一问答的任务时：`,
-  `1. **主动拆解**：在开始执行实质性变更前，先调用 \`TaskCreate\` 工具按逻辑步骤创建任务项，条目应简明清晰（使用祈使动词短语，如 "调研现有认证实现"、"重写 Token 校验中间件"、"补充单元测试" 等）；`,
-  `2. **实时同步**：当开始处理某个具体任务项时，调用 \`TaskUpdate(taskId, status: "in_progress")\` 将其标记为进行中；任务完成且验证通过后，立即调用 \`TaskUpdate(taskId, status: "completed")\` 标记为已完成；若遇到阻塞或需要新增子任务，可调用 \`TaskCreate\` 追加；`,
-  `3. **界面联动**：你的任务更新会实时反映在 Mcode 界面右上角的任务进度胶囊中，帮助用户直观掌握你的执行状态。轻量单步问答无需调用。`,
-].join("\n");
-
-

@@ -368,6 +368,9 @@ export interface AgentProvider {
    * host refuses the revision rather than splitting view from context. */
   reviseConversation?(input: ProviderReviseInput): Promise<ProviderReviseResult>;
 
+  /** Optional: clean up per-session provider resources (e.g. persistent child process). */
+  disposeSession?(sessionId: string): void;
+
   /** Optional: quick health / version probe for settings UI. */
   healthCheck?(): Promise<{ ok: boolean; version?: string; error?: string }>;
 }

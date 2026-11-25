@@ -173,9 +173,19 @@ const api = {
       ipcRenderer.invoke(IPC.CUSTOM_MODEL_DELETE, input)) as RpcMap["customModel.delete"],
     test: ((input) =>
       ipcRenderer.invoke(IPC.CUSTOM_MODEL_TEST, input)) as RpcMap["customModel.test"],
+    fetchModels: ((input) =>
+      ipcRenderer.invoke(IPC.CUSTOM_MODEL_FETCH_MODELS, input)) as RpcMap["customModel.fetchModels"],
     /** Settings UI eye-icon only — returns cleartext token for display. */
     getToken: ((input) =>
       ipcRenderer.invoke(IPC.CUSTOM_MODEL_GET_TOKEN, input)) as RpcMap["customModel.getToken"],
+    getSyncState: (() =>
+      ipcRenderer.invoke(IPC.CUSTOM_MODEL_GET_SYNC_STATE)) as RpcMap["customModel.getSyncState"],
+    setActive: ((input) =>
+      ipcRenderer.invoke(IPC.CUSTOM_MODEL_SET_ACTIVE, input)) as RpcMap["customModel.setActive"],
+    setSyncTarget: ((input) =>
+      ipcRenderer.invoke(IPC.CUSTOM_MODEL_SET_SYNC_TARGET, input)) as RpcMap["customModel.setSyncTarget"],
+    importSettings: ((input) =>
+      ipcRenderer.invoke(IPC.CUSTOM_MODEL_IMPORT_SETTINGS, input)) as RpcMap["customModel.importSettings"],
   },
 
   /** Pi models visual editor — reads/writes ~/.pi/agent/models.json.
@@ -224,6 +234,14 @@ const api = {
       ipcRenderer.invoke(IPC.OPENCODE_CONNECT_KEY, input)) as RpcMap["opencode.connectKey"],
     logout: ((input) =>
       ipcRenderer.invoke(IPC.OPENCODE_LOGOUT, input)) as RpcMap["opencode.logout"],
+  },
+
+  /** Antigravity (`agy acp`) — local CLI probe + model listing. */
+  antigravity: {
+    listModels: ((input) =>
+      ipcRenderer.invoke(IPC.ANTIGRAVITY_LIST_MODELS, input)) as RpcMap["antigravity.listModels"],
+    cliStatus: ((input) =>
+      ipcRenderer.invoke(IPC.ANTIGRAVITY_CLI_STATUS, input)) as RpcMap["antigravity.cliStatus"],
   },
 
   /** Color scheme: get/set the preference; theme.changed fires when the
@@ -736,12 +754,14 @@ const api = {
       ipcRenderer.invoke(IPC.AUTOMATION_PARSE_INTENT, input)) as RpcMap["automation.parseIntent"],
   },
 
-  /** Agent runtimes (settings panel): the download-on-demand claude/codex/pi
+  /** Agent runtimes (settings panel): the download-on-demand codex/pi
    *  payloads. install() resolves when the whole pipeline finished; live
    *  progress arrives over `on.runtimesEvent`. checkUpdates is the manual
    *  "check for updates" click (registry latest + compat list verdicts);
    *  rollback deletes the newest managed version to fall back to the
-   *  previous one. */
+   *  previous one. claudeCli reports the USER'S Claude CLI (installed /
+   *  version / meets the minimum) — the provider picker's availability gate
+   *  for claude-sdk, since sessions spawn that CLI directly. */
   runtimes: {
     list: (() => ipcRenderer.invoke(IPC.RUNTIMES_LIST)) as RpcMap["runtimes.list"],
     install: ((input) =>
@@ -757,6 +777,8 @@ const api = {
       )) as RpcMap["runtimes.checkUpdates"],
     rollback: ((input) =>
       ipcRenderer.invoke(IPC.RUNTIMES_ROLLBACK, input)) as RpcMap["runtimes.rollback"],
+    claudeCli: ((input) =>
+      ipcRenderer.invoke(IPC.RUNTIMES_CLAUDE_CLI, input)) as RpcMap["runtimes.claudeCli"],
   },
 
   /** Plugins (settings panel): install/enable/remove over ~/.mcode/plugins +

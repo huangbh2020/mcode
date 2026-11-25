@@ -13,6 +13,56 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
  * and behaviorally consistent (see SessionTabs for the full interaction model).
  */
 
+/* ───────────────────────── attached tab corners ───────────────────────── */
+
+/** Chrome-style outward bottom curves for an active attached tab, rendered at
+ *  the bottom-left and bottom-right outer corners so the tab's bg-surface
+ *  merges smoothly into the content surface below. */
+export function TabInverseCorners({ showLeft = true }: { showLeft?: boolean }) {
+  return (
+    <>
+      {showLeft && (
+        <svg
+          aria-hidden
+          viewBox="0 0 11 10"
+          className="pointer-events-none absolute -left-[10px] bottom-0 h-[10px] w-[11px]"
+        >
+          {/* Extend 1px inward (x=9.5..11) to mask the tab's straight border-l
+              bottom segment so only the smooth outward curve remains. */}
+          <path
+            d="M9.5 0 A9.5 9.5 0 0 1 0 9.5 L0 10 L11 10 L11 0 Z"
+            className="fill-surface"
+          />
+          <path
+            d="M9.5 0 A9.5 9.5 0 0 1 0 9.5"
+            fill="none"
+            stroke="rgb(var(--edge))"
+            strokeWidth="1"
+          />
+        </svg>
+      )}
+      <svg
+        aria-hidden
+        viewBox="0 0 11 10"
+        className="pointer-events-none absolute -right-[10px] bottom-0 h-[10px] w-[11px]"
+      >
+        {/* Extend 1px inward (x=0..1.5) to mask the tab's straight border-r
+            bottom segment so only the smooth outward curve remains. */}
+        <path
+          d="M1.5 0 A9.5 9.5 0 0 0 11 9.5 L11 10 L0 10 L0 0 Z"
+          className="fill-surface"
+        />
+        <path
+          d="M1.5 0 A9.5 9.5 0 0 0 11 9.5"
+          fill="none"
+          stroke="rgb(var(--edge))"
+          strokeWidth="1"
+        />
+      </svg>
+    </>
+  );
+}
+
 /* ───────────────────────── chevron buttons ───────────────────────── */
 
 interface ChevronButtonProps {

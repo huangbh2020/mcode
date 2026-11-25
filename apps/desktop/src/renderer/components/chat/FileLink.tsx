@@ -39,11 +39,19 @@ const MENU_ITEM_CLASS = cn(
   "data-[highlighted]:bg-surface-muted",
 );
 
+/** Chip face — pure text hyperlink style without background or border.
+ *  Displays an icon + underlined link text, blending naturally into prose. */
+const CHIP_CLASS = cn(
+  "inline-flex max-w-full items-center gap-1 align-middle text-info transition-opacity hover:opacity-80 [font-size:var(--chat-fs-xs)]",
+);
+
 export function FileLink({
   token,
   projectPath,
   display,
   asLink = false,
+  chip = false,
+  title,
   line,
   column,
 }: {
@@ -57,6 +65,11 @@ export function FileLink({
   /** Render as a real `<a href>` (markdown link position) instead of a
    *  `<span>`; clicks are intercepted and resolved exactly the same way. */
   asLink?: boolean;
+  /** Chip face (see {@link CHIP_CLASS}) instead of the underlined span. */
+  chip?: boolean;
+  /** Hover tooltip. Defaults to the "click to open" hint; pass the full
+   *  path when the visible text is only a file name. */
+  title?: string;
   /** 1-based position jumped to after opening (from a `path:line[:col]`
    *  suffix absorbed at split time). */
   line?: number;
@@ -67,6 +80,7 @@ export function FileLink({
   const [candidates, setCandidates] = useState<ResolvedCandidate[] | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
+  const tooltip = title ?? t("chatStream.fileLink.clickToOpen");
 
   /** Virtual anchor built from the element's current rect, so the candidate
    *  menu opens right below the clicked token. Recomputed each open via the
@@ -154,7 +168,7 @@ export function FileLink({
             elRef.current = el;
           }}
           href={token}
-          title={t("chatStream.fileLink.clickToOpen")}
+          title={tooltip}
           onClick={handleClick}
           onAuxClick={(e) => e.preventDefault()}
           className={cn("cursor-pointer underline hover:opacity-80", loading && "opacity-60")}
@@ -168,14 +182,16 @@ export function FileLink({
           }}
           role="button"
           tabIndex={0}
-          title={t("chatStream.fileLink.clickToOpen")}
+          title={tooltip}
           onClick={handleClick}
           onKeyDown={handleKeyDown}
           className={cn(
-            "cursor-pointer rounded-[2px] underline decoration-dotted decoration-accent/60 underline-offset-2",
-            // accent-strong: small accent TEXT must sit at the 700 stop in
-            // light theme (≥4.5:1); dark theme's strong === default accent.
-            "text-accent-strong hover:bg-accent/10",
+            "cursor-pointer",
+            chip
+              ? CHIP_CLASS
+              : // accent-strong: small accent TEXT must sit at the 700 stop in
+                // light theme (≥4.5:1); dark theme's strong === default accent.
+                "rounded-[2px] underline decoration-dotted decoration-accent/60 underline-offset-2 text-accent-strong hover:bg-accent/10",
             loading && "opacity-60",
           )}
         >

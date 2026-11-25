@@ -21,10 +21,10 @@ import { initPiSessionImport } from "@main/lib/piSessionImport.js";
 import { initChromeRelayFromSettings } from "@main/browser/chromeRelay.js";
 import { registerAppResourceScheme, initAppResourceProtocol } from "@main/lib/appResourceProtocol.js";
 import { is } from "@main/utils.js";
-import { preloadClaudeSdk } from "@main/providers/claude-sdk/ClaudeAgentSdkProvider.js";
+import { preloadClaudeCli } from "@main/providers/claude-sdk/claudeCliQuery.js";
 import { logStartup } from "@main/lib/startupTimer.js";
 import { log } from "@main/lib/logger.js";
-import { setManagedRuntimeRoot } from "@main/runtimes/managedRuntimeRoots.js";
+import { removeOrphanedClaudeRuntime, setManagedRuntimeRoot } from "@main/runtimes/managedRuntimeRoots.js";
 import { killDescendants } from "@main/lib/procTree.js";
 import { join } from "node:path";
 
@@ -43,10 +43,16 @@ import { join } from "node:path";
 const prevUserData = app.getPath("userData");
 app.setName("Mcode");
 app.setPath("userData", prevUserData);
-// Managed agent runtimes (claude/codex/pi download-on-demand) live under
+// Managed agent runtimes (codex/pi download-on-demand) live under
 // userData/runtimes. Register the root early so the binary/library resolvers
 // can find installed runtimes from the very first turn.
 setManagedRuntimeRoot(join(app.getPath("userData"), "runtimes"));
+// Claude left the managed set: drop the runtime earlier versions downloaded
+// for it (200MB+ per kept version, read by nothing now). Off the startup
+// path — it only ever runs once per machine.
+void removeOrphanedClaudeRuntime().then((removed) => {
+  if (removed) log.info("removed the orphaned managed claude runtime — Claude sessions run the user's own CLI");
+});
 // Windows: AppUserModelId drives taskbar grouping + the AUMID the toast center
 // uses to attribute notifications. Harmless on macOS/Linux (ignored).
 if (process.platform === "win32") {
@@ -182,10 +188,10 @@ app.whenReady().then(async () => {
   createMainWindow();
   logStartup("createMainWindow returned");
 
-  // Warm the Claude Agent SDK module in idle time (deferred 3s). Keeps the
-  // large module out of startup AND out of the first turn's send→first-reply
-  // critical path. Fire-and-forget; failures surface on real first use.
-  preloadClaudeSdk();
+  // Warm the Claude CLI lookup + version probe in idle time (deferred 3s),
+  // so the first turn's send→first-reply path doesn't pay for them.
+  // Fire-and-forget; failures surface on real first use.
+  preloadClaudeCli();
 
   // Start the auto-updater (no-op in dev; only active in packaged builds).
   // Fire-and-forget: the first check is delayed 10s anyway, and the updater

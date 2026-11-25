@@ -248,6 +248,7 @@ export const zh = {
   "chat.provider.selectTitle": "选择会话使用的 SDK",
   "chat.provider.section": "选择 SDK",
   "chat.provider.notInstalled": "运行时未安装",
+  "chat.provider.cliTooOld": "CLI 版本过低，请更新",
   "chat.provider.manage": "管理 Agent…",
 
   // ── slash command picker ──

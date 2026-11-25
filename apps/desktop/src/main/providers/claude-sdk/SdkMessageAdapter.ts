@@ -1,9 +1,9 @@
 /**
- * SDKMessage → RuntimeEvent normalization engine.
+ * ClaudeMessage → RuntimeEvent normalization engine.
  *
  * Ported from the ClaudeRuntime's NDJSON handlers (handleSystem, handleStreamEvent,
  * handleAssistant, handleUser, handleResult). The input is now a structured
- * SDKMessage object instead of a raw JSON string. Output is the same RuntimeEvent
+ * ClaudeMessage object instead of a raw JSON string. Output is the same RuntimeEvent
  * union — the frontend / IPC / persistence contract is unchanged.
  */
 import { randomUUID } from "node:crypto";
@@ -39,16 +39,17 @@ import { log } from "@main/lib/logger.js";
 import { readTaskOutputTail } from "@main/lib/taskOutputFile.js";
 import { noteBashToolStart, noteBashToolEnd } from "@main/lib/serviceScanner.js";
 import type {
-  SDKMessage,
-  SDKSystemMessage,
-  SDKAssistantMessage,
-  SDKUserMessage,
-  SDKResultMessage,
-  SDKPartialAssistantMessage,
-  Query,
-} from "@anthropic-ai/claude-agent-sdk";
+  ClaudeMessage,
+  ClaudeSystemInitMessage,
+  ClaudeAssistantMessage,
+  ClaudeUserMessage,
+  ClaudeResultMessage,
+  ClaudePartialAssistantMessage,
+  ClaudeControlChannel,
+} from "./claudeStreamTypes.js";
 
-/** Minimal envelope for SDKTaskStartedMessage. The full SDK type is rich
+/** Minimal envelope for the CLI's task_started system message. The real
+ *  frame is rich
  *  (uuid, session_id, workflow_name, prompt, …); we only forward the bits
  *  the renderer needs. Avoids pulling a large union into this file. */
 interface TaskStartedEnvelope {
@@ -410,12 +411,12 @@ interface AdapterState {
    *  false on the matching ExitPlanMode or when a `mode.change` to default
    *  arrives (covers rejection / interruption). Drives `plan.update` emit. */
   inPlanMode: boolean;
-  /** In-flight `Query.getContextUsage()` promise kicked off at the last
+  /** In-flight `ClaudeControlChannel.getContextUsage()` promise kicked off at the last
    *  `handleAssistant` (while the CLI process is still alive). Raced against
    *  CONTEXT_USAGE_PATH_B_TIMEOUT_MS at turn-end in `emitTurnEndSnapshot`
    *  (which itself runs OFF the turn's critical path) to read the
    *  authoritative context-window occupancy; on timeout or rejection (e.g.
-   *  Query already closed) we fall back to path C. */
+   *  ClaudeControlChannel already closed) we fall back to path C. */
   pendingContextUsage?: Promise<unknown> | null;
   /** Diagnostic: how many SDK assistant messages this turn has produced so
    *  far. Logged at the getContextUsage kickoff so we can correlate the
@@ -552,11 +553,11 @@ export class SdkMessageAdapter {
      *  they visually show "已终止" (stopped), reflecting the user's intent.
      *  `null` only in tests that don't exercise interrupt. */
     private abortSignal: AbortSignal | null = null,
-    /** Live Query handle from the SDK. When available, {@link handleResult}
-     *  calls {@link Query.getContextUsage} at turn-end to get the authoritative
+    /** Live control channel to the CLI process. When available, {@link handleResult}
+     *  calls {@link ClaudeControlChannel.getContextUsage} at turn-end to get the authoritative
      *  context-window snapshot (path B). Falls back to path-A/C merge when
      *  `null` or when the control-channel call fails. */
-    private query: Query | null = null,
+    private query: ClaudeControlChannel | null = null,
     /** Initial todos seeded from the persisted session state. Lets a fresh
      *  adapter resolve TaskUpdate(taskId=N) from earlier turns instead of
      *  silently dropping it when state.tasks is empty (the adapter is
@@ -772,14 +773,14 @@ export class SdkMessageAdapter {
     this.hooks?.requestFeedClose?.();
   }
 
-  /** Feed one SDKMessage through the normalization pipeline. */
-  async dispatch(m: SDKMessage): Promise<void> {
+  /** Feed one ClaudeMessage through the normalization pipeline. */
+  async dispatch(m: ClaudeMessage): Promise<void> {
     const type = m.type;
     if (type === "system") {
       // Task lifecycle events share the `system` envelope - dispatch on
       // subtype alongside `init`. Unknown subtypes are silently ignored
       // (forward-compatible).
-      const sys = m as SDKSystemMessage;
+      const sys = m as ClaudeSystemInitMessage;
       const subtype = (sys as { subtype?: string }).subtype;
       if (subtype === "init") {
         this.handleSystem(sys);
@@ -810,13 +811,13 @@ export class SdkMessageAdapter {
         this.handleApiRetry(sys as unknown as ApiRetryEnvelope);
       }
     } else if (type === "stream_event") {
-      this.handleStreamEvent(m as SDKPartialAssistantMessage);
+      this.handleStreamEvent(m as ClaudePartialAssistantMessage);
     } else if (type === "assistant") {
-      this.handleAssistant(m as SDKAssistantMessage);
+      this.handleAssistant(m as ClaudeAssistantMessage);
     } else if (type === "user") {
-      this.handleUser(m as SDKUserMessage);
+      this.handleUser(m as ClaudeUserMessage);
     } else if (type === "result") {
-      await this.handleResult(m as SDKResultMessage);
+      await this.handleResult(m as ClaudeResultMessage);
     }
     // Unknown message types are silently ignored (forward-compatible).
   }
@@ -1036,11 +1037,11 @@ export class SdkMessageAdapter {
 
   /* ──────────────── per-message-type handlers ──────────────── */
 
-  private handleSystem(m: SDKSystemMessage): void {
+  private handleSystem(m: ClaudeSystemInitMessage): void {
     if (m.subtype === "init") {
       this.ctx.onProviderSessionId?.(m.session_id);
       this.ctx.log.info(
-        `claude SDK init: session=${m.session_id}, model=${m.model}, permissionMode=${m.permissionMode}`,
+        `claude cli init: session=${m.session_id}, model=${m.model}, permissionMode=${m.permissionMode}`,
       );
     }
   }
@@ -1451,7 +1452,7 @@ export class SdkMessageAdapter {
     return undefined;
   }
 
-  private handleStreamEvent(m: SDKPartialAssistantMessage): void {
+  private handleStreamEvent(m: ClaudePartialAssistantMessage): void {
     // First contamination guard for forwarded subagent streams
     // (forwardSubagentText): subagent deltas must NEVER enter the main
     // message flow — not even allocating blockMessageIds for them (a later
@@ -1588,7 +1589,7 @@ export class SdkMessageAdapter {
     }
   }
 
-  private handleAssistant(m: SDKAssistantMessage): void {
+  private handleAssistant(m: ClaudeAssistantMessage): void {
     this.state.assistantMessageCount += 1;
     const message = m.message as {
       content?: Array<{ type: string; id?: string; name?: string; input?: unknown }>;
@@ -1631,12 +1632,12 @@ export class SdkMessageAdapter {
       undefined,
     );
 
-    // Path B kickoff: fire off `Query.getContextUsage()` now while the CLI
+    // Path B kickoff: fire off `ClaudeControlChannel.getContextUsage()` now while the CLI
     // process is still alive (during assistant-message processing). The result
     // is raced against a short timeout at turn-end (emitTurnEndSnapshot),
     // which itself runs off the turn's critical path (fire-and-forget from
     // handleResult — it must never delay turn.done). This is critical:
-    // calling getContextUsage() only at result-time fails with "Query closed
+    // calling getContextUsage() only at result-time fails with "ClaudeControlChannel closed
     // before response received" because the generator is already tearing
     // down. We don't await here - just kick it off and let it resolve in the
     // background.
@@ -1979,7 +1980,7 @@ export class SdkMessageAdapter {
     }
   }
 
-  private handleUser(m: SDKUserMessage): void {
+  private handleUser(m: ClaudeUserMessage): void {
     // Forwarded subagent tool_results — route to the transcript channel (the
     // matching tool_use was routed there from handleAssistant too).
     if (m.parent_tool_use_id) {
@@ -2119,7 +2120,7 @@ export class SdkMessageAdapter {
    *  pending tool_use blocks of its transcript: fills result + flips status
    *  to done/error, then re-emits. Unknown ids are ignored (defensive —
    *  e.g. a result for a tool call whose message raced past turn teardown). */
-  private handleSubagentUser(m: SDKUserMessage): void {
+  private handleSubagentUser(m: ClaudeUserMessage): void {
     const blocks = (m.message as { content?: Array<{ type: string; tool_use_id?: string; is_error?: boolean; content?: unknown }> }).content;
     if (!blocks) return;
     for (const b of blocks) {
@@ -2147,7 +2148,7 @@ export class SdkMessageAdapter {
     } satisfies SubagentTranscriptEvent);
   }
 
-  private async handleResult(m: SDKResultMessage): Promise<void> {
+  private async handleResult(m: ClaudeResultMessage): Promise<void> {
     // Diagnostic: log the raw result envelope so we can see exactly what the
     // SDK delivered. Tokens staying at 0 after a turn usually means either
     // (a) the SDK didn't populate `usage` here, or (b) a non-success subtype
@@ -2211,7 +2212,7 @@ export class SdkMessageAdapter {
         }
       }
 
-// Path B (control channel): `Query.getContextUsage()` is the most
+// Path B (control channel): `ClaudeControlChannel.getContextUsage()` is the most
 	      // authoritative source for context-window occupancy. When available,
 	      // use it for `usedTokens`/`maxTokens`/`pct`; throughput/billing fields
 	      // still come from the accumulated `result.usage` (path C).
@@ -2397,7 +2398,7 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
           new Promise<null>((resolve) => {
             setTimeout(() => resolve(null), CONTEXT_USAGE_PATH_B_TIMEOUT_MS).unref();
           }),
-        ]) as Awaited<ReturnType<Query["getContextUsage"]>> | null;
+        ]) as Awaited<ReturnType<ClaudeControlChannel["getContextUsage"]>> | null;
         if (!cc) {
           this.ctx.log.warn(
             `getContextUsage timed out after ${CONTEXT_USAGE_PATH_B_TIMEOUT_MS}ms, falling back to path C`,

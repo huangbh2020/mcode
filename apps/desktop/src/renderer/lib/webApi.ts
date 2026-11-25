@@ -565,7 +565,12 @@ const customModel: Api["customModel"] = {
   save: () => webUnsupported("customModel.save"),
   delete: () => webUnsupported("customModel.delete"),
   test: () => webUnsupported("customModel.test"),
+  fetchModels: () => webUnsupported("customModel.fetchModels"),
   getToken: () => webUnsupported("customModel.getToken"),
+  getSyncState: () => webUnsupported("customModel.getSyncState"),
+  setActive: () => webUnsupported("customModel.setActive"),
+  setSyncTarget: () => webUnsupported("customModel.setSyncTarget"),
+  importSettings: () => webUnsupported("customModel.importSettings"),
 };
 
 const piModels: Api["piModels"] = {
@@ -600,6 +605,11 @@ const opencode: Api["opencode"] = {
   authStatus: () => rpc("opencode:authStatus"),
   connectKey: () => webUnsupported("opencode.connectKey"),
   logout: () => webUnsupported("opencode.logout"),
+};
+
+const antigravity: Api["antigravity"] = {
+  listModels: (input) => rpc("antigravity:listModels", input),
+  cliStatus: (input) => rpc("antigravity:cliStatus", input),
 };
 
 const skills: Api["skills"] = {
@@ -753,6 +763,7 @@ export function createWebApi(): Api {
     piSessions,
     codexModels,
     opencode,
+    antigravity,
     skills,
     file,
     git,

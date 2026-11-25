@@ -57,6 +57,7 @@ import {
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
 import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, fileEditRowInfo, EditRunRow, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
+import { flattenFileCitations } from "@renderer/lib/fileCitation.js";
 import { sameEditPath } from "@renderer/lib/path.js";
 import { MediaLightbox, MediaThumbImage, type MediaBlock, type MediaItem } from "./mediaGallery.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
@@ -5890,14 +5891,15 @@ export { MessageRow };
 /** Flatten a message's blocks into the plain-text payload that the copy
  *  button yields. text→text, thinking→quoted, tool_use→summary, errors
  *  skipped. Keeps copy output predictable for both user prompts and
- *  assistant replies. */
+ *  assistant replies. Model-emitted file citations (`::zcode-file-citation{…}`)
+ *  become the paths they name — markup on a clipboard helps nobody. */
 function blocksToText(blocks: Block[]): string {
   const out: string[] = [];
   for (const b of blocks) {
     if (b.kind === "text") {
-      out.push(b.text);
+      out.push(flattenFileCitations(b.text));
     } else if (b.kind === "thinking") {
-      const t = b.text.trim();
+      const t = flattenFileCitations(b.text).trim();
       if (t) out.push(`> ${t.replace(/\n/g, "\n> ")}`);
     } else if (b.kind === "attachment") {
       // Mirror the composer's delimited format so copied output matches

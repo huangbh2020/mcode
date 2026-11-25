@@ -16,9 +16,9 @@ directories:
 
 # Disable @electron/rebuild: with pnpm it stats cross-platform optional
 # dependencies at node_modules/.pnpm/node_modules/<pkg> and dies with ENOENT
-# when they aren't installed (claude-agent-sdk-darwin-arm64 on Windows — the
-# SDK lists every platform package as an optionalDependency). Nothing in the
-# dependency tree needs rebuilding anyway: node-pty ships N-API prebuilds for
+# when they aren't installed (a cross-platform optionalDependency whose
+# platform package is absent on this OS). Nothing in the dependency tree
+# needs rebuilding anyway: node-pty ships N-API prebuilds for
 # all platforms (dev already loads them straight from prebuilds/ inside
 # Electron) and sherpa-onnx is prebuilt.
 npmRebuild: false
@@ -46,14 +46,6 @@ files:
   # the workspace symlink resolves outside the app dir, which the packager
   # rejects ("path must be under appDir").
   - "!**/node_modules/@mcode/**"
-  # The claude JS SDK (in dependencies, needed in-process) lists its platform
-  # binary packages (@anthropic-ai/claude-agent-sdk-<platform>-<arch>, 209MB
-  # of claude.exe on win32) as optionalDependencies — electron-builder's
-  # dependency collector would ship the matching-platform one even though the
-  # runtime binary is download-on-demand now (userData/runtimes, see
-  # main/runtimes/runtimeInstaller.ts). Exclude every platform variant; the
-  # dash in the pattern keeps the JS package (claude-agent-sdk) itself.
-  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
 
 # The mcode-connector Chrome extension ships UNPACKED (outside the asar) so
 # users can load it via chrome://extensions "Load unpacked" — see
@@ -103,11 +95,11 @@ extraMetadata:
 #
 # No `arch` is specified: electron-builder builds process.arch (the runner's
 # native arch). CI runs separate jobs on macos-latest (arm64) and
-# macos-15-intel (x64) so each architecture's native bits (claude-agent-sdk
-# platform subpackage, node-pty .node) are installed + rebuilt on a matching
-# host.
+# macos-15-intel (x64) so each architecture's native bits (the node-pty
+# .node addon and the other platform-specific optionalDependencies) are
+# installed on a matching host.
 # Building both archs from one runner produced x64 DMGs containing arm64
-# claude/node-pty binaries -> Rosetta prompt on Intel Macs.
+# binaries -> Rosetta prompt on Intel Macs.
 # Single-arch builds also keep filenames distinct: arm64 artifacts get an
 # `-arm64` suffix (Mcode-x.y.z-arm64.dmg), x64 artifacts don't.
 mac:

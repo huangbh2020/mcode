@@ -36,8 +36,11 @@ export function reconcileAgyTerminalSessionId(
   reconcileLastAttempt.set(session.id, now);
 
   try {
-    // Idempotence: once adopted, the uuid is in the claimed set.
-    const claimed = new Set(SessionRepo.listTerminalClaudeSessionIds());
+    // Idempotence: once adopted, the uuid is in the claimed set (plus GUI ACP sessions).
+    const claimed = new Set([
+      ...SessionRepo.listTerminalClaudeSessionIds(),
+      ...SessionRepo.listProviderSessionIds("antigravity-acp"),
+    ]);
     let best: { id: string; mtime: number } | null = null;
     let files: string[];
     try {

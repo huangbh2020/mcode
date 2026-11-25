@@ -112,7 +112,7 @@ export function Titlebar({
 
   return (
     <div
-      className="flex h-10 shrink-0 items-stretch"
+      className="flex h-10 shrink-0 items-stretch bg-surface-muted"
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       <div
@@ -123,7 +123,10 @@ export function Titlebar({
           // own shrink-0 chrome (chevrons/⋯) must never spill over the right
           // cluster; clipping beats overlapping. Portaled popups (⋯ menu,
           // git pill popover, dialogs) render at <body> and are unaffected.
-          "flex flex-1 items-center overflow-hidden bg-surface-muted px-1.5",
+          "relative flex flex-1 items-center overflow-hidden pr-2",
+          !isOverlayPage && !isBrowserOverlay
+            ? "rounded-tl-2xl border-l border-edge bg-surface-muted/45 pl-1"
+            : "bg-surface-muted pl-2",
           !isMac && "pr-[138px]",
           // macOS traffic lights sit at the window's top-left. They overlay
           // the full-height sidebar while it's visible (LeftBar's header
@@ -133,6 +136,9 @@ export function Titlebar({
           isMac && !(leftOpen && !isOverlayPage) && "pl-[78px]",
         )}
       >
+        {/* Bottom hairline separating inactive tabs / empty track from the main
+            panel; active tabs sit above it (z-10) to merge into the surface. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-px bg-edge" />
         {isOverlayPage ? (
           <>
             <button
@@ -179,27 +185,23 @@ export function Titlebar({
               </button>
             ) : (
               // Workspace: the sidebar's collapse toggle lives in the LeftBar
-              // footer now, so the toolbar HIDES this button while the sidebar
-              // is open. It reappears only while the sidebar is CLOSED — the
-              // footer button is inside the hidden sidebar, so this is the
-              // only mouse path back (beyond the toggle-left shortcut).
+              // footer/header, so the toolbar hides it while the sidebar is open
+              // and only shows the expand button when the sidebar is closed.
               !leftOpen && (
-                <>
-                  <button
-                    onClick={onToggleLeft}
-                    className={cn(
-                      "flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
-                      "text-content-muted hover:bg-surface-hover hover:text-content",
-                    )}
-                    title={t("layout.showLeftPanel") + hintFor("layout.toggle-left")}
-                    style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-                  >
-                    <IconLayoutSidebarLeftExpand
-                      size={18}
-                      className="shrink-0 scale-x-[-1]"
-                    />
-                  </button>
-                </>
+                <button
+                  onClick={onToggleLeft}
+                  className={cn(
+                    "mr-1 flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
+                    "text-content-muted hover:bg-surface-hover hover:text-content",
+                  )}
+                  title={t("layout.showLeftPanel") + hintFor("layout.toggle-left")}
+                  style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                >
+                  <IconLayoutSidebarLeftExpand
+                    size={18}
+                    className="shrink-0 scale-x-[-1]"
+                  />
+                </button>
               )
             )}
             {/* Unified tab strip — the merged single-row titlebar's middle
@@ -212,7 +214,7 @@ export function Titlebar({
                 the fullscreen browser overlay; wide-panel mode keeps it
                 (sessions remain the visible surface there). */}
             {!isOverlayPage && !isBrowserOverlay && (
-              <div className="flex min-w-0 flex-1 items-center">
+              <div className="flex min-w-0 flex-1 items-stretch self-stretch">
                 <UnifiedTabsBar />
               </div>
             )}

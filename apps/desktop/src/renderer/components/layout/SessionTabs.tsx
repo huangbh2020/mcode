@@ -8,6 +8,7 @@ import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { Session } from "@contracts/session";
 import { ProjectAvatar } from "./ProjectAvatar.js";
+import { TabInverseCorners } from "./TabBarChrome.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Session tab chip, rendered inside the titlebar's unified tab strip
@@ -27,6 +28,8 @@ interface SortableTabProps {
   session: Session | undefined;
   sessionId: string;
   isActive: boolean;
+  /** True when this is the leftmost tab in the strip (flush with card left edge). */
+  isFirst?: boolean;
   running: boolean;
   /** Unread event count for this session (0 = no badge). Rendered as a small
    *  accent-colored count badge on non-active tabs so the user can see which
@@ -51,6 +54,7 @@ export function SortableSessionTab({
   session,
   sessionId,
   isActive,
+  isFirst = false,
   running,
   unreadCount,
   sessionCount,
@@ -109,15 +113,18 @@ export function SortableSessionTab({
     [onClose],
   );
 
-  // Middle-click closes (browser tab-bar convention).
+  // Middle-click closes (browser tab-bar convention); primary mouse-down
+  // activates immediately without waiting for mouse-up click.
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button === 1) {
         e.preventDefault();
         onClose();
+      } else if (e.button === 0 && !isActive) {
+        onActivate();
       }
     },
-    [onClose],
+    [onClose, onActivate, isActive],
   );
 
   return (
@@ -127,9 +134,8 @@ export function SortableSessionTab({
       {...attributes}
       {...listeners}
       onClick={() => {
-        // A real drag is captured away by dnd-kit and never lands here; this
-        // fires only for an actual tap, which we treat as tab activation.
-        onActivate();
+        // Fallback if activated without mousedown; already-active clicks no-op.
+        if (!isActive) onActivate();
       }}
       onMouseDown={onMouseDown}
       onContextMenu={onContextMenu}
@@ -137,14 +143,17 @@ export function SortableSessionTab({
       aria-selected={isActive}
       title={title}
       className={cn(
-        // Apple-style Compact Integrated Card Tab (方案 1)
-        "group flex h-[27px] max-w-[200px] cursor-pointer select-none items-center gap-1.5 rounded-lg px-2.5 text-[11px] transition-all duration-150 min-w-0 shrink-0",
+        // Chrome-style attached tab: top rounded corners + outward bottom curves
+        // (TabInverseCorners) merging seamlessly into the bg-surface content below.
+        // No transition-all: switching tabs must feel instantaneous.
+        "group relative flex h-[34px] max-w-[200px] cursor-pointer select-none items-center gap-1.5 rounded-t-xl rounded-b-none px-2.5 text-[11px] min-w-0 shrink-0",
         isActive
-          ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
-          : "text-content-muted hover:text-content hover:bg-surface-hover/50 border border-transparent",
+          ? "z-10 pb-px bg-surface text-content font-medium border-t border-x border-edge"
+          : "text-content-muted hover:text-content hover:bg-surface-hover/50 border-t border-x border-transparent",
         isDragging && "shadow-lg opacity-80 z-20",
       )}
     >
+      {isActive && <TabInverseCorners />}
       {/* Project identity leads the tab: the owning project's colored
           initial, so tabs from different projects read apart at a glance
           (same mark as the sidebars' project rows). */}
@@ -196,6 +205,7 @@ export function SortableSessionTab({
         aria-label={t("layout.closeTab")}
         onClick={handleClose}
         onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.stopPropagation()}
         className={cn(
           "ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-all hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",

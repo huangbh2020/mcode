@@ -130,7 +130,7 @@ export function ThreePaneLayout({
          Stacks the center content above an optional bottom terminal bar. */}
       <main
         className={cn(
-          "relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden rounded-tl-2xl rounded-bl-2xl border-t border-edge-panel bg-surface",
+          "relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden rounded-bl-2xl border-l border-edge bg-surface",
           rightMaximized && "hidden",
         )}
       >

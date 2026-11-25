@@ -23,15 +23,15 @@
  * model" instead of breaking subagents.
  */
 import type { ApiConfig } from "@contracts/customModel";
+import { strip1MSuffix } from "@main/providers/claude-sdk/customEnv.js";
 
 /**
  * The config's pinned subagent model, or null when nothing should be
- * injected (no config, no pin, or a pin the config's model list no longer
- * contains — see the file header for why silently dropping beats injecting
- * a broken id).
+ * injected (no config or no pin). Checks `tierModels.subagent` first and
+ * falls back to legacy `subagentModel`.
  */
 export function resolveSubagentModelValue(apiConfig: ApiConfig | undefined): string | null {
-  const pick = apiConfig?.subagentModel?.trim();
-  if (!pick || !apiConfig) return null;
-  return apiConfig.models.some((m) => m.id === pick) ? pick : null;
+  if (!apiConfig) return null;
+  const pick = (apiConfig.tierModels?.subagent ?? apiConfig.subagentModel)?.trim();
+  return pick ? strip1MSuffix(pick) : null;
 }

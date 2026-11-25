@@ -5,16 +5,16 @@
  * 停止全部复用普通回合管线,多轮调整天然携带上下文);provider 为这类回合:
  *  1. 在系统提示追加 buildOrchPlanNudge 产出的「编排规划者」指令(可用模型
  *     面 / agent 清单 / 硬约束 —— 原无头 planner 提示词的同类内容);
- *  2. 经 createSdkMcpServer 挂上 orch_submit_plan 工具(进程内 MCP server,
- *     模式取自已删除的 coordinatorTools)。模型调工具提交任务图 → 这里钳制
- *     (clampNodeExecConfig 白名单校验 + 模型选举 + 缺省补值)→ 创建 paused
- *     run → plan.proposed 推回渲染端挂画布。工具本身是纯数据提交,canUseTool
- *     全模式免审批;真正有风险的动作发生在 worker 会话,各自带自己的权限。
+ *  2. 经宿主 MCP 服务器(进程内 HTTP,见 providers/claude-sdk/hostMcpHttp.ts)
+ *     挂上 orch_submit_plan 工具(名 ORCH_PLAN_MCP_SERVER)。模型调工具提交
+ *     任务图 → 这里钳制(clampNodeExecConfig 白名单校验 + 模型选举 + 缺省
+ *     补值)→ 创建 paused run → plan.proposed 推回渲染端挂画布。工具本身是
+ *     纯数据提交,canUseTool 全模式免审批;真正有风险的动作发生在 worker
+ *     会话,各自带自己的权限。
  *
- * 仅 Claude provider 接线(Pi 无 createSdkMcpServer 等价物)。
+ * 仅 Claude provider 接线。
  */
 import { z } from "zod";
-import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
 import type { Session } from "@contracts/session";
 import type { TaskSpecInput } from "@contracts/orchestration";
 import { TaskSpecInputSchema } from "@contracts/orchestration";
@@ -28,10 +28,10 @@ import { CustomModelStore } from "@main/lib/secretStore.js";
 import { PiModelsStore } from "@main/lib/piModelsStore.js";
 import { CodexModelsStore } from "@main/lib/codexModelsStore.js";
 import { listOpenCodeModels } from "@main/providers/opencode-sdk/opencodeModels.js";
+import { listAntigravityModels } from "@main/providers/antigravity-acp/antigravityModels.js";
+import type { HostMcpServerSpec } from "@main/providers/claude-sdk/hostMcpHttp.js";
 import { sendToRenderer } from "@main/window.js";
 import { log } from "@main/lib/logger.js";
-
-type CreateMcpServer = typeof import("@anthropic-ai/claude-agent-sdk").createSdkMcpServer;
 
 /** MCP server 名与工具全名(canUseTool 侧的 `mcp__<server>__<tool>`)。 */
 export const ORCH_PLAN_MCP_SERVER = "mcode-orchestrator";
@@ -122,6 +122,14 @@ async function buildAvailableModelSurface(): Promise<Map<
     surface.set("opencode-sdk", { builtin, custom: new Set(), builtinLabels: labels });
   } catch (err) {
     log.warn(`surface: opencode list failed: ${(err as Error).message}`);
+  }
+  try {
+    const { models } = await listAntigravityModels();
+    const builtin = new Set(models.map((m) => m.id));
+    const labels = new Map(models.map((m) => [m.id, m.label] as const));
+    surface.set("antigravity-acp", { builtin, custom: new Set(), builtinLabels: labels });
+  } catch (err) {
+    log.warn(`surface: antigravity list failed: ${(err as Error).message}`);
   }
   // Claude + 任何其他 provider: providerRegistry 给出 capabilities.builtinModels;
   // 用户自定义配置 = CustomModelStore.listPublic() 里的 models[].id(各 cfg
@@ -224,6 +232,7 @@ const NO_PROMPT_MODE_BY_PROVIDER: Record<string, string> = {
   "pi-sdk": "bypassPermissions",
   "codex-sdk": "full-access",
   "opencode-sdk": "bypassPermissions",
+  "antigravity-acp": "bypassPermissions",
 };
 
 /** 节点最终继承的模型面里,model 字段的合法值域。
@@ -397,16 +406,13 @@ export async function buildOrchPlanNudge(sessionId: string): Promise<string> {
   ].join("\n");
 }
 
-/** 异步构建(调用方 ClaudeAgentSdkProvider 已持有 lazy-load 的构造函数)。
+/** 构建编排规划工具的宿主 MCP 服务器规格(仅编排回合挂载;provider 经
+ *  进程内 HTTP MCP 服务器把它暴露给 CLI —— 见 hostMcpHttp.ts)。
  *  工具 handler:钳制 → 创建 paused run → plan.proposed 推渲染端 → 给模型
  *  文本回执。run 创建在 main 侧一次完成(渲染端只消费事件,多客户端不会
  *  重复建卡)。 */
-export async function buildOrchPlanMcpServerAsync(
-  sessionId: string,
-  createSdkMcpServer: CreateMcpServer,
-): Promise<McpSdkServerConfigWithInstance> {
-  return createSdkMcpServer({
-    name: ORCH_PLAN_MCP_SERVER,
+export function buildOrchPlanHostServer(sessionId: string): HostMcpServerSpec {
+  return {
     version: "1.0.0",
     instructions:
       "Mcode 编排规划工具:把总体目标拆解为任务图并提交。提交后由用户在画布上检查并手动开始运行。",
@@ -475,7 +481,7 @@ export async function buildOrchPlanMcpServerAsync(
         },
       },
     ],
-  });
+  };
 }
 
 /** MCP 工具结果的通用文本封装。 */

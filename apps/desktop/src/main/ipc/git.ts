@@ -27,7 +27,6 @@
 import type { IpcMain } from "electron";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
-import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
 import type simpleGitFn from "simple-git";
 import {
   IPC,
@@ -75,8 +74,8 @@ import type {
 import { ProjectRepo, SettingRepo } from "@main/store/repositories.js";
 import { findContainingWorkspaceRoot, isKnownWorkspaceRoot } from "@main/lib/pathGuard.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
-import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
-import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
+import { buildCustomEnv, resolveActiveModel, type ClaudeCliEnv } from "@main/providers/claude-sdk/customEnv.js";
+import { runClaudeOneShot } from "@main/providers/claude-sdk/claudeOneShot.js";
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import { resolveProtocol } from "@contracts/customModel";
 import type { ApiConfig } from "@contracts/customModel";
@@ -402,7 +401,6 @@ export async function generateCommitMessageForRepo(input: {
 
     // 3. Resolve the model config. OpenAI-protocol configs get their bridge
     //    activated here too (see resolveModelForGitOp).
-    const { query } = await loadClaudeSdk();
     const ac = new AbortController();
     if (input.requestId) activeCommitGenerations.set(input.requestId, ac);
     const timer = setTimeout(() => ac.abort(), 60000); // 60s timeout
@@ -410,7 +408,7 @@ export async function generateCommitMessageForRepo(input: {
     let releaseBridge: (() => void) | undefined;
     try {
       let model: string | undefined;
-      let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
+      let env: ClaudeCliEnv | undefined;
 
       if (input.customModelId) {
         const resolved = await resolveModelForGitOp(
@@ -426,40 +424,17 @@ export async function generateCommitMessageForRepo(input: {
         env = buildCustomEnv(cfg);
       }
 
-      // Resolve the real on-disk binary path (unpacks from asar in a packaged
-      // app). See the resolveSdkBinaryPath.ts rationale.
-      const binaryPath = resolveSdkBinaryPath();
-
-      const q = query({
+      // 4. One reply from the user's Claude CLI, with its default tool set
+      //    (maxTurns 1 bounds it). The commit message is the text of the
+      //    last assistant message.
+      let { lastText: message } = await runClaudeOneShot({
         prompt: userPrompt,
-        options: {
-          abortController: ac,
-          maxTurns: 1,
-          model,
-          env,
-          systemPrompt: COMMIT_GEN_SYSTEM_PROMPT,
-          settingSources: ["project", "local"],
-          includePartialMessages: false,
-          ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
-        },
+        systemPrompt: COMMIT_GEN_SYSTEM_PROMPT,
+        model,
+        env,
+        tools: "default",
+        abortController: ac,
       });
-
-      // 4. Collect the assistant's text response.
-      let message = "";
-      for await (const m of q) {
-        if (m.type === "assistant") {
-          const content = (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content;
-          if (Array.isArray(content)) {
-            message = content
-              .filter((b) => b.type === "text" && b.text)
-              .map((b) => b.text!)
-              .join("\n");
-          }
-        }
-        if (m.type === "result") {
-          break;
-        }
-      }
 
       clearTimeout(timer);
       if (!message.trim()) {

@@ -129,8 +129,8 @@ div:has(> [role="menu"]) {
    * diff tallies, status labels). Dark keeps its 400/500 shades, which pass
    * from the other side on near-black. Icons/dots only need the 3:1
    * non-text bar, but sharing the darker token keeps light chrome coherent. */
-  --accent: 5 150 105; /* emerald-600 — brand: buttons, icons, focus rings */
-  --accent-strong: 4 120 87; /* emerald-700 — small accent TEXT (≥4.5:1) */
+  --accent: 2 132 199; /* #0284c7 sky-600 — 统一内置品牌强调色: 科技冷灰蓝 */
+  --accent-strong: 3 105 161; /* #0369a1 sky-700 — small accent TEXT (≥4.5:1) */
   /* Inline code span foreground — plain body color on BOTH themes (GitHub
    * convention): the recess background already marks the span as code, so the
    * text itself stays neutral. Light dropped the accent tint after emerald-600
@@ -257,8 +257,8 @@ div:has(> [role="menu"]) {
                             * composer box outline stays visible on the
                             * background. Tuned to read clearly without
                             * being as bright as the muted-text color. */
-  --accent: 16 185 129; /* emerald-500 */
-  --accent-strong: 16 185 129; /* emerald-500 — dark accent is already ~6.6:1
+  --accent: 56 189 248; /* #38bdf8 sky-400 — 统一内置品牌强调色: 科技冷灰蓝 */
+  --accent-strong: 56 189 248; /* sky-400 — dark accent is already ~7.5:1
                                  * on the slate surface, so the small-text
                                  * variant can simply mirror it */
   --danger: 248 113 113; /* red-400 */
@@ -2205,8 +2205,8 @@ html.sketch:not(.dark) {
   --edge: 199 189 168; /* #c7bda8 铅笔灰 */
   --panel-edge: 214 205 186; /* #d6cdba 结构分隔线(比 edge 浅一档) */
   --input-edge: 178 167 144; /* #b2a790 输入框描边(比 edge 深一档) */
-  --accent: 8 140 105; /* #088c69 微降饱和的墨绿 */
-  --accent-strong: 6 118 88; /* #067658 */
+  --accent: 14 116 144; /* #0e7490 cyan-700 冷青墨 */
+  --accent-strong: 21 94 117; /* #155e75 cyan-800 */
   --danger: 199 62 52;
   --warning: 173 108 16;
   --info: 112 78 196;
@@ -2232,8 +2232,8 @@ html.sketch.dark {
   --edge: 105 90 70; /* #695a46 粉笔线 */
   --panel-edge: 95 81 63; /* #5f513f 结构分隔线 */
   --input-edge: 128 112 88; /* #807058 输入框描边(比 edge 亮一档) */
-  --accent: 64 190 142; /* #40be8e 粉笔绿 */
-  --accent-strong: 64 190 142; /* 深色底上已够对比,镜像 accent(同 .dark 惯例) */
+  --accent: 56 189 248; /* #38bdf8 粉笔蓝 */
+  --accent-strong: 56 189 248; /* 深色底上已够对比,镜像 accent(同 .dark 惯例) */
   --danger: 240 116 100;
   --warning: 235 178 80;
   --info: 168 142 245;
@@ -2883,4 +2883,37 @@ html.sketch.dark body::after {
 }
 .pdf-text-layer ::selection {
   background: rgb(var(--accent) / 0.35);
+}
+
+/* ───────────── 流式打字机呼吸光标 ─────────────
+ * Follows the tail of actively streaming markdown replies. Appends a smoothly
+ * pulsing caret after the last inline text element, vanishing naturally once
+ * streaming settles without any DOM residue.
+ */
+@keyframes stream-caret-pulse {
+  0% {
+    opacity: 0.25;
+    transform: scaleY(0.85);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scaleY(1);
+  }
+  100% {
+    opacity: 0.25;
+    transform: scaleY(0.85);
+  }
+}
+
+.chat-streaming-tail > :last-child:not(pre):not(table):not(.mermaid)::after,
+.chat-streaming-tail > :last-child > :last-child:not(pre):not(table):not(.mermaid)::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 1.15em;
+  margin-left: 3px;
+  vertical-align: -0.15em;
+  background-color: var(--accent);
+  border-radius: 1.5px;
+  animation: stream-caret-pulse 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }

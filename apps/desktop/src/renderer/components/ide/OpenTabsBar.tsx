@@ -27,7 +27,7 @@ import {
   IconStack2,
 } from "@renderer/lib/icons.js";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
-import { TabBarChevronButton, TabBarOverflowMenu } from "../layout/TabBarChrome.js";
+import { TabBarChevronButton, TabBarOverflowMenu, TabInverseCorners } from "../layout/TabBarChrome.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { ConfirmDialog } from "@renderer/components/ui/index.js";
@@ -262,33 +262,35 @@ export function OpenTabsBar({ trailing }: { trailing?: React.ReactNode } = {}) {
       role="tablist"
       aria-label="Open file tabs"
       className={cn(
-        "flex shrink-0 items-center gap-1 border-b border-edge/60 bg-surface-muted/40 dark:bg-surface/50 backdrop-blur-md px-1.5",
-        multiRow ? "min-h-8 py-0.5" : "h-8",
+        "flex shrink-0 items-center bg-surface-muted/40 dark:bg-surface/40 shadow-[inset_0_-1px_0_0_rgb(var(--edge))]",
+        multiRow ? "min-h-[38px]" : "h-[38px]",
       )}
     >
       {/* Left chevron — only when there's content scrolled off the left edge. */}
       {canScrollLeft && (
-        <TabBarChevronButton
-          dir="left"
-          onClick={() => scrollByPage(-1)}
-          title={t("ide.editor.scrollTabsLeft")}
-        />
+        <div className="flex shrink-0 items-center pl-1">
+          <TabBarChevronButton
+            dir="left"
+            onClick={() => scrollByPage(-1)}
+            title={t("ide.editor.scrollTabsLeft")}
+          />
+        </div>
       )}
 
       {/* Scrollable tab track. The native scrollbar is hidden; navigation
           is via chevrons + wheel + drag. Edge fades on either side hint at
           overflow. */}
-      <div className="relative min-w-0 flex-1">
+      <div className="relative min-w-0 flex-1 self-stretch">
         <div
           ref={scrollRef}
           onScroll={recomputeScrollState}
           onWheel={onWheel}
           className={cn(
-            "no-scrollbar flex items-center gap-1 py-0.5",
+            "no-scrollbar flex h-full items-end gap-1.5 px-2.5 pt-1",
             multiRow
               ? // Wrapped rows, capped at ~3 rows — beyond that the track
                 // scrolls vertically.
-                "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
+                "max-h-[114px] flex-wrap content-start gap-y-1 overflow-y-auto"
               : "overflow-x-auto",
           )}
         >
@@ -305,6 +307,7 @@ export function OpenTabsBar({ trailing }: { trailing?: React.ReactNode } = {}) {
                 <SortableFileTab
                   key={path}
                   path={path}
+                  variant="attached"
                   isActive={path === activeFile && !planTabActive}
                   dirty={dirtySet.has(path)}
                   multiRow={multiRow}
@@ -348,20 +351,19 @@ export function OpenTabsBar({ trailing }: { trailing?: React.ReactNode } = {}) {
                 }
               }}
               className={cn(
-                // Matches the file-tab chip look (rounded-lg + resting bg) —
-                // the plan view is an editor-kind tab.
-                "group flex max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] transition-colors",
-                // Same flexible/natural split as the file tabs above.
-                multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
+                "group relative flex h-[34px] cursor-pointer select-none items-center gap-1.5 rounded-t-xl rounded-b-none px-2.5 text-[11px]",
+                multiRow
+                  ? "min-w-[120px] flex-1"
+                  : "min-w-0 max-w-[180px] shrink-0",
                 planTabActive
-                  ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
-                  : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
+                  ? "z-10 pb-px bg-surface text-content font-medium border-t border-x border-edge"
+                  : "text-content-muted hover:text-content hover:bg-surface-hover/50 border-t border-x border-transparent",
               )}
             >
+              {planTabActive && <TabInverseCorners />}
               <IconClipboard size={12} className="shrink-0 text-accent" />
               <span className="min-w-0 flex-1 truncate">{t("ide.editor.planTab")}</span>
-              {/* Close button leaves the layout on inactive tabs (title fills
-                  the chip); appears on hover, always visible while active. */}
+              {/* Close button keeps a fixed slot so hovering never shifts the label. */}
               <button
                 type="button"
                 aria-label={t("ide.editor.closePlanTabAria")}
@@ -371,8 +373,10 @@ export function OpenTabsBar({ trailing }: { trailing?: React.ReactNode } = {}) {
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className={cn(
-                  "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle hover:bg-surface-hover hover:text-content",
-                  planTabActive ? "inline-flex" : "hidden group-hover:inline-flex",
+                  "ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-all hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
+                  planTabActive
+                    ? "opacity-100"
+                    : "opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100",
                 )}
                 title={t("common.close")}
               >
@@ -392,56 +396,60 @@ export function OpenTabsBar({ trailing }: { trailing?: React.ReactNode } = {}) {
         )}
       </div>
 
-      {/* Right chevron — only when there's content scrolled off the right edge. */}
-      {canScrollRight && (
-        <TabBarChevronButton
-          dir="right"
-          onClick={() => scrollByPage(1)}
-          title={t("ide.editor.scrollTabsRight")}
-        />
-      )}
+      {(canScrollRight || showOverflowMenu || trailing) && (
+        <div className="flex h-[38px] shrink-0 self-start items-center gap-0.5 px-1">
+          {/* Right chevron — only when there's content scrolled off the right edge. */}
+          {canScrollRight && (
+            <TabBarChevronButton
+              dir="right"
+              onClick={() => scrollByPage(1)}
+              title={t("ide.editor.scrollTabsRight")}
+            />
+          )}
 
-      {/* Overflow menu — lists every open file for quick jumping. Shown when
-          the strip overflows, and always in multi-row mode (it hosts the
-          layout toggle). */}
-      {showOverflowMenu && (
-        <TabBarOverflowMenu
-          heading={t("ide.editor.openFiles")}
-          multiRow={multiRow}
-          onToggleMultiRow={setTabBarMultiRow}
-          items={[
-            ...openFiles.map((path) => ({
-              key: path,
-              label: basename(path),
-              title: path,
-              active: path === activeFile && !planTabActive,
-              dotClass: dirtySet.has(path) ? "bg-accent animate-pulse" : undefined,
-            })),
-            ...(hasPlanTab ? [{
-              key: "__plan__",
-              label: t("ide.editor.planTab"),
-              title: t("ide.editor.viewPlan"),
-              active: planTabActive,
-              dotClass: undefined as string | undefined,
-            }] : []),
-          ]}
-          onSelect={(key) => {
-            if (key === "__plan__") {
-              if (activeSessionId) {
-                clearIdeActiveFile();
-                setPlanTabActive(activeSessionId, true);
-              }
-            } else {
-              setActive(key);
-              if (activeSessionId && planTabActive) {
-                setPlanTabActive(activeSessionId, false);
-              }
-            }
-          }}
-        />
-      )}
+          {/* Overflow menu — lists every open file for quick jumping. Shown when
+              the strip overflows, and always in multi-row mode (it hosts the
+              layout toggle). */}
+          {showOverflowMenu && (
+            <TabBarOverflowMenu
+              heading={t("ide.editor.openFiles")}
+              multiRow={multiRow}
+              onToggleMultiRow={setTabBarMultiRow}
+              items={[
+                ...openFiles.map((path) => ({
+                  key: path,
+                  label: basename(path),
+                  title: path,
+                  active: path === activeFile && !planTabActive,
+                  dotClass: dirtySet.has(path) ? "bg-accent animate-pulse" : undefined,
+                })),
+                ...(hasPlanTab ? [{
+                  key: "__plan__",
+                  label: t("ide.editor.planTab"),
+                  title: t("ide.editor.viewPlan"),
+                  active: planTabActive,
+                  dotClass: undefined as string | undefined,
+                }] : []),
+              ]}
+              onSelect={(key) => {
+                if (key === "__plan__") {
+                  if (activeSessionId) {
+                    clearIdeActiveFile();
+                    setPlanTabActive(activeSessionId, true);
+                  }
+                } else {
+                  setActive(key);
+                  if (activeSessionId && planTabActive) {
+                    setPlanTabActive(activeSessionId, false);
+                  }
+                }
+              }}
+            />
+          )}
 
-      {trailing}
+          {trailing}
+        </div>
+      )}
 
       {/* Right-click context menu for file tabs. Controlled + cursor-anchored
 
@@ -474,6 +482,12 @@ interface SortableFileTabProps {
    *  a line only wraps when it genuinely can't hold another tab. Omit for
    *  the single-row strip (natural-width chips, horizontal scroll). */
   multiRow?: boolean;
+  /** Visual style: "vscode" (default, flat edge-to-edge editor tabs with top
+   *  accent bar) or "attached" (titlebar browser-style tab merging into the
+   *  surface below). */
+  variant?: "vscode" | "attached";
+  /** True when this is the leftmost tab in the unified strip. */
+  isFirst?: boolean;
   registerNode: (node: HTMLDivElement | null) => void;
   onActivate: () => void;
   onClose: () => void;
@@ -489,6 +503,8 @@ export function SortableFileTab({
   isActive,
   dirty,
   multiRow,
+  variant = "vscode",
+  isFirst = false,
   registerNode,
   onActivate,
   onClose,
@@ -527,16 +543,18 @@ export function SortableFileTab({
     [onClose],
   );
 
-  // Middle-click closes (browser tab-bar convention). Dirty files go through
-  // the same confirm as the × button — onClose is the parent's guarded close.
+  // Middle-click closes (browser tab-bar convention); primary mouse-down
+  // activates immediately when in attached mode.
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button === 1) {
         e.preventDefault();
         onClose();
+      } else if (e.button === 0 && !isActive) {
+        onActivate();
       }
     },
-    [onClose],
+    [onClose, onActivate, isActive],
   );
 
   return (
@@ -546,9 +564,7 @@ export function SortableFileTab({
       {...attributes}
       {...listeners}
       onClick={() => {
-        // A real drag is captured away by dnd-kit and never lands here; this
-        // fires only for an actual tap, which we treat as tab activation.
-        onActivate();
+        if (!isActive) onActivate();
       }}
       onMouseDown={onMouseDown}
       onContextMenu={onContextMenu}
@@ -556,20 +572,42 @@ export function SortableFileTab({
       aria-selected={isActive}
       title={path}
       className={cn(
-        // Apple-style Compact Integrated Card File Tab (方案 1)
-        "group flex h-[27px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-lg px-2.5 text-[11px] transition-all duration-150",
-        multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
-        isActive
-          ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
-          : "text-content-muted hover:text-content hover:bg-surface-hover/50 border border-transparent",
-        isDragging && "shadow-lg opacity-80 z-20",
+        "group relative flex cursor-pointer select-none items-center gap-1.5",
+        variant !== "attached" && "transition-colors duration-100",
+        variant === "attached"
+          ? cn(
+              "h-[34px] px-2.5 text-[11px] rounded-t-xl rounded-b-none",
+              multiRow ? "min-w-[120px] flex-1" : "min-w-0 max-w-[180px] shrink-0",
+              isActive
+                ? "z-10 pb-px bg-surface text-content font-medium border-t border-x border-edge"
+                : "text-content-muted hover:text-content hover:bg-surface-hover/50 border-t border-x border-transparent",
+            )
+          : cn(
+              "h-8 pl-2.5 pr-1.5 text-[12px] border-r border-edge/60",
+              multiRow
+                ? "min-w-[120px] flex-1 border-b border-edge/60"
+                : "min-w-0 max-w-[180px] shrink-0",
+              isActive
+                ? "bg-surface text-content font-medium"
+                : "bg-transparent text-content-muted hover:bg-surface/60 hover:text-content",
+            ),
+        isDragging && "shadow-lg opacity-80 z-20 bg-surface",
       )}
     >
+      {variant === "attached" && isActive && <TabInverseCorners />}
+      {variant === "vscode" && isActive && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-accent"
+        />
+      )}
       {/* File-type icon + file name. The icon is shrink-0 so it survives
           truncation; the name flex-1 + min-w-0 truncates with ellipsis when
           space is tight. The tab's own max-w governs the overall cap. */}
       <FileTypeIcon path={path} size={13} className="shrink-0 text-content-subtle" />
-      <span className="min-w-0 flex-1 truncate font-mono">{basename(path)}</span>
+      <span className="min-w-0 flex-1 truncate">
+        {basename(path)}
+      </span>
       {/* Dirty (unsaved) marker OR close button — same layout slot. The
           marker is the "edited" icon: it holds the slot on both active and
           inactive tabs; hovering the tab swaps it for the × (VS Code-style).
@@ -588,6 +626,7 @@ export function SortableFileTab({
             aria-label={t("ide.editor.closeTabAria")}
             onClick={handleClose}
             onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             className="absolute inset-0 hidden items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/10 dark:hover:bg-white/15 hover:text-content group-hover:flex"
             title={t("common.close")}
           >
@@ -600,6 +639,7 @@ export function SortableFileTab({
           aria-label={t("ide.editor.closeTabAria")}
           onClick={handleClose}
           onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
           className={cn(
             // Always in flow — opacity swap, never display swap. A hover-
             // appearing button shifts the title on every hover ("hover

@@ -21,6 +21,11 @@ import {
   IconCircleOff,
   IconArrowsExchange,
   IconPlugConnected,
+  IconDownload,
+  IconCopy,
+  IconCode,
+  IconRefresh,
+  IconSparkles,
 } from "@renderer/lib/icons.js";
 import { SiClaude, OpenAIBrandIcon, SiGoogle } from "@renderer/lib/icons.js";
 import { OpenCodeBrandIcon } from "@renderer/lib/opencodeBrandIcon.js";
@@ -29,6 +34,10 @@ import type {
   CustomModelPublic,
   CustomModelEntry,
   CustomModelThinkingMode,
+  ClaudeTierModels,
+  ClaudeTierRoleMetaMap,
+  ClaudeSettingsSyncState,
+  ClaudeSettingsSyncTarget,
   AuthMode,
   Protocol,
 } from "@contracts/customModel";
@@ -203,30 +212,206 @@ function SecretInput({
 
 /* ════════════════════════ Claude form ════════════════════════ */
 
+type ClaudeRoleKey = "sonnet" | "opus" | "fable" | "haiku" | "subagent";
+
 type TestState =
   | { status: "idle" }
-  | { status: "testing"; idx: number }
+  | { status: "testing"; role: ClaudeRoleKey }
   | { status: "ok"; detail: string }
   | { status: "fail"; error: string };
 
-/** Select sentinel for the subagent-model "follow main session" option. The
- *  form state stores "" for that case (maps at the boundary — a bare "" would
- *  be ambiguous as a Select value). */
-const SUBAGENT_FOLLOW_MAIN = "__subagent_follow_main__";
-
-interface ClaudeModelFormState {
-  /** Gateway-side model id, e.g. "deepseek-v4-pro". */
-  id: string;
+interface ClaudeRoleRowState {
+  /** Gateway-side request model id, e.g. "glm-5.4". */
+  model: string;
+  /** Optional display name shown in the model picker (unused for subagent). */
+  displayName: string;
+  /** Declare 1M-token context window (`[1m]`). */
   supports1m: boolean;
-  /** How thinking is controlled on this model (OpenAI-protocol endpoints) —
-   *  always an EXPLICIT mode: the form offers no "auto" choice; legacy rows
-   *  that were never declared open with their current inference materialized
-   *  as the initial selection. See CustomModelEntry.thinking. */
+  /** Thinking control for OpenAI-protocol endpoints. */
   thinkingMode: CustomModelThinkingMode;
-  /** Default level for `reasoning_effort` mode (informational — the composer
-   *  starts every model at "default"). */
   thinkingDefault: string;
 }
+
+const CLAUDE_ROLE_KEYS: readonly ClaudeRoleKey[] = [
+  "sonnet",
+  "opus",
+  "fable",
+  "haiku",
+  "subagent",
+];
+
+/** Static descriptor for the 5 Claude Code model-mapping rows (mirrors cc-switch). */
+const CLAUDE_ROLE_ROWS: readonly {
+  key: ClaudeRoleKey;
+  labelKey: MessageId;
+  envKey: string;
+  hasDisplayName: boolean;
+}[] = [
+  {
+    key: "sonnet",
+    labelKey: "settings.customModels.tierRoleSonnet",
+    envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    hasDisplayName: true,
+  },
+  {
+    key: "opus",
+    labelKey: "settings.customModels.tierRoleOpus",
+    envKey: "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    hasDisplayName: true,
+  },
+  {
+    key: "fable",
+    labelKey: "settings.customModels.tierRoleFable",
+    envKey: "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    hasDisplayName: true,
+  },
+  {
+    key: "haiku",
+    labelKey: "settings.customModels.tierRoleHaiku",
+    envKey: "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    hasDisplayName: true,
+  },
+  {
+    key: "subagent",
+    labelKey: "settings.customModels.tierRoleSubagent",
+    envKey: "CLAUDE_CODE_SUBAGENT_MODEL",
+    hasDisplayName: false,
+  },
+];
+
+interface ClaudeProviderPreset {
+  id: string;
+  label: string;
+  name: string;
+  baseUrl: string;
+  authMode: AuthMode;
+  protocol: Protocol;
+  roles: Partial<Record<ClaudeRoleKey, { model: string; displayName?: string; supports1m?: boolean }>>;
+}
+
+/** Built-in quick presets modeled after cc-switch's claudeProviderPresets so
+ *  users only need to paste their API key for common endpoints. */
+const CLAUDE_PROVIDER_PRESETS: readonly ClaudeProviderPreset[] = [
+  {
+    id: "zhipu",
+    label: "智谱 GLM",
+    name: "智谱 GLM",
+    baseUrl: "https://open.bigmodel.cn/api/anthropic",
+    authMode: "auth_token",
+    protocol: "anthropic",
+    roles: {
+      sonnet: { model: "glm-4.7" },
+      opus: { model: "glm-4.7" },
+      fable: { model: "glm-4.7" },
+      haiku: { model: "glm-4.5-air" },
+    },
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    name: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/anthropic",
+    authMode: "auth_token",
+    protocol: "anthropic",
+    roles: {
+      sonnet: { model: "deepseek-chat" },
+      opus: { model: "deepseek-reasoner" },
+      fable: { model: "deepseek-reasoner" },
+      haiku: { model: "deepseek-chat" },
+    },
+  },
+  {
+    id: "kimi",
+    label: "Kimi",
+    name: "Kimi",
+    baseUrl: "https://api.moonshot.cn/anthropic",
+    authMode: "auth_token",
+    protocol: "anthropic",
+    roles: {
+      sonnet: { model: "kimi-k2-0905-preview" },
+      opus: { model: "kimi-k2-0905-preview" },
+      fable: { model: "kimi-k2-0905-preview" },
+      haiku: { model: "kimi-k2-0905-preview" },
+    },
+  },
+  {
+    id: "minimax",
+    label: "MiniMax",
+    name: "MiniMax",
+    baseUrl: "https://api.minimaxi.com/anthropic",
+    authMode: "auth_token",
+    protocol: "anthropic",
+    roles: {
+      sonnet: { model: "MiniMax-M2.5" },
+      opus: { model: "MiniMax-M2.5" },
+      fable: { model: "MiniMax-M2.5" },
+      haiku: { model: "MiniMax-M2.5" },
+    },
+  },
+  {
+    id: "qwen",
+    label: "通义千问",
+    name: "通义千问",
+    baseUrl: "https://dashscope.aliyuncs.com/apps/anthropic",
+    authMode: "auth_token",
+    protocol: "anthropic",
+    roles: {
+      sonnet: { model: "qwen3-coder-plus" },
+      opus: { model: "qwen3-coder-plus" },
+      fable: { model: "qwen3-coder-plus" },
+      haiku: { model: "qwen3-coder-plus" },
+    },
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    name: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api",
+    authMode: "auth_token",
+    protocol: "anthropic",
+    roles: {
+      sonnet: { model: "anthropic/claude-sonnet-4.5" },
+      opus: { model: "anthropic/claude-opus-4.5" },
+      fable: { model: "anthropic/claude-opus-4.5" },
+      haiku: { model: "anthropic/claude-haiku-4.5" },
+    },
+  },
+  {
+    id: "official",
+    label: "Anthropic",
+    name: "Claude 官方",
+    baseUrl: "https://api.anthropic.com",
+    authMode: "api_key",
+    protocol: "anthropic",
+    roles: {
+      sonnet: { model: "claude-sonnet-4-5" },
+      opus: { model: "claude-opus-4-5" },
+      fable: { model: "claude-opus-4-5" },
+      haiku: { model: "claude-haiku-4-5" },
+    },
+  },
+  {
+    id: "openai",
+    label: "OpenAI 兼容",
+    name: "OpenAI 兼容",
+    baseUrl: "https://api.openai.com/v1",
+    authMode: "auth_token",
+    protocol: "openai",
+    roles: {
+      sonnet: { model: "gpt-4.1" },
+      opus: { model: "gpt-4.1" },
+      fable: { model: "gpt-4.1" },
+      haiku: { model: "gpt-4.1-mini" },
+    },
+  },
+];
+
+const SYNC_TARGET_OPTIONS: readonly { value: ClaudeSettingsSyncTarget; labelKey: MessageId }[] = [
+  { value: "mcode", labelKey: "settings.customModels.syncTargetMcode" },
+  { value: "claude", labelKey: "settings.customModels.syncTargetClaude" },
+  { value: "both", labelKey: "settings.customModels.syncTargetBoth" },
+  { value: "none", labelKey: "settings.customModels.syncTargetNone" },
+];
 
 /** One editable row of the custom-headers list. Held as rows rather than a
  *  record so a half-typed row can sit in the form while the user is editing
@@ -261,21 +446,22 @@ interface ClaudeFormState {
   authMode: AuthMode;
   protocol: Protocol;
   authToken: string;
-  /** Flat model list — mirrors the Pi form's models array. */
-  models: ClaudeModelFormState[];
-  /** Model id from `models` pinned for Task-tool subagents; "" = follow the
-   *  main session's model (no CLAUDE_CODE_SUBAGENT_MODEL override). */
-  subagentModel: string;
+  /** Single-table role-based model mappings (Sonnet/Opus/Fable/Haiku/Subagent). */
+  roles: Record<ClaudeRoleKey, ClaudeRoleRowState>;
   disableNonEssentialTraffic: boolean;
   timeoutMs: string;
   /** Extra request headers for the endpoint. See CustomHeaders in contracts. */
   customHeaders: CustomHeaderRow[];
 }
 
-function emptyClaudeModel(): ClaudeModelFormState {
-  // New rows default to "none" (send nothing) — the conservative explicit
-  // choice; the user switches it to the endpoint's actual dialect if needed.
-  return { id: "", supports1m: false, thinkingMode: "none", thinkingDefault: "medium" };
+function emptyClaudeRoleRow(): ClaudeRoleRowState {
+  return {
+    model: "",
+    displayName: "",
+    supports1m: false,
+    thinkingMode: "none",
+    thinkingDefault: "medium",
+  };
 }
 
 function emptyClaudeForm(): ClaudeFormState {
@@ -285,15 +471,49 @@ function emptyClaudeForm(): ClaudeFormState {
     authMode: "auth_token",
     protocol: "anthropic",
     authToken: "",
-    models: [],
-    subagentModel: "",
+    roles: {
+      sonnet: emptyClaudeRoleRow(),
+      opus: emptyClaudeRoleRow(),
+      fable: emptyClaudeRoleRow(),
+      haiku: emptyClaudeRoleRow(),
+      subagent: emptyClaudeRoleRow(),
+    },
     disableNonEssentialTraffic: true,
     timeoutMs: "",
     customHeaders: [],
   };
 }
 
+const strip1mTag = (s: string): string => s.replace(/(\[1m\])+$/i, "").trim();
+
 function claudeFormFromConfig(m: CustomModelPublic): ClaudeFormState {
+  const entryMap = new Map<string, CustomModelEntry>();
+  for (const e of m.models) {
+    const bare = strip1mTag(e.id);
+    if (bare && !entryMap.has(bare)) entryMap.set(bare, e);
+  }
+  const firstId = m.models[0] ? strip1mTag(m.models[0].id) : "";
+  const secondId = m.models[1] ? strip1mTag(m.models[1].id) : firstId;
+
+  const sonnetId = strip1mTag(m.tierModels?.sonnet || m.tierModels?.defaultModel || firstId);
+  const opusId = strip1mTag(m.tierModels?.opus || secondId);
+  const fableId = strip1mTag(m.tierModels?.fable || opusId);
+  const haikuId = strip1mTag(m.tierModels?.haiku || secondId);
+  const subagentId = strip1mTag(m.tierModels?.subagent || m.subagentModel || "");
+
+  const rowFor = (role: ClaudeRoleKey, rawId: string, hasDisplayName: boolean): ClaudeRoleRowState => {
+    const id = strip1mTag(rawId);
+    const meta = m.tierModels?.roleMeta?.[role];
+    const entry = id ? entryMap.get(id) : undefined;
+    return {
+      model: id,
+      displayName: hasDisplayName ? (meta?.displayName ?? entry?.displayName ?? "") : "",
+      supports1m: meta?.supports1m !== undefined ? meta.supports1m : Boolean(entry?.supports1m),
+      thinkingMode: entry?.thinking?.mode ?? (id ? inferModelThinking(m.baseUrl, id).mode : "none"),
+      thinkingDefault: entry?.thinking?.defaultLevel ?? "medium",
+    };
+  };
+
   return {
     id: m.id,
     name: m.name,
@@ -301,20 +521,102 @@ function claudeFormFromConfig(m: CustomModelPublic): ClaudeFormState {
     authMode: m.authMode,
     protocol: m.protocol,
     authToken: "",
-    models: m.models.map((e) => ({
-      id: e.id,
-      supports1m: Boolean(e.supports1m),
-      // Undeclared legacy rows surface their CURRENT inference as the initial
-      // selection — saving materializes it into an explicit declaration, so
-      // the visible value is always what will be sent.
-      thinkingMode: e.thinking?.mode ?? inferModelThinking(m.baseUrl, e.id).mode,
-      thinkingDefault: e.thinking?.defaultLevel ?? "medium",
-    })),
-    subagentModel: m.subagentModel ?? "",
+    roles: {
+      sonnet: rowFor("sonnet", sonnetId, true),
+      opus: rowFor("opus", opusId, true),
+      fable: rowFor("fable", fableId, true),
+      haiku: rowFor("haiku", haikuId, true),
+      subagent: rowFor("subagent", subagentId, false),
+    },
     disableNonEssentialTraffic: m.disableNonEssentialTraffic ?? true,
     timeoutMs: m.timeoutMs ? String(m.timeoutMs) : "",
     customHeaders: Object.entries(m.customHeaders ?? {}).map(([name, value]) => ({ name, value })),
   };
+}
+
+/** Deduplicate role rows (Sonnet → Opus → Fable → Haiku, falling back to
+ *  Subagent only if all four menu roles are empty) into the flat `models[]`
+ *  array consumed by `ModelDropdown` and `CustomModelStore`. */
+function buildModelsFromRoles(roles: Record<ClaudeRoleKey, ClaudeRoleRowState>): CustomModelEntry[] {
+  const menuRoles: ClaudeRoleKey[] = ["sonnet", "opus", "fable", "haiku"];
+  const hasMenuModel = menuRoles.some((k) => strip1mTag(roles[k].model));
+  const scanOrder: ClaudeRoleKey[] = hasMenuModel ? menuRoles : ["subagent"];
+
+  const byId = new Map<string, CustomModelEntry>();
+  const out: CustomModelEntry[] = [];
+
+  for (const key of scanOrder) {
+    const row = roles[key];
+    const id = strip1mTag(row.model);
+    if (!id) continue;
+    const supports1m = row.supports1m || /\[1m\]$/i.test(row.model.trim());
+    const displayName = key !== "subagent" ? row.displayName.trim() : "";
+
+    const existing = byId.get(id);
+    if (existing) {
+      if (supports1m) existing.supports1m = true;
+      if (!existing.displayName && displayName) existing.displayName = displayName;
+      continue;
+    }
+
+    const entry: CustomModelEntry = {
+      id,
+      ...(displayName ? { displayName } : {}),
+      ...(supports1m ? { supports1m: true } : {}),
+      thinking: {
+        mode: row.thinkingMode,
+        ...(row.thinkingMode === "reasoning_effort" && row.thinkingDefault
+          ? { defaultLevel: row.thinkingDefault }
+          : {}),
+      },
+    };
+    byId.set(id, entry);
+    out.push(entry);
+  }
+  return out;
+}
+
+/** Build a sanitized preview of the `settings.json` `env` block for the
+ *  current form state (token masked unless currently typed in cleartext). */
+function buildClaudeEnvPreview(form: ClaudeFormState): Record<string, string> {
+  const roleVal = (k: ClaudeRoleKey) => strip1mTag(form.roles[k].model);
+  const sonnet = roleVal("sonnet");
+  const opus = roleVal("opus");
+  const fable = roleVal("fable");
+  const haiku = roleVal("haiku");
+  const subagent = roleVal("subagent");
+
+  const defaultKey =
+    (["sonnet", "opus", "fable", "haiku", "subagent"] as const).find((k) => roleVal(k)) ?? "sonnet";
+  const defaultBare = roleVal(defaultKey);
+  const mainModel = defaultBare
+    ? form.roles[defaultKey].supports1m
+      ? `${defaultBare}[1m]`
+      : defaultBare
+    : "";
+
+  const env: Record<string, string> = {};
+  if (form.baseUrl.trim()) env.ANTHROPIC_BASE_URL = form.baseUrl.trim();
+  const maskedToken = form.authToken.trim()
+    ? `${form.authToken.trim().slice(0, 4)}***`
+    : form.id
+      ? "<saved-encrypted-token>"
+      : "<token>";
+  if (form.authMode === "api_key") env.ANTHROPIC_API_KEY = maskedToken;
+  else env.ANTHROPIC_AUTH_TOKEN = maskedToken;
+
+  if (mainModel) env.ANTHROPIC_MODEL = mainModel;
+  if (sonnet || defaultBare) env.ANTHROPIC_DEFAULT_SONNET_MODEL = sonnet || defaultBare;
+  if (opus || defaultBare) env.ANTHROPIC_DEFAULT_OPUS_MODEL = opus || defaultBare;
+  if (fable || opus || defaultBare) env.ANTHROPIC_DEFAULT_FABLE_MODEL = fable || opus || defaultBare;
+  if (haiku || defaultBare) {
+    env.ANTHROPIC_DEFAULT_HAIKU_MODEL = haiku || defaultBare;
+    env.ANTHROPIC_SMALL_FAST_MODEL = haiku || defaultBare;
+  }
+  if (subagent || defaultBare) env.CLAUDE_CODE_SUBAGENT_MODEL = subagent || defaultBare;
+  if (form.disableNonEssentialTraffic) env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  if (form.timeoutMs.trim()) env.API_TIMEOUT_MS = form.timeoutMs.trim();
+  return env;
 }
 
 /* ════════════════════════ Pi form ════════════════════════ */
@@ -503,7 +805,8 @@ type ListItem = { kind: Family; id: string; name: string; sub: string };
 export function CustomModelsPanel() {
   const { t } = useI18n();
   const customModels = useSessionStore((s) => s.customModels);
-  const reloadCustomModels = useSessionStore((s) => s.reloadCustomModels);
+  const activeClaudeProviderId = useSessionStore((s) => s.activeClaudeProviderId);
+  const syncClaudeConfigUpdated = useSessionStore((s) => s.syncClaudeConfigUpdated);
 
   const [tab, setTab] = useState<Family>("claude");
   const [piProviders, setPiProviders] = useState<Record<string, PiProviderPublic>>({});
@@ -516,6 +819,11 @@ export function CustomModelsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: "idle" });
   const [pendingDelete, setPendingDelete] = useState<Selection & { id: string } | null>(null);
+  const [syncState, setSyncState] = useState<ClaudeSettingsSyncState>({
+    activeProviderId: null,
+    syncTarget: "mcode",
+  });
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   const reloadPi = async () => {
     try {
@@ -535,9 +843,19 @@ export function CustomModelsPanel() {
     }
   };
 
+  const reloadSyncState = async () => {
+    try {
+      const next = await api.customModel.getSyncState();
+      setSyncState(next);
+    } catch (err) {
+      console.error("customModel.getSyncState failed:", err);
+    }
+  };
+
   useEffect(() => {
     void reloadPi();
     void reloadCodex();
+    void reloadSyncState();
   }, []);
 
   const listItems = useMemo<ListItem[]>(() => {
@@ -669,32 +987,11 @@ export function CustomModelsPanel() {
 
   const saveClaude = async () => {
     if (!claudeForm) return;
-    // Trim + dedupe: the same id twice in one config is always a typo.
-    const seen = new Set<string>();
-    const models: CustomModelEntry[] = [];
-    for (const m of claudeForm.models) {
-      const id = m.id.trim();
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      const base = m.supports1m ? { id, supports1m: true } : { id };
-      // The mode is always explicit — the form has no "auto" choice, so every
-      // saved row carries a declaration the bridge/UI can rely on verbatim.
-      // (Rows saved before this field existed still lack one; the runtime
-      // keeps inferring for them until the next edit materializes it.)
-      models.push({
-        ...base,
-        thinking: {
-          mode: m.thinkingMode,
-          ...(m.thinkingMode === "reasoning_effort" && m.thinkingDefault
-            ? { defaultLevel: m.thinkingDefault }
-            : {}),
-        },
-      });
-    }
     if (!claudeForm.name.trim() || !claudeForm.baseUrl.trim()) {
       setError(t("settings.customModels.errNameBaseUrl"));
       return;
     }
+    const models = buildModelsFromRoles(claudeForm.roles);
     if (models.length === 0) {
       setError(t("settings.customModels.errNeedModel"));
       return;
@@ -708,13 +1005,35 @@ export function CustomModelsPanel() {
       setError(t("settings.customModels.errTimeout"));
       return;
     }
-    // The pin must reference a saved model row; drop it otherwise (the store
-    // re-validates, this just avoids persisting a value the UI could show as
-    // selected while its model row was being removed in the same edit).
-    const subagentModel =
-      claudeForm.subagentModel && seen.has(claudeForm.subagentModel)
-        ? claudeForm.subagentModel
-        : undefined;
+    const roleMeta: ClaudeTierRoleMetaMap = {};
+    for (const key of CLAUDE_ROLE_KEYS) {
+      const row = claudeForm.roles[key];
+      const id = strip1mTag(row.model);
+      if (!id) continue;
+      const displayName = key !== "subagent" ? row.displayName.trim() : "";
+      const supports1m = row.supports1m || /\[1m\]$/i.test(row.model.trim());
+      roleMeta[key] = {
+        ...(displayName ? { displayName } : {}),
+        supports1m,
+      };
+    }
+
+    const tierModels: ClaudeTierModels = {};
+    const roleVal = (k: ClaudeRoleKey) => strip1mTag(claudeForm.roles[k].model);
+    const sonnet = roleVal("sonnet");
+    const opus = roleVal("opus");
+    const fable = roleVal("fable");
+    const haiku = roleVal("haiku");
+    const subagent = roleVal("subagent");
+    const defaultModel = sonnet || opus || fable || haiku || subagent;
+    if (defaultModel) tierModels.defaultModel = defaultModel;
+    if (sonnet) tierModels.sonnet = sonnet;
+    if (opus) tierModels.opus = opus;
+    if (fable) tierModels.fable = fable;
+    if (haiku) tierModels.haiku = haiku;
+    if (subagent) tierModels.subagent = subagent;
+    if (Object.keys(roleMeta).length > 0) tierModels.roleMeta = roleMeta;
+
     const headersResult = customHeadersFromRows(claudeForm.customHeaders);
     if (!headersResult.ok) {
       setError(t("settings.customModels.errHeader"));
@@ -722,8 +1041,9 @@ export function CustomModelsPanel() {
     }
     setSaving(true);
     setError(null);
+    setSyncNotice(null);
     try {
-      const { models: saved } = await api.customModel.save({
+      const { models: saved, activeProviderId, syncWarning } = await api.customModel.save({
         id: claudeForm.id,
         name: claudeForm.name.trim(),
         baseUrl: claudeForm.baseUrl.trim(),
@@ -731,63 +1051,149 @@ export function CustomModelsPanel() {
         protocol: claudeForm.protocol,
         authToken: claudeForm.authToken.trim() || undefined,
         models,
-        subagentModel,
+        tierModels: Object.keys(tierModels).length > 0 ? tierModels : undefined,
+        subagentModel: tierModels.subagent,
         disableNonEssentialTraffic: claudeForm.disableNonEssentialTraffic,
         timeoutMs,
         customHeaders: headersResult.headers,
       });
-      useSessionStore.setState({ customModels: saved });
+      if (syncWarning) setSyncNotice(syncWarning);
       const landedId = claudeForm.id ?? saved[saved.length - 1]?.id ?? null;
+      syncClaudeConfigUpdated(saved, {
+        editedId: landedId,
+        activeProviderId,
+        ...(activeProviderId && activeProviderId === landedId && !claudeForm.id ? { activatedId: landedId } : {}),
+      });
       setSelection(landedId ? { kind: "claude", id: landedId } : null);
       setClaudeForm(null);
       setTest({ status: "idle" });
+      void reloadSyncState();
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setSaving(false);
-      void reloadCustomModels();
     }
   };
 
-  const runClaudeTest = async (idx: number) => {
+  const activateClaudeProvider = async (id: string) => {
+    setSyncNotice(null);
+    try {
+      const { state, warning } = await api.customModel.setActive({ id });
+      setSyncState(state);
+      syncClaudeConfigUpdated(customModels, { activatedId: id, activeProviderId: state.activeProviderId });
+      if (warning) setSyncNotice(warning);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const changeSyncTarget = async (target: ClaudeSettingsSyncTarget) => {
+    setSyncNotice(null);
+    try {
+      const { state, warning } = await api.customModel.setSyncTarget({ target });
+      setSyncState(state);
+      if (warning) setSyncNotice(warning);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const importClaudeFromSettings = async () => {
+    setSyncNotice(null);
+    setError(null);
+    try {
+      const { candidate } = await api.customModel.importSettings();
+      if (!candidate) {
+        setSyncNotice(t("settings.customModels.importEmpty"));
+        return;
+      }
+      setSelection({ kind: "claude", id: "new" });
+      setPiForm(null);
+      setCodexForm(null);
+      setTest({ status: "idle" });
+      const entryMap = new Map(candidate.models.map((m) => [strip1mTag(m.id), m]));
+      const firstId = candidate.models[0] ? strip1mTag(candidate.models[0].id) : "";
+      const rowFromId = (raw?: string): ClaudeRoleRowState => {
+        const id = strip1mTag(raw || "");
+        const entry = id ? entryMap.get(id) : undefined;
+        return {
+          model: id,
+          displayName: entry?.displayName ?? "",
+          supports1m: Boolean(entry?.supports1m),
+          thinkingMode: "none",
+          thinkingDefault: "medium",
+        };
+      };
+      const sonnetId = candidate.tierModels?.sonnet || candidate.tierModels?.defaultModel || firstId;
+      const opusId = candidate.tierModels?.opus || sonnetId;
+      const fableId = candidate.tierModels?.fable || opusId;
+      const haikuId = candidate.tierModels?.haiku || sonnetId;
+      setClaudeForm({
+        name: candidate.source === "claude" ? "Claude CLI" : "Mcode",
+        baseUrl: candidate.baseUrl,
+        authMode: candidate.authMode,
+        protocol: "anthropic",
+        authToken: candidate.authToken,
+        roles: {
+          sonnet: rowFromId(sonnetId),
+          opus: rowFromId(opusId),
+          fable: rowFromId(fableId),
+          haiku: rowFromId(haikuId),
+          subagent: { ...rowFromId(candidate.tierModels?.subagent), displayName: "" },
+        },
+        disableNonEssentialTraffic: candidate.disableNonEssentialTraffic,
+        timeoutMs: candidate.timeoutMs ? String(candidate.timeoutMs) : "",
+        customHeaders: Object.entries(candidate.customHeaders ?? {}).map(([name, value]) => ({
+          name,
+          value,
+        })),
+      });
+      setSyncNotice(
+        t("settings.customModels.importSuccess", {
+          source: candidate.source === "claude" ? "~/.claude/settings.json" : "~/.mcode/settings.json",
+        }),
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const runClaudeTest = async (role: ClaudeRoleKey) => {
     if (!claudeForm) return;
     const timeoutMs = claudeForm.timeoutMs.trim() ? Number(claudeForm.timeoutMs.trim()) : undefined;
     if (timeoutMs != null && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       setError(t("settings.customModels.errTimeout"));
       return;
     }
-    const entry = claudeForm.models[idx];
-    const model = entry?.id.trim() ?? "";
+    const row = claudeForm.roles[role];
+    const model = strip1mTag(row.model);
     if (!claudeForm.baseUrl.trim() || !model) {
       setTest({ status: "fail", error: t("settings.customModels.errTestFields") });
       return;
     }
-    if (!claudeForm.authToken.trim()) {
+    if (!claudeForm.id && !claudeForm.authToken.trim()) {
       setTest({
         status: "fail",
-        error: claudeForm.id
-          ? t("settings.customModels.errTestTokenEdit")
-          : t("settings.customModels.errTestToken"),
+        error: t("settings.customModels.errTestToken"),
       });
       return;
     }
-    // Probe with the same headers a saved turn would send: an endpoint that
-    // requires one would otherwise always fail its test.
     const headersResult = customHeadersFromRows(claudeForm.customHeaders);
     if (!headersResult.ok) {
       setTest({ status: "fail", error: t("settings.customModels.errHeader") });
       return;
     }
     setError(null);
-    setTest({ status: "testing", idx });
+    setTest({ status: "testing", role });
     try {
       const result = await api.customModel.test({
+        id: claudeForm.id,
         baseUrl: claudeForm.baseUrl.trim(),
-        authToken: claudeForm.authToken.trim(),
+        authToken: claudeForm.authToken.trim() || undefined,
         authMode: claudeForm.authMode,
         protocol: claudeForm.protocol,
         model,
-        supports1m: entry?.supports1m ?? false,
+        supports1m: row.supports1m,
         disableNonEssentialTraffic: claudeForm.disableNonEssentialTraffic,
         timeoutMs,
         customHeaders: headersResult.headers,
@@ -877,8 +1283,9 @@ export function CustomModelsPanel() {
     if (!target) return;
     try {
       if (target.kind === "claude") {
-        const { models } = await api.customModel.delete({ id: target.id });
-        useSessionStore.setState({ customModels: models });
+        const { models, activeProviderId } = await api.customModel.delete({ id: target.id });
+        syncClaudeConfigUpdated(models, { activeProviderId });
+        void reloadSyncState();
       } else if (target.kind === "codex") {
         const { providers } = await api.codexModels.delete({ id: target.id });
         setCodexProviders(providers);
@@ -903,37 +1310,67 @@ export function CustomModelsPanel() {
       />
 
       {/* ───────── Claude / Pi / Codex / OpenCode family tabs ───────── */}
-      <div className="mb-3 flex w-fit items-center gap-0.5 rounded-lg border border-edge bg-surface/40 p-0.5">
-        {(["claude", "pi", "codex", "opencode"] as const).map((k) => {
-          const count =
-            k === "claude"
-              ? customModels.length
-              : k === "codex"
-                ? codexProviders.length
-                : k === "opencode"
-                  ? null
-                  : Object.keys(piProviders).length;
-          const label =
-            k === "claude" ? "Claude" : k === "codex" ? "Codex" : k === "opencode" ? "OpenCode" : "Pi";
-          return (
-            <button
-              key={k}
-              type="button"
-              onClick={() => switchTab(k)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-md px-3 py-1 text-[0.7857em] font-medium transition-colors",
-                tab === k ? "bg-surface-hover text-content" : "text-content-muted hover:text-content",
-              )}
-            >
-              {k === "claude" ? <SiClaude size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
-              {k === "codex" ? <OpenAIBrandIcon size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
-              {k === "opencode" ? <OpenCodeBrandIcon size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
-              {label}
-              {count !== null && <span className="tabular-nums text-[0.8571em] text-content-subtle">{count}</span>}
-            </button>
-          );
-        })}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex w-fit items-center gap-0.5 rounded-lg border border-edge bg-surface/40 p-0.5">
+          {(["claude", "pi", "codex", "opencode"] as const).map((k) => {
+            const count =
+              k === "claude"
+                ? customModels.length
+                : k === "codex"
+                  ? codexProviders.length
+                  : k === "opencode"
+                    ? null
+                    : Object.keys(piProviders).length;
+            const label =
+              k === "claude" ? "Claude" : k === "codex" ? "Codex" : k === "opencode" ? "OpenCode" : "Pi";
+            return (
+              <button
+                key={k}
+                type="button"
+                onClick={() => switchTab(k)}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1 text-[0.7857em] font-medium transition-colors",
+                  tab === k ? "bg-surface-hover text-content" : "text-content-muted hover:text-content",
+                )}
+              >
+                {k === "claude" ? <SiClaude size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
+                {k === "codex" ? <OpenAIBrandIcon size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
+                {k === "opencode" ? <OpenCodeBrandIcon size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
+                {label}
+                {count !== null && <span className="tabular-nums text-[0.8571em] text-content-subtle">{count}</span>}
+              </button>
+            );
+          })}
+        </div>
+        {tab === "claude" && (
+          <div className="flex items-center gap-2">
+            <span className="text-[0.7143em] text-content-subtle">{t("settings.customModels.syncTargetLabel")}</span>
+            <Select.Root value={syncState.syncTarget} onValueChange={(v) => void changeSyncTarget(v as ClaudeSettingsSyncTarget)}>
+              <Select.Trigger className="h-7 min-w-[140px] text-[0.7857em]">
+                <Select.Value>
+                  {(val: ClaudeSettingsSyncTarget) => {
+                    const o = SYNC_TARGET_OPTIONS.find((x) => x.value === val) ?? SYNC_TARGET_OPTIONS[0];
+                    return t(o.labelKey);
+                  }}
+                </Select.Value>
+              </Select.Trigger>
+              <Select.Portal><Select.Positioner><Select.Popup><Select.List>
+                {SYNC_TARGET_OPTIONS.map((o) => (
+                  <Select.Item key={o.value} value={o.value}>
+                    <Select.ItemText>{t(o.labelKey)}</Select.ItemText>
+                  </Select.Item>
+                ))}
+              </Select.List></Select.Popup></Select.Positioner></Select.Portal>
+            </Select.Root>
+          </div>
+        )}
       </div>
+
+      {tab === "claude" && syncNotice && (
+        <div className="mb-2 rounded border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-[0.7857em] text-content">
+          {syncNotice}
+        </div>
+      )}
 
       {/* OpenCode is a different SHAPE from the other three: no endpoint
           configs — an official-login surface (CLI health, connected
@@ -942,18 +1379,33 @@ export function CustomModelsPanel() {
       {tab === "opencode" ? (
         <OpenCodeLoginPanel />
       ) : (
-      <div className="grid min-h-0 flex-1 grid-cols-[210px_1fr] gap-4">
+      <div className="grid min-h-0 flex-1 grid-cols-[225px_1fr] gap-4">
         {/* ───────── Left: provider list (family of the active tab) ───────── */}
         <aside className="flex min-h-0 flex-col rounded-md border border-edge bg-surface/40">
           <div className="flex items-center justify-between px-2.5 py-2 text-[0.7143em] font-medium uppercase tracking-wide text-content-subtle">
             <span>{t("settings.customModels.providers")}</span>
-            <span className="tabular-nums">{listItems.length}</span>
+            <div className="flex items-center gap-1.5">
+              {tab === "claude" && (
+                <button
+                  type="button"
+                  onClick={() => void importClaudeFromSettings()}
+                  title={t("settings.customModels.importTitle")}
+                  className="flex items-center gap-0.5 rounded px-1 py-0.5 text-[0.95em] font-normal normal-case tracking-normal text-accent hover:bg-surface-hover"
+                >
+                  <IconDownload size={11} />
+                  {t("settings.customModels.importBtn")}
+                </button>
+              )}
+              <span className="tabular-nums">{listItems.length}</span>
+            </div>
           </div>
           <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-1.5 pb-1.5">
             {listItems.map((item) => {
               const active = isSelected(item);
+              const isActivatedClaude =
+                item.kind === "claude" && (activeClaudeProviderId ?? syncState.activeProviderId) === item.id;
               return (
-                <button
+                <div
                   key={item.id}
                   onClick={() =>
                     item.kind === "claude"
@@ -962,15 +1414,45 @@ export function CustomModelsPanel() {
                         ? startEditCodex(item.id)
                         : startEditPi(item.id)
                   }
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      if (item.kind === "claude") startEditClaude(customModels.find((m) => m.id === item.id)!);
+                      else if (item.kind === "codex") startEditCodex(item.id);
+                      else startEditPi(item.id);
+                    }
+                  }}
                   className={cn(
-                    "relative block w-full rounded px-2.5 py-1.5 text-left transition-colors",
+                    "relative flex w-full cursor-pointer items-center justify-between gap-1.5 rounded px-2.5 py-1.5 text-left transition-colors",
                     active ? "bg-surface-hover" : "hover:bg-surface-hover/60",
                   )}
                 >
                   {active && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent" />}
-                  <div className="truncate text-[0.7857em] font-medium text-content">{item.name}</div>
-                  <div className="mt-0.5 truncate pl-0.5 text-[0.7143em] text-content-subtle">{item.sub}</div>
-                </button>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[0.7857em] font-medium text-content">{item.name}</div>
+                    <div className="mt-0.5 truncate pl-0.5 text-[0.7143em] text-content-subtle">{item.sub}</div>
+                  </div>
+                  {item.kind === "claude" && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void activateClaudeProvider(item.id);
+                      }}
+                      title={t("settings.customModels.activateTitle")}
+                      className={cn(
+                        "shrink-0 rounded px-1.5 py-0.5 text-[0.6428em] font-medium transition-colors",
+                        isActivatedClaude
+                          ? "bg-accent/15 text-accent"
+                          : "border border-edge text-content-subtle hover:border-accent/40 hover:text-content",
+                      )}
+                    >
+                      {isActivatedClaude ? t("settings.customModels.activeBadge") : "✓"}
+                    </button>
+                  )}
+                </div>
               );
             })}
             {selection?.id === "new" && selection.kind === tab && (
@@ -1015,11 +1497,12 @@ export function CustomModelsPanel() {
               key={`claude:${claudeForm.id ?? "new"}`}
               form={claudeForm}
               setForm={setClaudeForm}
+              syncTarget={syncState.syncTarget}
               test={test}
               saving={saving}
               error={error}
               revealToken={revealToken}
-              onTest={(idx) => void runClaudeTest(idx)}
+              onTest={(role) => void runClaudeTest(role)}
               onSave={() => void saveClaude()}
               onCancel={cancel}
               onDelete={claudeForm.id ? () => setPendingDelete({ kind: "claude", id: claudeForm.id! }) : undefined}
@@ -1235,9 +1718,58 @@ function EmptyDetail() {
 
 /* ════════════════════════ Claude provider form ════════════════════════ */
 
+const TIER_FOLLOW_SENTINEL = "__tier_follow__";
+
+/** Reusable model input: free-form text box paired with a single-chevron
+ *  quick-pick dropdown (`Select.Trigger` already renders its own chevron). */
+function TierModelInput({
+  value,
+  onChange,
+  placeholder,
+  optionIds,
+  pickTitle,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder: string;
+  optionIds: string[];
+  pickTitle: string;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        spellCheck={false}
+        className="flex-1"
+      />
+      {optionIds.length > 0 && (
+        <Select.Root
+          value={optionIds.includes(value.trim()) ? value.trim() : TIER_FOLLOW_SENTINEL}
+          onValueChange={(v) => {
+            if (v && v !== TIER_FOLLOW_SENTINEL) onChange(v as string);
+          }}
+        >
+          {/* Trigger already includes Select.Icon -> IconChevronDown; pass no extra icon child. */}
+          <Select.Trigger className="w-7 shrink-0 justify-center px-1" title={pickTitle} />
+          <Select.Portal><Select.Positioner><Select.Popup><Select.List>
+            {optionIds.map((id) => (
+              <Select.Item key={id} value={id}>
+                <Select.ItemText>{id}</Select.ItemText>
+              </Select.Item>
+            ))}
+          </Select.List></Select.Popup></Select.Positioner></Select.Portal>
+        </Select.Root>
+      )}
+    </div>
+  );
+}
+
 function ClaudeProviderForm({
   form,
   setForm,
+  syncTarget,
   test,
   saving,
   error,
@@ -1249,11 +1781,12 @@ function ClaudeProviderForm({
 }: {
   form: ClaudeFormState;
   setForm: (f: ClaudeFormState | null) => void;
+  syncTarget: ClaudeSettingsSyncTarget;
   test: TestState;
   saving: boolean;
   error: string | null;
   revealToken: () => Promise<string | null>;
-  onTest: (idx: number) => void;
+  onTest: (role: ClaudeRoleKey) => void;
   onSave: () => void;
   onCancel: () => void;
   onDelete?: () => void;
@@ -1261,20 +1794,29 @@ function ClaudeProviderForm({
   const isEdit = !!form.id;
   const isOpenAi = form.protocol === "openai";
   const { t } = useI18n();
-  // Open by default when anything inside it is already configured, so an
-  // existing value is never hidden behind a collapsed section.
   const [advancedOpen, setAdvancedOpen] = useState(
     Boolean(form.timeoutMs) || form.customHeaders.length > 0,
   );
+  const [envPreviewOpen, setEnvPreviewOpen] = useState(false);
+  const [copiedEnv, setCopiedEnv] = useState(false);
+  const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [quickSetNote, setQuickSetNote] = useState<string | null>(null);
 
   const update = <K extends keyof ClaudeFormState>(key: K, value: ClaudeFormState[K]) =>
     setForm({ ...form, [key]: value });
 
-  const updateModel = (idx: number, patch: Partial<ClaudeModelFormState>) =>
-    setForm({ ...form, models: form.models.map((m, i) => (i === idx ? { ...m, ...patch } : m)) });
-  const addModel = () => setForm({ ...form, models: [...form.models, emptyClaudeModel()] });
-  const removeModel = (idx: number) =>
-    setForm({ ...form, models: form.models.filter((_, i) => i !== idx) });
+  const updateRole = (role: ClaudeRoleKey, patch: Partial<ClaudeRoleRowState>) => {
+    setForm({
+      ...form,
+      roles: {
+        ...form.roles,
+        [role]: { ...form.roles[role], ...patch },
+      },
+    });
+  };
 
   const updateHeader = (idx: number, patch: Partial<CustomHeaderRow>) =>
     update(
@@ -1286,43 +1828,167 @@ function ClaudeProviderForm({
   const removeHeader = (idx: number) =>
     update("customHeaders", form.customHeaders.filter((_, i) => i !== idx));
 
+  const applyPreset = (preset: ClaudeProviderPreset) => {
+    setActivePresetId(preset.id);
+    setFetchedModels([]);
+    setFetchError(null);
+    const makeRow = (k: ClaudeRoleKey): ClaudeRoleRowState => {
+      const seed = preset.roles[k];
+      const model = seed?.model ?? "";
+      return {
+        model,
+        displayName: k !== "subagent" ? (seed?.displayName ?? "") : "",
+        supports1m: Boolean(seed?.supports1m),
+        thinkingMode:
+          preset.protocol === "openai" && model
+            ? inferModelThinking(preset.baseUrl, model).mode
+            : "none",
+        thinkingDefault: "medium",
+      };
+    };
+    setForm({
+      ...form,
+      name: preset.name,
+      baseUrl: preset.baseUrl,
+      authMode: preset.authMode,
+      protocol: preset.protocol,
+      roles: {
+        sonnet: makeRow("sonnet"),
+        opus: makeRow("opus"),
+        fable: makeRow("fable"),
+        haiku: makeRow("haiku"),
+        subagent: makeRow("subagent"),
+      },
+    });
+  };
+
+  const fetchUpstreamModels = async () => {
+    if (!form.baseUrl.trim()) {
+      setFetchError(t("settings.customModels.errBaseUrl"));
+      return;
+    }
+    const headersResult = customHeadersFromRows(form.customHeaders);
+    if (!headersResult.ok) {
+      setFetchError(t("settings.customModels.errHeader"));
+      return;
+    }
+    setFetchingModels(true);
+    setFetchError(null);
+    try {
+      const res = await api.customModel.fetchModels({
+        id: form.id,
+        baseUrl: form.baseUrl.trim(),
+        authToken: form.authToken.trim() || undefined,
+        authMode: form.authMode,
+        protocol: form.protocol,
+        customHeaders: headersResult.headers,
+      });
+      if (!res.ok) {
+        setFetchError(res.error ?? t("settings.unknownError"));
+        return;
+      }
+      setFetchedModels(res.models);
+    } catch (err) {
+      setFetchError((err as Error).message);
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
+  const quickFillAllRoles = () => {
+    const firstKey = CLAUDE_ROLE_KEYS.find((k) => strip1mTag(form.roles[k].model));
+    if (!firstKey) {
+      setQuickSetNote(t("settings.customModels.quickSetNeedModel"));
+      return;
+    }
+    const source = form.roles[firstKey];
+    const model = strip1mTag(source.model);
+    const nextRoles = { ...form.roles };
+    for (const k of CLAUDE_ROLE_KEYS) {
+      nextRoles[k] = {
+        ...nextRoles[k],
+        model,
+        displayName: k !== "subagent" ? source.displayName : "",
+        supports1m: source.supports1m,
+        thinkingMode: source.thinkingMode,
+        thinkingDefault: source.thinkingDefault,
+      };
+    }
+    setForm({ ...form, roles: nextRoles });
+    setQuickSetNote(t("settings.customModels.quickSetDone", { model }));
+    window.setTimeout(() => setQuickSetNote(null), 2200);
+  };
+
+  const configuredIds = Array.from(
+    new Set(CLAUDE_ROLE_KEYS.map((k) => strip1mTag(form.roles[k].model)).filter(Boolean)),
+  );
+  const dropdownOptions = Array.from(new Set([...fetchedModels, ...configuredIds]));
+
+  const envPreviewJson = useMemo(
+    () => JSON.stringify({ env: buildClaudeEnvPreview(form) }, null, 2),
+    [form],
+  );
+  const copyEnvPreview = async () => {
+    try {
+      await navigator.clipboard.writeText(envPreviewJson);
+      setCopiedEnv(true);
+      window.setTimeout(() => setCopiedEnv(false), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  };
+
   return (
-    <div className="space-y-2.5">
-      <Field label={t("settings.customModels.protocolLabel")}>
-        <Select.Root value={form.protocol} onValueChange={(v) => update("protocol", v as Protocol)}>
-          <Select.Trigger className="w-full">
-            <Select.Value>
-              {(val: Protocol) => {
-                const o = PROTOCOL_OPTIONS.find((x) => x.value === val) ?? PROTOCOL_OPTIONS[0];
-                return <span className="flex items-center gap-1.5">{o.icon}{t(o.labelKey)}</span>;
-              }}
-            </Select.Value>
-          </Select.Trigger>
-          <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-            {PROTOCOL_OPTIONS.map((o) => (
-              <Select.Item key={o.value} value={o.value}>
-                {o.icon}
-                <Select.ItemText>{t(o.labelKey)}</Select.ItemText>
-              </Select.Item>
-            ))}
-          </Select.List></Select.Popup></Select.Positioner></Select.Portal>
-        </Select.Root>
-      </Field>
-      {isOpenAi && (
-        <p className="text-[0.6428em] leading-relaxed text-content-subtle">
-          {t("settings.customModels.openaiNote")}
-        </p>
+    <div className="space-y-3">
+      {/* Quick presets bar (new mode only) */}
+      {!isEdit && (
+        <div>
+          <div className="mb-1 text-[0.7143em] font-medium text-content-subtle">
+            {t("settings.customModels.presetsLabel")}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {CLAUDE_PROVIDER_PRESETS.map((p) => {
+              const selected = activePresetId === p.id;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => applyPreset(p)}
+                  className={cn(
+                    "rounded-md border px-2 py-1 text-[0.7143em] font-medium transition-colors",
+                    selected
+                      ? "border-accent bg-accent/15 text-accent"
+                      : "border-edge bg-surface/60 text-content-muted hover:border-accent/40 hover:text-content",
+                  )}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
 
-      <Field label={t("settings.customModels.nameLabel")}>
-        <Input value={form.name} onChange={(e) => update("name", e.target.value)} placeholder={t("settings.customModels.namePlaceholder")} />
-      </Field>
+      {/* Core connection fields: Name + Base URL first */}
+      <div className="grid grid-cols-[180px_1fr] gap-2">
+        <Field label={t("settings.customModels.nameLabel")}>
+          <Input
+            value={form.name}
+            onChange={(e) => update("name", e.target.value)}
+            placeholder={t("settings.customModels.namePlaceholder")}
+          />
+        </Field>
+        <Field label="Base URL">
+          <Input
+            value={form.baseUrl}
+            onChange={(e) => update("baseUrl", e.target.value)}
+            placeholder={isOpenAi ? "https://api.openai.com/v1" : "https://api.deepseek.com/anthropic"}
+          />
+        </Field>
+      </div>
 
-      <Field label="Base URL">
-        <Input value={form.baseUrl} onChange={(e) => update("baseUrl", e.target.value)} placeholder={isOpenAi ? "https://api.openai.com/v1" : "https://api.deepseek.com/anthropic"} />
-      </Field>
-
-      <div className="grid grid-cols-[1fr_120px] gap-2">
+      {/* Token + Auth mode + API format */}
+      <div className="grid grid-cols-[1fr_108px_150px] gap-2">
         <Field label="Token / API Key">
           <SecretInput
             value={form.authToken}
@@ -1351,67 +2017,172 @@ function ClaudeProviderForm({
             </Select.List></Select.Popup></Select.Positioner></Select.Portal>
           </Select.Root>
         </Field>
+        <Field label={t("settings.customModels.protocolLabel")}>
+          <Select.Root value={form.protocol} onValueChange={(v) => update("protocol", v as Protocol)}>
+            <Select.Trigger className="w-full">
+              <Select.Value>
+                {(val: Protocol) => {
+                  const o = PROTOCOL_OPTIONS.find((x) => x.value === val) ?? PROTOCOL_OPTIONS[0];
+                  return (
+                    <span className="flex items-center gap-1.5 truncate">
+                      {o.icon}
+                      <span className="truncate">{val === "openai" ? "OpenAI" : "Anthropic"}</span>
+                    </span>
+                  );
+                }}
+              </Select.Value>
+            </Select.Trigger>
+            <Select.Portal><Select.Positioner><Select.Popup><Select.List>
+              {PROTOCOL_OPTIONS.map((o) => (
+                <Select.Item key={o.value} value={o.value}>
+                  {o.icon}
+                  <Select.ItemText>{t(o.labelKey)}</Select.ItemText>
+                </Select.Item>
+              ))}
+            </Select.List></Select.Popup></Select.Positioner></Select.Portal>
+          </Select.Root>
+        </Field>
       </div>
-
-      {/* Models sub-list — flat rows mirroring the Pi form: model id + 1M
-          toggle, with a per-row plug icon (next to delete) that fires the
-          connection test for that specific model. */}
-      <div>
-        <div className="mb-1 flex items-center justify-between">
-          <span className="text-[0.7857em] font-medium text-content-muted">
-            {t("settings.customModels.modelListTitle", { n: form.models.filter((m) => m.id.trim()).length })}
-          </span>
-          <button type="button" onClick={addModel} className="flex items-center gap-1 text-[0.7857em] text-accent hover:text-accent/80">
-            <IconPlus size={11} /> {t("settings.customModels.addModel")}
-          </button>
+      {isOpenAi && (
+        <div className="space-y-1 text-[0.6428em] leading-relaxed text-content-subtle">
+          <p>{t("settings.customModels.openaiNote")}</p>
+          {(syncTarget === "claude" || syncTarget === "both") && (
+            <p className="text-warning">{t("settings.customModels.openaiSyncHint")}</p>
+          )}
         </div>
-        {form.models.length === 0 && (
-          <p className="rounded border border-dashed border-edge px-2 py-3 text-center text-[0.7143em] text-content-subtle">
-            {t("settings.customModels.modelsEmpty")}
+      )}
+
+      {/* Unified single-table Model Mapping (modeled directly on cc-switch) */}
+      <div className="space-y-2 rounded border border-edge bg-surface/30 p-2.5">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <div className="text-[0.8571em] font-semibold text-content">
+              {t("settings.customModels.modelMappingTitle")}
+            </div>
+            <p className="mt-0.5 text-[0.6428em] leading-relaxed text-content-subtle">
+              {t("settings.customModels.modelMappingHint")}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={quickFillAllRoles}
+              title={t("settings.customModels.quickSetTitle")}
+              className="h-7 gap-1 px-2 text-[0.7143em]"
+            >
+              <IconSparkles size={12} />
+              {t("settings.customModels.quickSetBtn")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void fetchUpstreamModels()}
+              disabled={fetchingModels}
+              className="h-7 gap-1 px-2 text-[0.7143em]"
+            >
+              {fetchingModels ? (
+                <IconLoader2 size={12} className="animate-spin" />
+              ) : fetchedModels.length > 0 ? (
+                <IconRefresh size={12} />
+              ) : (
+                <IconDownload size={12} />
+              )}
+              {fetchedModels.length > 0
+                ? t("settings.customModels.refreshModelsBtn", { n: fetchedModels.length })
+                : t("settings.customModels.fetchModelsBtn")}
+            </Button>
+          </div>
+        </div>
+
+        {quickSetNote && (
+          <p className="text-[0.7143em] text-accent">{quickSetNote}</p>
+        )}
+        {fetchError && (
+          <p className="rounded border border-danger/30 bg-danger/5 px-2 py-1 text-[0.7143em] text-danger">
+            {fetchError}
           </p>
         )}
+
+        <div className="hidden grid-cols-[84px_0.85fr_1fr_62px_28px] gap-1.5 px-0.5 text-[0.6428em] font-medium text-content-subtle md:grid">
+          <span>{t("settings.customModels.modelRoleCol")}</span>
+          <span>{t("settings.customModels.modelDisplayCol")}</span>
+          <span>{t("settings.customModels.modelRequestCol")}</span>
+          <span className="text-center">{t("settings.customModels.model1mCol")}</span>
+          <span />
+        </div>
+
         <div className="space-y-1.5">
-          {form.models.map((m, idx) => {
-            const testingThis = test.status === "testing" && test.idx === idx;
+          {CLAUDE_ROLE_ROWS.map((spec) => {
+            const row = form.roles[spec.key];
+            const testingThis = test.status === "testing" && test.role === spec.key;
+            const modelBase = strip1mTag(row.model);
             return (
-              <div key={idx} className="rounded border border-edge bg-surface/40">
-                <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1.5 px-1.5 py-1">
-                  <Input
-                    value={m.id}
-                    onChange={(e) => updateModel(idx, { id: e.target.value })}
+              <div key={spec.key} className="space-y-1">
+                <div className="grid grid-cols-1 items-center gap-1.5 md:grid-cols-[84px_0.85fr_1fr_62px_28px]">
+                  <div
+                    title={spec.envKey}
+                    className="flex h-7 items-center rounded border border-edge bg-surface/60 px-2 text-[0.75em] font-medium text-content-muted"
+                  >
+                    {t(spec.labelKey)}
+                  </div>
+                  {spec.hasDisplayName ? (
+                    <Input
+                      value={row.displayName}
+                      onChange={(e) => updateRole(spec.key, { displayName: e.target.value })}
+                      placeholder={modelBase || t("settings.customModels.modelDisplayNameOpt")}
+                    />
+                  ) : (
+                    <div className="flex h-7 items-center rounded border border-edge bg-surface/40 px-2 text-[0.7143em] text-content-subtle">
+                      {t("settings.customModels.subagentNoMenu")}
+                    </div>
+                  )}
+                  <TierModelInput
+                    value={row.model}
+                    onChange={(next) => updateRole(spec.key, { model: next })}
                     placeholder={t("settings.customModels.modelIdPlaceholder")}
-                    spellCheck={false}
+                    optionIds={dropdownOptions}
+                    pickTitle={t("settings.customModels.tierPickFromList")}
                   />
-                  <label className="flex items-center gap-1 justify-self-center" title={t("settings.customModels.supports1mLabel")}>
-                    <Switch checked={m.supports1m} onCheckedChange={(v) => updateModel(idx, { supports1m: v })} label={t("settings.customModels.supports1mLabel")} />
-                    <span className="text-[0.6428em] text-content-muted">1M</span>
+                  <label
+                    className="flex items-center justify-center gap-1 text-[0.7143em] text-content-muted"
+                    title={t("settings.customModels.supports1mLabel")}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={row.supports1m}
+                      onChange={(e) => updateRole(spec.key, { supports1m: e.target.checked })}
+                      className="accent-accent"
+                    />
+                    <span>1M</span>
                   </label>
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => onTest(idx)}
-                    disabled={test.status === "testing"}
+                    onClick={() => onTest(spec.key)}
+                    disabled={test.status === "testing" || !modelBase}
                     title={t("settings.customModels.testWithModel")}
+                    className="h-7 w-7"
                   >
-                    {testingThis ? <IconLoader2 size={12} className="animate-spin" /> : <IconPlugConnected size={12} />}
-                  </Button>
-                  <Button variant="ghost" size="icon" onClick={() => removeModel(idx)} title={t("settings.customModels.deleteModel")}>
-                    <IconTrash size={12} />
+                    {testingThis ? (
+                      <IconLoader2 size={12} className="animate-spin" />
+                    ) : (
+                      <IconPlugConnected size={12} />
+                    )}
                   </Button>
                 </div>
-                {/* Thinking control (OpenAI-protocol endpoints only). The
-                    bridge can only deliver a level the endpoint's dialect
-                    reads, so the row declares the shape explicitly; legacy
-                    rows that were never declared open with their current
-                    inference as the initial selection. */}
-                {isOpenAi && (
-                  <div className="flex flex-wrap items-center gap-1.5 border-t border-edge px-1.5 py-1">
+                {isOpenAi && modelBase && spec.hasDisplayName && (
+                  <div className="flex flex-wrap items-center gap-1.5 pl-1 md:pl-[90px]">
                     <span className="text-[0.6428em] text-content-subtle">
                       {t("settings.customModels.thinkingLabel")}
                     </span>
                     <Select.Root
-                      value={m.thinkingMode}
-                      onValueChange={(v) => updateModel(idx, { thinkingMode: v as CustomModelThinkingMode })}
+                      value={row.thinkingMode}
+                      onValueChange={(v) =>
+                        updateRole(spec.key, { thinkingMode: v as CustomModelThinkingMode })
+                      }
                     >
                       <Select.Trigger className="min-w-0 flex-1 text-[0.7143em]">
                         <Select.Value>
@@ -1431,12 +2202,15 @@ function ClaudeProviderForm({
                         ))}
                       </Select.List></Select.Popup></Select.Positioner></Select.Portal>
                     </Select.Root>
-                    {m.thinkingMode === "reasoning_effort" && (
+                    {row.thinkingMode === "reasoning_effort" && (
                       <Select.Root
-                        value={m.thinkingDefault}
-                        onValueChange={(v) => updateModel(idx, { thinkingDefault: v as string })}
+                        value={row.thinkingDefault}
+                        onValueChange={(v) => updateRole(spec.key, { thinkingDefault: v as string })}
                       >
-                        <Select.Trigger className="w-[7.5em] text-[0.7143em]" title={t("settings.customModels.thinkingDefaultTitle")}>
+                        <Select.Trigger
+                          className="w-[7.5em] text-[0.7143em]"
+                          title={t("settings.customModels.thinkingDefaultTitle")}
+                        >
                           <Select.Value />
                         </Select.Trigger>
                         <Select.Portal><Select.Positioner><Select.Popup><Select.List>
@@ -1456,54 +2230,17 @@ function ClaudeProviderForm({
         </div>
       </div>
 
-      {/* Subagent-model pin — a per-config setting: Claude sessions running
-          on THIS provider route Task-tool subagents through the picked model
-          (CLAUDE_CODE_SUBAGENT_MODEL). "" = follow the main session's model.
-          Options come from the model rows above, so a pin whose row was
-          deleted in this edit simply disappears from the list and is dropped
-          on save. */}
-      <Field label={t("settings.subagentModel.select")}>
-        <Select.Root
-          value={form.subagentModel || SUBAGENT_FOLLOW_MAIN}
-          onValueChange={(v) => update("subagentModel", v === SUBAGENT_FOLLOW_MAIN ? "" : (v as string))}
-        >
-          <Select.Trigger className="w-full">
-            <Select.Value>
-              {(val: string | null) => (
-                <span
-                  className={cn(
-                    "flex items-center",
-                    (!val || val === SUBAGENT_FOLLOW_MAIN) && "text-content-subtle",
-                  )}
-                >
-                  {val && val !== SUBAGENT_FOLLOW_MAIN
-                    ? val
-                    : t("settings.subagentModel.follow")}
-                </span>
-              )}
-            </Select.Value>
-          </Select.Trigger>
-          <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-            <Select.Item value={SUBAGENT_FOLLOW_MAIN}>
-              <Select.ItemText>{t("settings.subagentModel.follow")}</Select.ItemText>
-            </Select.Item>
-            {form.models.filter((m) => m.id.trim()).map((m) => (
-              <Select.Item key={m.id.trim()} value={m.id.trim()}>
-                <Select.ItemText>{m.id.trim()}</Select.ItemText>
-              </Select.Item>
-            ))}
-          </Select.List></Select.Popup></Select.Positioner></Select.Portal>
-        </Select.Root>
-      </Field>
-      <p className="text-[0.6428em] leading-relaxed text-content-subtle">
-        {t("settings.subagentModel.hint")}
-      </p>
-
-      {/* Advanced */}
-      <button type="button" onClick={() => setAdvancedOpen((v) => !v)} className="flex items-center gap-1 pt-1 text-[0.7857em] text-content-subtle hover:text-content-muted">
-        <IconChevronRight size={12} className={cn("transition-transform", advancedOpen && "rotate-90")} />
-        {t("settings.customModels.advancedToggle")}
-      </button>
+      {/* Advanced + env preview */}
+      <div className="flex flex-wrap items-center gap-3 pt-0.5">
+        <button type="button" onClick={() => setAdvancedOpen((v) => !v)} className="flex items-center gap-1 text-[0.7857em] text-content-subtle hover:text-content-muted">
+          <IconChevronRight size={12} className={cn("transition-transform", advancedOpen && "rotate-90")} />
+          {t("settings.customModels.advancedToggle")}
+        </button>
+        <button type="button" onClick={() => setEnvPreviewOpen((v) => !v)} className="flex items-center gap-1 text-[0.7857em] text-content-subtle hover:text-content-muted">
+          <IconCode size={12} />
+          {t("settings.customModels.envPreviewToggle")}
+        </button>
+      </div>
       {advancedOpen && (
         <div className="space-y-2 rounded border border-edge bg-surface/50 p-2">
           <div className="grid grid-cols-[1fr_140px] gap-2">
@@ -1516,9 +2253,6 @@ function ClaudeProviderForm({
             </label>
           </div>
 
-          {/* Extra request headers. Sent by BOTH delivery paths — the direct
-              Anthropic one and the local protocol bridge — so a gateway that
-              needs a routing/tenant hint works either way. */}
           <div className="space-y-1.5 border-t border-edge pt-2">
             <div className="flex items-center justify-between">
               <span className="text-[0.7857em] text-content-muted">
@@ -1555,6 +2289,21 @@ function ClaudeProviderForm({
               {t("settings.customModels.customHeadersHint")}
             </p>
           </div>
+        </div>
+      )}
+
+      {envPreviewOpen && (
+        <div className="space-y-1.5 rounded border border-edge bg-surface/50 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[0.6428em] text-content-subtle">{t("settings.customModels.envPreviewHint")}</span>
+            <Button variant="ghost" size="sm" onClick={() => void copyEnvPreview()} className="h-6 gap-1 px-2 text-[0.7143em]">
+              {copiedEnv ? <IconCheck size={11} /> : <IconCopy size={11} />}
+              {copiedEnv ? t("settings.customModels.copiedEnv") : t("settings.customModels.copyEnv")}
+            </Button>
+          </div>
+          <pre className="max-h-48 overflow-auto rounded bg-surface p-2 font-mono text-[0.7143em] leading-relaxed text-content">
+            {envPreviewJson}
+          </pre>
         </div>
       )}
 

@@ -2,10 +2,10 @@
  * Output-style discovery + selection for Claude sessions (settings panel).
  *
  * An "output style" rewrites the claude CLI's system prompt to change HOW the
- * model responds. The SDK exposes it as `Settings.outputStyle` — NOT a
- * top-level Options field — and offers no runtime switch control request, so
- * the selection is read per-turn by ClaudeAgentSdkProvider and injected into
- * `options.settings`. The CLI matches style names exactly:
+ * model responds. The CLI takes it as the `outputStyle` setting — passed per
+ * turn on `--settings` by ClaudeAgentSdkProvider (read per-turn because the
+ * CLI reads the style once at session start and has no runtime switch). The
+ * CLI matches style names exactly:
  *  - built-ins: "default" (lowercase), "Explanatory", "Learning",
  *    "Proactive", "Concise" (verified against the 2.1.220 binary strings and
  *    live probes; an unknown name is NOT fatal — the CLI falls back to the
@@ -16,13 +16,13 @@
  *    Verified live: frontmatter names containing spaces match verbatim.
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   AGENT_OUTPUT_STYLE_SETTING_KEY,
   type OutputStyleEntry,
 } from "@contracts/ipc";
 import { MCODE_CONFIG_DIR } from "@main/providers/claude-sdk/customEnv.js";
+import { probeClaudeCliVersion, resolveClaudeExecutable } from "@main/lib/claudeExecutable.js";
 import { awaitDb } from "@main/store/db.js";
 import { SettingRepo } from "@main/store/repositories.js";
 
@@ -30,8 +30,8 @@ import { SettingRepo } from "@main/store/repositories.js";
 const USER_STYLE_DIR = join(MCODE_CONFIG_DIR, "output-styles");
 
 /** Built-in styles shipped inside the claude binary. `minCliVersion` gates
- *  styles the bundled CLI predates (Concise landed in 2.1.237) so the panel
- *  never offers a style the running binary would silently ignore. */
+ *  styles the user's CLI may predate (Concise landed in 2.1.237) so the panel
+ *  never offers a style the running CLI would silently ignore. */
 const BUILTIN_STYLES: Array<{ id: string; minCliVersion?: string }> = [
   { id: "default" },
   { id: "Explanatory" },
@@ -52,29 +52,13 @@ function versionAtLeast(actual: string, min: string): boolean {
   return true;
 }
 
-/** CLI version from the SDK package manifest (e.g. "2.1.218"), or null when
- *  unreadable — then no gating (an unknown style falls back harmlessly). */
-let cachedCliVersion: string | null | undefined;
-function bundledCliVersion(): string | null {
-  if (cachedCliVersion !== undefined) return cachedCliVersion;
-  cachedCliVersion = null;
-  try {
-    const req = createRequire(import.meta.url);
-    // Bare-specifier resolve (NOT a "./sdk.mjs" subpath — the package's
-    // exports map doesn't expose that subpath and resolve throws). Resolves
-    // to <pkg>/sdk.mjs, so dirname() is the package root where manifest.json
-    // lives. In packaged apps this may sit inside app.asar, which Electron's
-    // fs shim reads transparently.
-    const manifestPath = join(
-      dirname(req.resolve("@anthropic-ai/claude-agent-sdk")),
-      "manifest.json",
-    );
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { version?: unknown };
-    if (typeof manifest.version === "string") cachedCliVersion = manifest.version;
-  } catch {
-    /* resolve/read failed (unusual node_modules layout) — fall back to no gating */
-  }
-  return cachedCliVersion;
+/** Version of the user's Claude CLI (`claude --version`, cached), or null
+ *  when it is not installed / unreadable — then no gating (an unknown style
+ *  falls back harmlessly). */
+async function cliVersion(): Promise<string | null> {
+  const executable = resolveClaudeExecutable();
+  if (!executable) return null;
+  return probeClaudeCliVersion(executable).catch(() => null);
 }
 
 /**
@@ -142,13 +126,13 @@ function listUserStyles(): OutputStyleEntry[] {
  *  declared order, then user styles sorted by name. A user style whose name
  *  equals a built-in id shadows it (the injected value is just the name, and
  *  duplicate Select values would be ambiguous). */
-export function listOutputStyles(): OutputStyleEntry[] {
-  const cliVersion = bundledCliVersion();
+export async function listOutputStyles(): Promise<OutputStyleEntry[]> {
+  const version = await cliVersion();
   const userStyles = listUserStyles();
   const userIds = new Set(userStyles.map((s) => s.id));
   const builtins = BUILTIN_STYLES.filter(
     (s) =>
-      !userIds.has(s.id) && (!s.minCliVersion || !cliVersion || versionAtLeast(cliVersion, s.minCliVersion)),
+      !userIds.has(s.id) && (!s.minCliVersion || !version || versionAtLeast(version, s.minCliVersion)),
   ).map((s): OutputStyleEntry => ({ id: s.id, source: "builtin" }));
   return [...builtins, ...userStyles];
 }

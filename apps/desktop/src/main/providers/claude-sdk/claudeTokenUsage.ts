@@ -19,7 +19,7 @@ import type {
   ContextWarning,
   ContextWarningKind,
 } from "@contracts/runtime";
-import type { SDKControlGetContextUsageResponse } from "@anthropic-ai/claude-agent-sdk";
+import type { ClaudeContextUsageResponse } from "./claudeStreamTypes.js";
 
 /** Raw usage fields the SDK reports on assistant / result messages. Missing
  *  fields are treated as 0. Field names follow the Anthropic API convention
@@ -345,7 +345,7 @@ function dedupeWarnings(ws: ContextWarningKind[]): ContextWarningKind[] {
  *                      — only its throughput/billing fields are used here
  *  @returns A complete snapshot with authoritative window occupancy */
 export function buildSnapshotFromControlChannel(
-  cc: SDKControlGetContextUsageResponse,
+  cc: ClaudeContextUsageResponse,
   accumulated: ContextSnapshot,
 ): ContextSnapshot {
   const usedTokens = Math.min(cc.totalTokens, cc.maxTokens);

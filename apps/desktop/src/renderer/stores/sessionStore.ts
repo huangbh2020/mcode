@@ -31,9 +31,10 @@ import type { ContentTag } from "@renderer/lib/contentTag.js";
 import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { disposeModel, getDisplayedPath, getModelEntry, updateBaseline } from "@renderer/lib/editorModelCache.js";
-import type { CustomModelPublic } from "@contracts/customModel";
+import type { ClaudeMenuRoleKey, CustomModelPublic } from "@contracts/customModel";
 import type { PiThinkingLevelMap } from "@contracts/piModel";
 import { resolveEffortLevels, coerceEffortValue, defaultEffortForLevels } from "@renderer/lib/thinkingLevels.js";
+import { mergeRememberedEntry } from "@renderer/lib/composerMemory.js";
 import { api, isWebTransport } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
@@ -137,6 +138,7 @@ import {
   type BrowserDevicePreset,
   type BrowserOrientation,
   type OpenCodeModelOption,
+  type AntigravityModelOption,
 } from "@contracts/ipc";
 import type { ThemeStyle } from "@contracts/theme";
 
@@ -1369,6 +1371,10 @@ export interface SessionState {
   >;
   /** User-defined custom-model configs (desensitized — tokens masked). */
   customModels: CustomModelPublic[];
+  /** Currently active/synced Claude provider id (mirrors settings sync state). */
+  activeClaudeProviderId: string | null;
+  /** Currently picked Claude role in the composer dropdown (disambiguates roles sharing a model id). */
+  activeClaudeRole: ClaudeMenuRoleKey | null;
   /** Registered AI backends from `provider.list`. Empty until initDeferred. */
   providers: ProviderInfo[];
   /** Pi SDK models the user can pick (from ~/.pi/agent/models.json +
@@ -1399,6 +1405,10 @@ export interface SessionState {
    *  hide the chip entirely (see resolveEffortLevels; the opencode analogue
    *  of piModelMaps). Absent key = no filter (provider ladder shows). */
   opencodeModelVariants: Record<string, string[]>;
+  /** Antigravity (`agy acp`) models parsed from `agy models` (with folded
+   *  `<family>-<level>` groups). */
+  antigravityAvailableModels: AntigravityModelOption[];
+  antigravityModelVariants: Record<string, string[]>;
   /** Whether each composer config list has landed (initDeferred reloads run
    *  concurrently). validateComposerSelection stays hands-off until ALL are
    *  in — validating against a not-yet-loaded list reads "empty" as "the
@@ -1409,6 +1419,7 @@ export interface SessionState {
   piModelsLoaded: boolean;
   codexModelsLoaded: boolean;
   opencodeModelsLoaded: boolean;
+  antigravityModelsLoaded: boolean;
   /** Discovered skills for the composer `/` menu. Cached per active project
    *  (global ~/.claude/skills + the project's .claude/skills); refreshed on
    *  init and project switch. Empty list = no skills installed. */
@@ -2313,10 +2324,18 @@ export interface SessionState {
    *  and `opencodeModelVariants` (per-model effort ladder). Called on init,
    *  after settings-panel login/logout, and on manual refresh. */
   reloadOpencodeAvailableModels: () => Promise<void>;
+  /** Re-fetch Antigravity models via `agy models` and fold effort families. */
+  reloadAntigravityAvailableModels: (force?: boolean) => Promise<void>;
   setModel: (model: string) => void;
   setEffort: (effort: EffortLevel) => void;
-  setCustomModel: (id: string | null, model?: string) => void;
+  setCustomModel: (id: string | null, model?: string, role?: ClaudeMenuRoleKey | null) => void;
   reloadCustomModels: () => Promise<void>;
+  /** Synchronize store/composer state after saving, activating, or deleting a
+   *  Claude custom-model provider in settings. */
+  syncClaudeConfigUpdated: (
+    models: CustomModelPublic[],
+    opts?: { editedId?: string | null; activatedId?: string | null; activeProviderId?: string | null },
+  ) => void;
   /** Re-fetch language server states from main. Called on init and after any
    *  lsp mutation (install/toggle/setPath). Best-effort; failures are logged
    *  and leave the existing state. Also re-applies the TS-Worker diagnostic
@@ -2892,6 +2911,8 @@ const EMPTY_PI_MODEL_MAPS: Record<string, PiThinkingLevelMap> = {};
 const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
 const EMPTY_OPENCODE_MODELS: OpenCodeModelOption[] = [];
 const EMPTY_OPENCODE_VARIANTS: Record<string, string[]> = {};
+const EMPTY_ANTIGRAVITY_MODELS: AntigravityModelOption[] = [];
+const EMPTY_ANTIGRAVITY_VARIANTS: Record<string, string[]> = {};
 const EMPTY_SKILLS: SkillInfo[] = [];
 const EMPTY_SESSIONS: Session[] = [];
 export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
@@ -4155,7 +4176,7 @@ function coerceSlotsForProvider(
     | "model"
     | "piModelMaps"
     | "opencodeModelVariants"
-  >,
+  > & { antigravityModelVariants?: Record<string, string[]> },
   providerId: string,
   /** The model binding the coercion is FOR. Pass the incoming binding when it
    *  differs from the store slots (syncConfigFromSession coerces a session's
@@ -4179,6 +4200,7 @@ function coerceSlotsForProvider(
     providerId,
     piModelMaps: s.piModelMaps,
     opencodeModelVariants: s.opencodeModelVariants,
+    antigravityModelVariants: s.antigravityModelVariants,
   });
   const modes = provider?.capabilities.permissionModes;
   return {
@@ -4311,7 +4333,7 @@ function syncConfigFromSession(
  * none — never silently falls back to a first/implicit model.
  */
 function resolveSendModel(
-  s: Pick<SessionState, "model" | "customModelId" | "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels">,
+  s: Pick<SessionState, "model" | "customModelId" | "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels" | "antigravityAvailableModels">,
 ): { model: string; customModelId: string | null } | null {
   const provider = s.providers.find((p) => p.id === s.providerId);
   if (provider?.id === "pi-sdk") {
@@ -4328,6 +4350,12 @@ function resolveSendModel(
   }
   if (provider?.id === "opencode-sdk") {
     if (s.model !== "default" && s.opencodeAvailableModels.some((m) => m.id === s.model)) {
+      return { model: s.model, customModelId: null };
+    }
+    return null;
+  }
+  if (provider?.id === "antigravity-acp") {
+    if (s.model !== "default" && s.antigravityAvailableModels.some((m) => m.id === s.model)) {
       return { model: s.model, customModelId: null };
     }
     return null;
@@ -4367,7 +4395,7 @@ function findNonActiveSendRow(
  *  target session would send with, by projecting its row fields onto the
  *  resolver's slot shape. Pure reuse of resolveSendModel's branch table. */
 function resolveSendModelForRow(
-  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels">,
+  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels" | "antigravityAvailableModels">,
   row: Session,
 ): { model: string; customModelId: string | null } | null {
   return resolveSendModel({
@@ -4379,6 +4407,7 @@ function resolveSendModelForRow(
     piAvailableModels: s.piAvailableModels,
     codexAvailableModels: s.codexAvailableModels,
     opencodeAvailableModels: s.opencodeAvailableModels,
+    antigravityAvailableModels: s.antigravityAvailableModels,
   });
 }
 
@@ -4388,12 +4417,13 @@ function resolveSendModelForRow(
  *  the config dialog is the only way out; selectable-but-unpicked → a light
  *  toast nudge to pick one. */
 function hasSelectableModel(
-  s: Pick<SessionState, "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels">,
+  s: Pick<SessionState, "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels" | "antigravityAvailableModels">,
 ): boolean {
   const provider = s.providers.find((p) => p.id === s.providerId);
   if (provider?.id === "pi-sdk") return s.piAvailableModels.length > 0;
   if (provider?.id === "codex-sdk") return s.codexAvailableModels.length > 0;
   if (provider?.id === "opencode-sdk") return s.opencodeAvailableModels.length > 0;
+  if (provider?.id === "antigravity-acp") return s.antigravityAvailableModels.length > 0;
   if (provider?.id === "claude-sdk") {
     return s.customModels.some((cfg) => cfg.models.some((m) => m.id.trim()));
   }
@@ -4499,8 +4529,13 @@ export function resolveTurnModel(s: SessionState, sid: string): string | undefin
 
 /** Snapshot of the composer's per-provider remembered config — the value
  *  shape of `lastModelByProvider`. Every writer (setModel / setCustomModel /
- *  setEffort / setPermissionMode / setProvider's outgoing stash) records the
- *  FULL current config so the entry is always a complete restore point. */
+ *  setEffort / setPermissionMode / setProvider's outgoing stash) builds this
+ *  from the CURRENT view slots — but the slots are NOT a reliable "standing
+ *  pick" (syncConfigFromSession re-seeds them from the visited row, and
+ *  placeholder/unselected rows carry model "default"), so writers pass the
+ *  snapshot through `mergeRememberedEntry` (see composerMemory.ts): a default
+ *  binding never downgrades the remembered binding, effort/permissionMode
+ *  always take the incoming values. */
 function rememberedEntryOf(
   s: Pick<SessionState, "model" | "customModelId" | "effort" | "permissionMode">,
 ): { model: string; customModelId: string | null; effort: EffortLevel; permissionMode: PermissionMode } {
@@ -4517,7 +4552,7 @@ function rememberedEntryOf(
  *  last picked (setProvider / setModel / setCustomModel call this). Fire-and-
  *  forget, like the other setting.set callers. */
 function persistComposerSelection(
-  s: Pick<SessionState, "providerId" | "model" | "customModelId" | "lastModelByProvider">,
+  s: Pick<SessionState, "providerId" | "model" | "customModelId" | "activeClaudeRole" | "lastModelByProvider">,
 ): void {
   void api.setting
     .set({
@@ -4526,6 +4561,7 @@ function persistComposerSelection(
         providerId: s.providerId,
         model: s.model,
         customModelId: s.customModelId,
+        activeClaudeRole: s.activeClaudeRole,
         lastModelByProvider: s.lastModelByProvider,
       }),
     })
@@ -4539,7 +4575,7 @@ function persistComposerSelection(
  *  the entry when still valid, null when the model was deleted (caller then
  *  falls back to "default"). */
 function isValidRememberedModel(
-  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels">,
+  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels" | "antigravityAvailableModels">,
   providerId: string,
   entry: { model: string; customModelId: string | null } | undefined,
 ): entry is { model: string; customModelId: string | null } {
@@ -4556,6 +4592,9 @@ function isValidRememberedModel(
   }
   if (provider.id === "opencode-sdk") {
     return !entry.customModelId && s.opencodeAvailableModels.some((m) => m.id === entry.model);
+  }
+  if (provider.id === "antigravity-acp") {
+    return !entry.customModelId && s.antigravityAvailableModels.some((m) => m.id === entry.model);
   }
   if (provider.id === "claude-sdk") {
     const cfg = s.customModels.find((m) => m.id === entry.customModelId);
@@ -4603,7 +4642,7 @@ function sanitizeBinding(
   // a legitimate choice and persist the wipe. Whichever reload lands LAST
   // still runs the full validation against complete data, so skipping here
   // loses nothing.
-  if (!s.providersLoaded || !s.customModelsLoaded || !s.piModelsLoaded || !s.codexModelsLoaded || !s.opencodeModelsLoaded) {
+  if (!s.providersLoaded || !s.customModelsLoaded || !s.piModelsLoaded || !s.codexModelsLoaded || !s.opencodeModelsLoaded || !s.antigravityModelsLoaded) {
     return;
   }
   const activeId = s.activeSessionId;
@@ -4627,6 +4666,9 @@ function sanitizeBinding(
     if (!ok) patch = { model: "default", customModelId: null };
   } else if (provider.id === "opencode-sdk") {
     const ok = s.opencodeAvailableModels.some((m) => m.id === s.model);
+    if (!ok) patch = { model: "default", customModelId: null };
+  } else if (provider.id === "antigravity-acp") {
+    const ok = s.antigravityAvailableModels.some((m) => m.id === s.model);
     if (!ok) patch = { model: "default", customModelId: null };
   } else if (provider.id === "claude-sdk") {
     // Valid only when the custom config still exists AND the selected model
@@ -5550,20 +5592,15 @@ function clearStreamRate(sessionId: string): void {
 
 let flushScheduled = false;
 
-/* ─── Adaptive throttling ───
+/* ─── Smooth streaming flush scheduling ───
  *
- * Instead of a fixed rAF cadence, we track the inter-arrival time of deltas
- * via a sliding window and pick a flush strategy that balances throughput
- * (batched during bursts) vs. responsiveness (near-immediate when sparse).
+ * Balance high throughput (batching within display frames) vs. responsiveness
+ * (near-immediate when sparse).
  *
- * Strategy matrix:
- *   avg interval    method         delay
- *   < 16ms          rAF            ~16ms (60 Hz batch)
- *   16-100ms        timer + rAF    ~50ms (moderate batch)
- *   > 100ms         microtask      0ms (flush on next tick)
- *
- * The sliding window keeps the last 5 deltas (by wall-clock ms). The window is
- * module-scoped and never triggers React renders, exactly like deltaBuf itself.
+ * - Sparse deltas (>100ms interval): microtask for zero-latency first-character arrival.
+ * - Continuous streaming: requestAnimationFrame aligns batching with the native
+ *   display refresh rate (60/120 Hz) for silky-smooth progressive streaming,
+ *   never artificially bottlenecked by a fixed timer delay.
  */
 const deltaArrivals: number[] = [];
 const MAX_WINDOW = 5;
@@ -5590,11 +5627,8 @@ function scheduleDeltaFlush(): void {
   if (avg > 100 && deltaArrivals.length >= 2) {
     // Sparse deltas: flush on next microtask (near-immediate).
     queueMicrotask(flushDeltas);
-  } else if (avg > 16) {
-    // Moderate pace: 50 ms timer for a modest batch window.
-    setTimeout(flushDeltas, 50);
   } else {
-    // Dense burst: rAF (natural 60 Hz batch).
+    // Continuous streaming: natural rAF batching locked to native display refresh.
     if (typeof requestAnimationFrame !== "undefined") {
       requestAnimationFrame(flushDeltas);
     } else {
@@ -6277,17 +6311,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   customModelId: null,
   lastModelByProvider: EMPTY_LAST_MODEL_BY_PROVIDER,
   customModels: EMPTY_CUSTOM_MODELS,
+  activeClaudeProviderId: null,
+  activeClaudeRole: null,
   providers: EMPTY_PROVIDERS,
   piAvailableModels: EMPTY_PI_MODELS,
   piModelMaps: EMPTY_PI_MODEL_MAPS,
   codexAvailableModels: EMPTY_CODEX_MODELS,
   opencodeAvailableModels: EMPTY_OPENCODE_MODELS,
   opencodeModelVariants: EMPTY_OPENCODE_VARIANTS,
+  antigravityAvailableModels: EMPTY_ANTIGRAVITY_MODELS,
+  antigravityModelVariants: EMPTY_ANTIGRAVITY_VARIANTS,
   providersLoaded: false,
   customModelsLoaded: false,
   piModelsLoaded: false,
   codexModelsLoaded: false,
   opencodeModelsLoaded: false,
+  antigravityModelsLoaded: false,
   skills: EMPTY_SKILLS,
   effort: "high",
   todosBySession: {},
@@ -6655,6 +6694,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           providerId?: unknown;
           model?: unknown;
           customModelId?: unknown;
+          activeClaudeRole?: unknown;
           lastModelByProvider?: unknown;
         };
         if (parsed && typeof parsed === "object" && typeof parsed.providerId === "string") {
@@ -6690,6 +6730,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // Top-level model/customModelId come from the legacy (pre-map) format;
           // a remembered entry for the restored provider takes precedence.
           const remembered = lastMap[parsed.providerId];
+          const rawRole = parsed.activeClaudeRole;
+          const restoredRole: ClaudeMenuRoleKey | null =
+            rawRole === "sonnet" || rawRole === "opus" || rawRole === "fable" || rawRole === "haiku"
+              ? rawRole
+              : null;
           set({
             providerId: parsed.providerId,
             model:
@@ -6700,6 +6745,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               : typeof parsed.customModelId === "string"
                 ? parsed.customModelId
                 : null,
+            activeClaudeRole: restoredRole,
             // Remembered thinking/permission slots ride along with the model
             // restore; without an entry the boot defaults stand (effort
             // "high", permission "default") until a session re-syncs.
@@ -6888,6 +6934,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void get().reloadPiAvailableModels();
     void get().reloadCodexAvailableModels();
     void get().reloadOpencodeAvailableModels();
+    void get().reloadAntigravityAvailableModels();
 
     // Skill list for the composer `/` menu (scans ~/.claude/skills + the
     // active project's .claude/skills).
@@ -7001,8 +7048,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       const colorRaw = ds[UI_USER_MSG_COLOR_SETTING_KEY];
       if (colorRaw && RGB_TRIPLET_RE.test(colorRaw)) set({ userMessageColor: colorRaw });
-      const accentRaw = ds[UI_ACCENT_COLOR_SETTING_KEY];
-      if (accentRaw && RGB_TRIPLET_RE.test(accentRaw)) set({ accentColor: accentRaw });
+      // accentColor is unified across the system (built into styles.css); custom overrides are ignored.
       // Editor color scheme (per-mode Monaco theme ids; unknown ids inside a
       // corrupt row fall back to the defaults field-by-field).
       if (ds[UI_EDITOR_THEME_SETTING_KEY] != null) {
@@ -7651,6 +7697,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             permissionMode: rememberedValid.permissionMode ?? s0.permissionMode,
             piModelMaps: s0.piModelMaps,
             opencodeModelVariants: s0.opencodeModelVariants,
+            antigravityModelVariants: s0.antigravityModelVariants,
           },
           s0.providerId,
           { customModelId, model },
@@ -12231,10 +12278,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         permissionMode: mode,
         prePlanPermissionModeBySession: nextPrePlan,
         // Refresh the per-provider memory so the pick survives a provider
-        // switch (setProvider restores it) and an app restart.
+        // switch (setProvider restores it) and an app restart. Merged, not
+        // snapshotted raw: the slots may carry a visited row's unselected
+        // binding, which must not downgrade the remembered one.
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: { ...rememberedEntryOf(s), permissionMode: mode },
+          [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
+            ...rememberedEntryOf(s),
+            permissionMode: mode,
+          }),
         },
       };
     });
@@ -12318,7 +12370,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...coerced,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: { ...rememberedEntryOf(s), model, customModelId, effort: coerced.effort },
+          [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
+            ...rememberedEntryOf(s),
+            model,
+            customModelId,
+            effort: coerced.effort,
+          }),
         },
       };
     });
@@ -12340,10 +12397,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       effort,
       // Refresh the per-provider memory so the pick survives a provider
-      // switch (setProvider restores it) and an app restart.
+      // switch (setProvider restores it) and an app restart. Merged: the
+      // slots' binding may be a visited row's "default" — never downgrade.
       lastModelByProvider: {
         ...s.lastModelByProvider,
-        [s.providerId]: { ...rememberedEntryOf(s), effort },
+        [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
+          ...rememberedEntryOf(s),
+          effort,
+        }),
       },
     }));
     if (sessionId) {
@@ -12356,26 +12417,33 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   /** Pick a built-in model or one of a custom-config's models. Both
    *  `customModelId` and `model` (the model id) are part of the session's
-   *  persisted config, so a single updateSettings patch covers the change. */
-  setCustomModel: (id, modelArg) => {
+   *  persisted config, so a single updateSettings patch covers the change.
+   *  For Claude custom configs, choosing a model also activates and syncs
+   *  its owning provider as the active Claude provider. */
+  setCustomModel: (id, modelArg, roleArg) => {
+    const MENU_ROLES: readonly ClaudeMenuRoleKey[] = ["sonnet", "opus", "fable", "haiku"];
+    const inferRole = (cfg: CustomModelPublic | undefined, modelId: string): ClaudeMenuRoleKey | null => {
+      if (!cfg?.tierModels || !modelId || modelId === "default") return null;
+      return MENU_ROLES.find((r) => cfg.tierModels?.[r]?.trim() === modelId) ?? null;
+    };
+
     set((s) => {
+      const cfg = id ? s.customModels.find((m) => m.id === id) : undefined;
       let nextModel: string;
       if (!id) {
         nextModel = "default";
       } else if (modelArg) {
-        // Caller picked a specific model (e.g. "deepseek-v4-pro"); trust it.
         nextModel = modelArg;
       } else {
-        // No model given — fall back to the config's first model so the
-        // chip/dropdown shows something meaningful. If none is configured
-        // (shouldn't happen for a saved config), fall back to "default".
-        const cfg = s.customModels.find((m) => m.id === id);
-        const first = cfg?.models.find((m) => m.id.trim())?.id ?? "default";
-        nextModel = first;
+        const preferred = cfg?.tierModels?.defaultModel?.trim();
+        const validPreferred = preferred && cfg?.models.some((m) => m.id === preferred) ? preferred : undefined;
+        nextModel = validPreferred ?? cfg?.models.find((m) => m.id.trim())?.id ?? "default";
       }
-      // Model-scoped thinking levels (OpenAI-protocol endpoints): a level
-      // picked for the previous model may not exist on the new one — coerce
-      // against the INCOMING binding. When switching model, reset effort to default.
+      const nextRole: ClaudeMenuRoleKey | null = !id
+        ? null
+        : roleArg !== undefined
+          ? roleArg
+          : inferRole(cfg, nextModel);
       const isSwitchingModel = id !== s.customModelId || nextModel !== s.model;
       const coerced = coerceSlotsForProvider(
         s,
@@ -12389,50 +12457,228 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return {
         customModelId: id,
         model: nextModel,
+        ...(s.providerId === "claude-sdk" ? { activeClaudeRole: nextRole } : {}),
+        ...(s.providerId === "claude-sdk" && id ? { activeClaudeProviderId: id } : {}),
         ...coerced,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: {
+          [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
             ...rememberedEntryOf(s),
             model: nextModel,
             customModelId: id,
             effort: coerced.effort,
-          },
+          }),
         },
       };
     });
-    // Persist the new binding + model to the session row. We compute the
-    // resolved model from the same logic as above (re-read post-set to be
-    // sure) and send both fields in one patch. effort rides along so a
-    // coerced slot (invalid for the new model) is corrected in the row too.
-    const sessionId = get().activeSessionId;
+    const current = get();
+    const sessionId = current.activeSessionId;
     if (sessionId) {
-      const { model, customModelId, effort } = get();
+      const { model, customModelId, effort } = current;
       void api.session.updateSettings({ sessionId, model, customModelId, effort }).catch((err) => {
         console.error("updateSettings(customModel) failed:", err);
       });
     }
-    // Remember the pick as the next-session default (restored at boot).
-    persistComposerSelection(get());
+    persistComposerSelection(current);
+
+    if (current.providerId === "claude-sdk" && id && !isWebTransport) {
+      const { model, activeClaudeRole } = current;
+      void api.customModel
+        .setActive({
+          id,
+          model: model !== "default" ? model : undefined,
+          role: activeClaudeRole ?? undefined,
+        })
+        .catch((err) => {
+          console.error("customModel.setActive failed:", err);
+        });
+    }
+  },
+
+  syncClaudeConfigUpdated: (models, opts) => {
+    const MENU_ROLES: readonly ClaudeMenuRoleKey[] = ["sonnet", "opus", "fable", "haiku"];
+    const pickPreferred = (
+      cfg: CustomModelPublic | undefined,
+    ): { model: string; role: ClaudeMenuRoleKey | null } => {
+      if (!cfg) return { model: "default", role: null };
+      for (const r of MENU_ROLES) {
+        const val = cfg.tierModels?.[r]?.trim();
+        if (val) return { model: val, role: r };
+      }
+      const valid = cfg.models.filter((m) => m.id.trim());
+      if (valid.length === 0) return { model: "default", role: null };
+      const preferred = cfg.tierModels?.defaultModel?.trim();
+      if (preferred && valid.some((m) => m.id === preferred)) {
+        return { model: preferred, role: MENU_ROLES.find((r) => cfg.tierModels?.[r]?.trim() === preferred) ?? null };
+      }
+      return { model: valid[0].id, role: null };
+    };
+    const matchRole = (
+      cfg: CustomModelPublic | undefined,
+      modelId: string,
+      preferredRole: ClaudeMenuRoleKey | null,
+    ): ClaudeMenuRoleKey | null => {
+      if (!cfg?.tierModels || !modelId || modelId === "default") return null;
+      if (preferredRole && cfg.tierModels[preferredRole]?.trim() === modelId) return preferredRole;
+      return MENU_ROLES.find((r) => cfg.tierModels?.[r]?.trim() === modelId) ?? null;
+    };
+
+    const prev = get();
+    let changedBinding = false;
+    let nextCustomModelId = prev.customModelId;
+    let nextModel = prev.model;
+    let nextRole: ClaudeMenuRoleKey | null = prev.activeClaudeRole;
+    const nextActiveId =
+      opts?.activatedId !== undefined
+        ? opts.activatedId
+        : opts?.activeProviderId !== undefined
+          ? opts.activeProviderId
+          : prev.activeClaudeProviderId;
+
+    if (prev.providerId === "claude-sdk") {
+      if (opts?.activatedId) {
+        const cfg = models.find((m) => m.id === opts.activatedId);
+        if (cfg) {
+          const keepCurrent =
+            prev.customModelId === cfg.id && cfg.models.some((m) => m.id === prev.model && m.id.trim());
+          if (keepCurrent) {
+            nextCustomModelId = cfg.id;
+            nextModel = prev.model;
+            nextRole = matchRole(cfg, prev.model, prev.activeClaudeRole);
+          } else {
+            const picked = pickPreferred(cfg);
+            nextCustomModelId = cfg.id;
+            nextModel = picked.model;
+            nextRole = picked.role;
+          }
+          changedBinding = nextCustomModelId !== prev.customModelId || nextModel !== prev.model;
+        }
+      } else if (opts?.editedId && prev.customModelId === opts.editedId) {
+        const cfg = models.find((m) => m.id === opts.editedId);
+        if (cfg) {
+          const roleModel = prev.activeClaudeRole ? cfg.tierModels?.[prev.activeClaudeRole]?.trim() : undefined;
+          if (roleModel) {
+            nextModel = roleModel;
+            nextRole = prev.activeClaudeRole;
+            changedBinding = nextModel !== prev.model;
+          } else if (!cfg.models.some((m) => m.id === prev.model && m.id.trim())) {
+            const picked = pickPreferred(cfg);
+            nextModel = picked.model;
+            nextRole = picked.role;
+            changedBinding = nextModel !== prev.model;
+          } else {
+            nextRole = matchRole(cfg, prev.model, prev.activeClaudeRole);
+          }
+        }
+      } else if (prev.customModelId && !models.some((m) => m.id === prev.customModelId)) {
+        const fallbackCfg = nextActiveId ? models.find((m) => m.id === nextActiveId) : undefined;
+        if (fallbackCfg) {
+          const picked = pickPreferred(fallbackCfg);
+          nextCustomModelId = fallbackCfg.id;
+          nextModel = picked.model;
+          nextRole = picked.role;
+        } else {
+          nextCustomModelId = null;
+          nextModel = "default";
+          nextRole = null;
+        }
+        changedBinding = true;
+      }
+    }
+
+    const tempState: SessionState = {
+      ...prev,
+      customModels: models,
+      activeClaudeProviderId: nextActiveId,
+      activeClaudeRole: nextRole,
+      customModelId: nextCustomModelId,
+      model: nextModel,
+    };
+    const coerced = coerceSlotsForProvider(
+      tempState,
+      prev.providerId,
+      { customModelId: nextCustomModelId, model: nextModel },
+      { resetEffort: changedBinding },
+    );
+
+    set((s) => ({
+      customModels: models,
+      activeClaudeProviderId: nextActiveId,
+      activeClaudeRole: nextRole,
+      customModelId: nextCustomModelId,
+      model: nextModel,
+      ...coerced,
+      ...(s.providerId === "claude-sdk" && (changedBinding || coerced.effort !== s.effort)
+        ? {
+            lastModelByProvider: {
+              ...s.lastModelByProvider,
+              [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
+                ...rememberedEntryOf(s),
+                model: nextModel,
+                customModelId: nextCustomModelId,
+                effort: coerced.effort,
+              }),
+            },
+          }
+        : {}),
+    }));
+
+    const after = get();
+    const sid = after.activeSessionId;
+    if (sid && (changedBinding || coerced.effort !== prev.effort)) {
+      void api.session
+        .updateSettings({
+          sessionId: sid,
+          model: after.model,
+          customModelId: after.customModelId,
+          effort: after.effort,
+        })
+        .catch((err) => {
+          console.error("updateSettings(syncClaudeConfigUpdated) failed:", err);
+        });
+    }
+    if (changedBinding || coerced.effort !== prev.effort || nextRole !== prev.activeClaudeRole) {
+      persistComposerSelection(after);
+    }
   },
 
   reloadCustomModels: async () => {
     try {
-      const { models } = await api.customModel.list();
-      set({ customModels: models, customModelsLoaded: true });
-      // A persisted composer pick whose custom config was deleted falls back
-      // to auto.
-      validateComposerSelection(set, get);
-      // Model-level thinking declarations may have just changed (settings
-      // edits): snap an effort slot the active binding no longer offers, so
-      // the chip re-renders with the new level set immediately instead of the
-      // stale value being dropped at the provider on the next turn.
+      const [{ models }, syncState] = await Promise.all([
+        api.customModel.list(),
+        isWebTransport
+          ? Promise.resolve(null)
+          : api.customModel.getSyncState().catch(() => null),
+      ]);
+      const activeProviderId = syncState?.activeProviderId ?? get().activeClaudeProviderId;
+      set({
+        customModels: models,
+        activeClaudeProviderId: activeProviderId,
+        customModelsLoaded: true,
+      });
+
       const s = get();
-      const coerced = coerceSlotsForProvider(s, s.providerId);
-      if (coerced.effort !== s.effort || coerced.permissionMode !== s.permissionMode) {
+      if (s.providerId === "claude-sdk" && s.customModelId) {
+        const cfg = models.find((m) => m.id === s.customModelId);
+        if (cfg && !cfg.models.some((m) => m.id === s.model && m.id.trim())) {
+          get().syncClaudeConfigUpdated(models, { editedId: cfg.id, activeProviderId });
+          return;
+        }
+      } else if (s.providerId === "claude-sdk" && !s.customModelId && s.model === "default" && activeProviderId) {
+        const cfg = models.find((m) => m.id === activeProviderId);
+        if (cfg && cfg.models.some((m) => m.id.trim())) {
+          get().syncClaudeConfigUpdated(models, { activatedId: activeProviderId, activeProviderId });
+          return;
+        }
+      }
+
+      validateComposerSelection(set, get);
+      const latest = get();
+      const coerced = coerceSlotsForProvider(latest, latest.providerId);
+      if (coerced.effort !== latest.effort || coerced.permissionMode !== latest.permissionMode) {
         set(coerced);
-        const sid = s.activeSessionId;
-        if (sid && coerced.effort !== s.effort) {
+        const sid = latest.activeSessionId;
+        if (sid && coerced.effort !== latest.effort) {
           void api.session.updateSettings({ sessionId: sid, effort: coerced.effort }).catch((err) => {
             console.error("updateSettings(effort coerce) failed:", err);
           });
@@ -12467,7 +12713,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const nextMap = { ...s.lastModelByProvider };
       // Full outgoing snapshot — model binding AND the thinking/permission
       // slots, so switching back restores everything the user had picked.
-      nextMap[prevProviderId] = rememberedEntryOf(s);
+      // Merged (not raw): the slots may have been re-seeded from a visited
+      // row with an unselected binding, and a provider hop must not wipe the
+      // standing pick ("model chip resets to 选择模型" bug).
+      nextMap[prevProviderId] = mergeRememberedEntry(nextMap[prevProviderId], rememberedEntryOf(s));
       const remembered = nextMap[id];
       restored =
         isValidRememberedModel(s, id, remembered) && remembered.model !== "default"
@@ -12495,6 +12744,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           permissionMode: remembered?.permissionMode ?? s.permissionMode,
           piModelMaps: s.piModelMaps,
           opencodeModelVariants: s.opencodeModelVariants,
+          antigravityModelVariants: s.antigravityModelVariants,
         },
         id,
         restored,
@@ -12661,6 +12911,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // blocking on a never-arriving list.
       console.error("reloadOpencodeAvailableModels failed:", err);
       set({ opencodeAvailableModels: [], opencodeModelVariants: {}, opencodeModelsLoaded: true });
+    }
+  },
+
+  reloadAntigravityAvailableModels: async (force = false) => {
+    try {
+      const { models } = await api.antigravity.listModels(force ? { force: true } : {});
+      const variants: Record<string, string[]> = {};
+      for (const m of models) {
+        if (m.variants && m.variants.length > 0) variants[m.id] = m.variants;
+      }
+      set({
+        antigravityAvailableModels: models,
+        antigravityModelVariants: variants,
+        antigravityModelsLoaded: true,
+      });
+      validateComposerSelection(set, get);
+    } catch (err) {
+      console.error("reloadAntigravityAvailableModels failed:", err);
+      set({
+        antigravityAvailableModels: [],
+        antigravityModelVariants: {},
+        antigravityModelsLoaded: true,
+      });
     }
   },
 
@@ -12960,11 +13233,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         customModelId: target.customModelId,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: {
+          [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
             ...rememberedEntryOf(s),
             model: target.model,
             customModelId: target.customModelId,
-          },
+          }),
         },
       }));
       void api.session

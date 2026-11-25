@@ -1,14 +1,12 @@
 /**
  * Locate and version-probe the USER'S OWN Claude CLI for terminal sessions.
  *
- * This is deliberately separate from the SDK provider path
- * (`resolveSdkBinaryPath` → managed runtime / bundled binary): terminal
- * sessions exist precisely to run whatever the user installed and keeps
- * updated (`claude` on PATH, or the native installer's ~/.local/bin drop),
- * version-fresh and outside Mcode's ~/.mcode config redirection. The old
- * ClaudePathResolver was deleted when the SDK started bundling its own
- * binary; this is its small successor, consumed only by the terminal-session
- * UI (version badge + not-installed empty state) and its smoke script.
+ * Chat sessions locate the same CLI through lib/claudeExecutable.ts (which
+ * also follows an npm shim to the native binary it forwards to). What is
+ * left here is specific to terminal sessions: they run whatever the user
+ * installed and keeps updated (`claude` on PATH, or the native installer's
+ * ~/.local/bin drop), version-fresh and outside Mcode's ~/.mcode config
+ * redirection.
  */
 import { exec } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";

@@ -31,14 +31,10 @@ import { FontPickerDialog } from "./FontPickerDialog.js";
  *  - theme           → api.theme.set → nativeTheme.themeSource on main
  *  - chatFontSize    → setting.set(ui.chatFontSize, …)
  *  - userMessageColor→ setting.set(ui.userMessageColor, …)   "R G B" | null
- *  - accentColor     → setting.set(ui.accentColor, …)        "R G B" | null
  */
 
 /** Default font size shown when no override is set (matches styles.css). */
 const DEFAULT_FONT_SIZE = 14;
-
-/** Hex of the default accent color (emerald-600). Used as the picker fallback. */
-const DEFAULT_ACCENT_HEX = "#059669";
 
 /** Hex of the default user-message bg color (zinc-500, neutral gray). Used as
  *  the picker fallback. Matches the --user-bubble default in styles.css. */
@@ -55,23 +51,6 @@ const USER_BUBBLE_PRESETS: { nameKey: MessageId; triplet: string; hex: string }[
   { nameKey: "settings.appearance.colorViolet", triplet: "124 58 237", hex: "#7c3aed" }, // violet-600
   { nameKey: "settings.appearance.colorRose", triplet: "225 29 72", hex: "#e11d48" }, // rose-600
   { nameKey: "settings.appearance.colorAmber", triplet: "217 119 6", hex: "#d97706" }, // amber-600
-];
-
-/** Curated accent presets. `triplet` is what we persist; `hex` drives the swatch.
- *  The first entry (emerald) is the default and stays saturated for brand
- *  identity; the rest are softened tints (lifted lightness, middling
- *  saturation) so they read as calm chips instead of glaring ones — kinder on
- *  the eyes in dark mode. Trade-off: very soft accents reduce white-on-accent
- *  legibility on filled buttons (those prefer a darker accent). */
-const ACCENT_PRESETS: { nameKey: MessageId; triplet: string; hex: string }[] = [
-  { nameKey: "settings.appearance.colorEmerald", triplet: "5 150 105", hex: "#059669" }, // emerald-600 (default, kept saturated)
-  { nameKey: "settings.appearance.colorSky", triplet: "111 182 224", hex: "#6fb6e0" }, // soft sky
-  { nameKey: "settings.appearance.colorIndigo", triplet: "139 151 232", hex: "#8b97e8" }, // soft indigo
-  { nameKey: "settings.appearance.colorTeal", triplet: "94 200 184", hex: "#5ec8b8" }, // soft teal
-  { nameKey: "settings.appearance.colorViolet", triplet: "184 156 230", hex: "#b89ce6" }, // soft violet
-  { nameKey: "settings.appearance.colorPink", triplet: "244 168 168", hex: "#f4a8a8" }, // soft rose
-  { nameKey: "settings.appearance.colorAmber", triplet: "243 201 105", hex: "#f3c969" }, // soft amber
-  { nameKey: "settings.appearance.colorOrange", triplet: "246 165 107", hex: "#f6a56b" }, // soft orange
 ];
 
 const THEME_OPTIONS: { value: ThemeName; labelKey: MessageId; icon: ReactNode }[] = [
@@ -247,28 +226,18 @@ export function AppearancePanel() {
   const userMessageColor = useSessionStore((s) => s.userMessageColor);
   const setUserMessageColor = useSessionStore((s) => s.setUserMessageColor);
 
-  // ── Accent color ──
-  const accentColor = useSessionStore((s) => s.accentColor);
-  const setAccentColor = useSessionStore((s) => s.setAccentColor);
-
-  // Local pending hex strings for snappy color-picker feedback while the IPC
+  // Local pending hex string for snappy color-picker feedback while the IPC
   // write is in flight. The store value is the source of truth; pending just
   // makes the swatch/picker flip instantly. Reset on each fresh mount.
   const [pendingUserHex, setPendingUserHex] = useState<string>("");
-  const [pendingAccentHex, setPendingAccentHex] = useState<string>("");
   useEffect(() => {
     setPendingUserHex("");
-    setPendingAccentHex("");
   }, []);
 
   const userColorHex =
     pendingUserHex ||
     tripletToHex(userMessageColor) ||
     DEFAULT_USER_BUBBLE_HEX;
-  const accentHex =
-    pendingAccentHex ||
-    tripletToHex(accentColor) ||
-    DEFAULT_ACCENT_HEX;
 
   const effectiveLabel = t(effective === "dark" ? "settings.appearance.themeDark" : "settings.appearance.themeLight");
 
@@ -450,76 +419,6 @@ export function AppearancePanel() {
               }}
               disabled={!userMessageColor && !pendingUserHex}
               title={t("settings.appearance.userColorResetTitle")}
-              className="gap-1 px-1.5"
-            >
-              <IconRefresh size={11} />
-              {t("settings.appearance.resetDefault")}
-            </Button>
-          </div>
-        </SettingRow>
-
-        {/* ── Accent color ── */}
-        <SettingRow
-          layout="vertical"
-          title={t("settings.appearance.accentColor")}
-          desc={
-            accentColor
-              ? t("settings.appearance.accentColorCustom", { hex: accentHex.toUpperCase() })
-              : t("settings.appearance.accentColorDefault")
-          }
-          descExtra={
-            <span className="text-[0.7143em] text-content-subtle">
-              {t("settings.appearance.accentColorDescExtra")}
-            </span>
-          }
-        >
-          {/* Preset swatches — full-row row (palettes don't fit the fixed
-              control slot) */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            {ACCENT_PRESETS.map((p) => {
-              const active = accentColor === p.triplet && !pendingAccentHex;
-              return (
-                <button
-                  key={p.triplet}
-                  type="button"
-                  onClick={() => {
-                    setPendingAccentHex("");
-                    void setAccentColor(p.triplet);
-                  }}
-                  title={`${t(p.nameKey)} · ${p.hex.toUpperCase()}`}
-                  aria-label={t("settings.appearance.pickColor", { name: t(p.nameKey) })}
-                  aria-pressed={active}
-                  className={cn(
-                    "h-6 w-6 rounded-full border-2 transition-transform hover:scale-110",
-                    active
-                      ? "border-content ring-2 ring-content/20 ring-offset-1 ring-offset-surface"
-                      : "border-edge",
-                  )}
-                  style={{ backgroundColor: p.hex }}
-                />
-              );
-            })}
-            <input
-              id="setting-accent"
-              type="color"
-              value={accentHex}
-              onChange={(e) => {
-                const hex = e.target.value;
-                const triplet = hexToTriplet(hex);
-                setPendingAccentHex(hex);
-                if (triplet) void setAccentColor(triplet);
-              }}
-              className="h-7 w-10 cursor-pointer rounded border border-edge bg-transparent p-0.5"
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setPendingAccentHex("");
-                void setAccentColor(null);
-              }}
-              disabled={!accentColor && !pendingAccentHex}
-              title={t("settings.appearance.accentColorResetTitle")}
               className="gap-1 px-1.5"
             >
               <IconRefresh size={11} />

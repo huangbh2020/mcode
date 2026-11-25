@@ -27,7 +27,10 @@ import type { Components } from "react-markdown";
 import { codeCacheKey, getCodeHtml, setCodeHtml } from "@renderer/lib/markdownCache.js";
 import { fileHrefToPath, isAbsolutePath, isLocalFileHref, splitTextByPathTokens } from "@renderer/lib/fileLink.js";
 import { FILE_PATH_LINK_CLASS, rehypePathInline } from "@renderer/lib/markdownPathLinks.js";
-import { resolveRelativePath } from "@renderer/lib/path.js";
+import { FILE_CITATION_CLASS, rehypeFileCitations } from "@renderer/lib/markdownFileCitations.js";
+import { fileCitationLocation, preprocessFileCitations, type FileCitation } from "@renderer/lib/fileCitation.js";
+import { basename, resolveRelativePath } from "@renderer/lib/path.js";
+import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { api } from "@renderer/lib/api.js";
 import { FileLink } from "./FileLink.js";
 import { ScheduledTaskApprovalCard } from "./ScheduledTaskApprovalCard.js";
@@ -81,7 +84,10 @@ const LANG_ALIAS: Record<string, string> = {
 
 /** Module-level static remark/rehype plugin lists to avoid re-instantiating the unified pipeline on every render. */
 const DEFAULT_REMARK_PLUGINS = [remarkGfm, remarkMath];
-const DEFAULT_REHYPE_PLUGINS = [rehypeKatex];
+/** One instance: the citation plugin closes over nothing (citations travel
+ *  in FileCitationContext), so its identity is stable across renders. */
+const FILE_CITATIONS_PLUGIN = rehypeFileCitations();
+const DEFAULT_REHYPE_PLUGINS = [rehypeKatex, FILE_CITATIONS_PLUGIN];
 
 /** Resolve a markdown code-fence language tag to a Shiki language id.
  *  Falls back to "text" when the language is unknown, effectively disabling
@@ -366,6 +372,42 @@ function rehypeFileInline(fileRe: RegExp, titleByMarker: Map<string, string>) {
   };
 }
 
+// ── Model-emitted file citations (`::zcode-file-citation{…}`) ─────────
+//
+// Some third-party models cite files with the inline markup of the agent
+// harness they were trained on. The citations are lifted out of the source
+// before parsing (lib/fileCitation.ts — the path inside would not survive
+// Markdown's backslash escapes), the rehype plugin in
+// lib/markdownFileCitations.ts turns each placeholder into a placeholder
+// span, and the `span` override below swaps that for this chip: file-type
+// icon + name, the spreadsheet excerpt when there is one, clickable through
+// the same FileLink resolution as any other path in a reply.
+
+/** The citations lifted from the current source, by placeholder index.
+ *  null wherever nothing was lifted — every Markdown surface but chat. */
+const FileCitationContext = createContext<readonly FileCitation[] | null>(null);
+
+function FileCitationChip({ citation, projectPath }: { citation: FileCitation; projectPath: string | null }) {
+  const location = fileCitationLocation(citation);
+  return (
+    <FileLink
+      chip
+      token={citation.path}
+      projectPath={projectPath}
+      title={citation.path}
+      display={
+        <>
+          <FileTypeIcon path={citation.path} size={12} className="shrink-0" />
+          <span className="truncate underline underline-offset-2">
+            {basename(citation.path)}
+          </span>
+          {location && <span className="shrink-0 text-content-subtle text-[11px] no-underline">· {location}</span>}
+        </>
+      }
+    />
+  );
+}
+
 // ── react-markdown component overrides ────────────────────────────────
 
 /**
@@ -375,6 +417,9 @@ function rehypeFileInline(fileRe: RegExp, titleByMarker: Map<string, string>) {
  * across project switches, so code-block collapse state survives.
  */
 const MarkdownProjectContext = createContext<string | null>(null);
+
+/** Indicates whether the markdown content is actively streaming. */
+const MarkdownStreamingContext = createContext(false);
 
 /**
  * Absolute directory that relative local paths in links/images resolve
@@ -506,59 +551,72 @@ function ShikiCodeBlock({
   childProps?: { className?: string; children?: unknown };
 }) {
   const lang = resolveLang(extractLanguage(className));
+  const streaming = useContext(MarkdownStreamingContext);
 
   // Lazy-init highlighter on first encounter of a fenced block.
-  const [ready, setReady] = useState(!!highlighterInstance);
   useMemo(() => {
     if (!highlighterInstance) {
-      ensureHighlighter().then(() => setReady(true));
+      ensureHighlighter();
     }
   }, []);
 
-  const html = useMemo(() => {
+  const theme = currentTheme();
+  const key = useMemo(() => codeCacheKey(rawCode, lang, theme), [rawCode, lang, theme]);
+
+  // Synchronous cache hit check: 0ms render for cached code
+  const cachedHtml = useMemo(() => {
     if (!rawCode) return null;
-
-    // Theme is part of the cache key so a theme switch (light↔dark, or a
-    // theme-name change) invalidates stale HTML and re-highlights instead
-    // of serving the wrong palette.
-    const theme = currentTheme();
-    const key = codeCacheKey(rawCode, lang, theme);
-    // Cache hit?
     const cached = getCodeHtml(key);
-    if (cached) return { __html: cached, key };
+    return cached ? { __html: cached, key } : null;
+  }, [rawCode, key]);
 
-    // Highlighter ready?
-    if (highlighterInstance) {
-      // Helper: attempt highlighting with a given language, returning null
-      // on any error instead of throwing.
-      const tryHighlight = (tryLang: string): string | null => {
+  const [asyncHtml, setAsyncHtml] = useState<{ __html: string; key: string } | null>(null);
+
+  // Asynchronous highlighting: Never blocks the React render loop!
+  useEffect(() => {
+    if (!rawCode || cachedHtml) return;
+
+    let cancelled = false;
+    const delay = streaming ? 160 : 0;
+    const timer = setTimeout(() => {
+      ensureHighlighter().then((hl) => {
+        if (cancelled) return;
         try {
-          return highlighterInstance!.codeToHtml(rawCode, {
-            lang: tryLang,
-            theme,
-            transformers: [transformerNotationDiff()],
-          });
+          let highlighted: string | null = null;
+          try {
+            highlighted = hl.codeToHtml(rawCode, {
+              lang,
+              theme,
+              transformers: [transformerNotationDiff()],
+            });
+          } catch {
+            if (lang !== "text") {
+              highlighted = hl.codeToHtml(rawCode, {
+                lang: "text",
+                theme,
+                transformers: [transformerNotationDiff()],
+              });
+            }
+          }
+          if (highlighted && !cancelled) {
+            setCodeHtml(key, highlighted);
+            setAsyncHtml({ __html: highlighted, key });
+          }
         } catch {
-          return null; // Language not found or other error — caller handles.
+          const fallback = `<pre class="shiki fallback"><code>${escapeHtml(rawCode)}</code></pre>`;
+          setCodeHtml(key, fallback);
+          if (!cancelled) setAsyncHtml({ __html: fallback, key });
         }
-      };
+      });
+    }, delay);
 
-      // First attempt: requested language.
-      let highlighted = tryHighlight(lang);
-      // Fallback: "text" (always available, plain monospace).
-      if (!highlighted && lang !== "text") {
-        highlighted = tryHighlight("text");
-      }
-      if (highlighted) {
-        setCodeHtml(key, highlighted);
-        return { __html: highlighted, key };
-      }
-      // Both attempts failed — cache a safe placeholder.
-      setCodeHtml(key, `<pre class="shiki fallback"><code>${escapeHtml(rawCode)}</code></pre>`);
-    }
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [rawCode, lang, theme, key, cachedHtml, streaming]);
 
-    return null; // Not ready yet or highlight failed — show raw text.
-  }, [rawCode, lang, ready]);
+  const html = cachedHtml ?? (asyncHtml?.key === key ? asyncHtml : null);
 
   // Long code blocks are collapsed to a max-height preview with a 展开
   // overlay; clicking it (or the 收起 header button once expanded) toggles
@@ -573,7 +631,7 @@ function ShikiCodeBlock({
     const el = bodyRef.current;
     if (!el || expanded) return;
     setClippable(el.scrollHeight > el.clientHeight + 1);
-  }, [rawCode, lang, ready, html, expanded]);
+  }, [rawCode, lang, html, expanded]);
 
   return (
     <pre className="my-[var(--chat-md-gap-md)] overflow-hidden rounded-lg border border-edge/60 bg-surface-muted/60">
@@ -661,12 +719,20 @@ function buildComponents(): Components {
     return <code className="font-mono"><CodeContext.Provider value={true}>{children}</CodeContext.Provider></code>;
   },
 
-  // Dispatch placeholder spans produced by `rehypePathInline` to FileLink;
-  // every other span (katex internals, skill/file pills) passes through
-  // untouched. `node` is react-markdown's hast reference and must be kept
-  // out of the DOM spread.
+  // Dispatch placeholder spans produced by `rehypePathInline` to FileLink
+  // and those produced by `rehypeFileCitations` to the citation chip; every
+  // other span (katex internals, skill/file pills) passes through untouched.
+  // `node` is react-markdown's hast reference and must be kept out of the
+  // DOM spread.
   span({ node, className, children, ...rest }) {
     const projectPath = useContext(MarkdownProjectContext);
+    const citations = useContext(FileCitationContext);
+    if (typeof className === "string" && className.split(/\s+/).includes(FILE_CITATION_CLASS)) {
+      const citation = citations?.[Number((rest as Record<string, unknown>)["data-index"])];
+      if (citation) return <FileCitationChip citation={citation} projectPath={projectPath} />;
+      // No citation behind it (literal U+E000 text in a source that was
+      // never preprocessed): fall through and show the placeholder as it was.
+    }
     if (typeof className === "string" && className.split(/\s+/).includes(FILE_PATH_LINK_CLASS)) {
       const props = rest as Record<string, unknown>;
       const token = props["data-token"];
@@ -842,6 +908,7 @@ export const Markdown = memo(function Markdown({
   skillNames,
   inlineFiles,
   baseDir,
+  streaming = false,
 }: {
   children: string;
   /** Project root — bare file paths in prose (and inline code) that fall
@@ -864,6 +931,9 @@ export const Markdown = memo(function Markdown({
    *  render INLINE (loaded via file.readBinary) and relative links open the
    *  exact sibling file; leave unset for chat output. */
   baseDir?: string | null;
+  /** The text is still arriving. A file-citation directive that has not
+   *  finished streaming is held back instead of flashing as raw markup. */
+  streaming?: boolean;
 }) {
   // Build a single regex matching any known `/skillName` at its boundary.
   // Sorted longest-first so a skill named `pdf` doesn't shadow `pdf-generator`.
@@ -887,20 +957,29 @@ export const Markdown = memo(function Markdown({
     for (const f of inlineFiles) titleByMarker.set(`@${f.name}`, f.filePath);
     return { re, titleByMarker };
   }, [inlineFiles]);
-  // rehype-katex is always active; the skill-inline and file-mention plugins
-  // are added only when there is something to highlight. Recreated when the
-  // underlying regex/map changes, so react-markdown re-parses. The path
-  // plugin needs a project root to resolve against — contexts without one
-  // (GitHub panel, unopened views) keep plain text.
+  // rehype-katex and the citation plugin are always active; the
+  // skill-inline and file-mention plugins are added only when there is
+  // something to highlight. Recreated when the underlying regex/map
+  // changes, so react-markdown re-parses. The path plugin needs a project
+  // root to resolve against — contexts without one (GitHub panel, unopened
+  // views) keep plain text.
   const rehypePlugins = useMemo(() => {
     if (!skillRe && !fileMention && !projectPath) return DEFAULT_REHYPE_PLUGINS;
     return [
       rehypeKatex,
+      FILE_CITATIONS_PLUGIN,
       ...(skillRe ? [rehypeSkillInline(skillRe)] : []),
       ...(fileMention ? [rehypeFileInline(fileMention.re, fileMention.titleByMarker)] : []),
       ...(projectPath ? [rehypePathInline()] : []),
     ];
   }, [skillRe, fileMention, projectPath]);
+  // File citations are lifted out before parsing (see FileCitationContext).
+  // A source without any comes back as the same string, so a memoized
+  // <Markdown> keeps handing react-markdown the identical children.
+  const cited = useMemo(
+    () => preprocessFileCitations(children, { hideTrailingPartial: streaming }),
+    [children, streaming],
+  );
   // Block margins + line-height here are density-driven (--chat-md-gap-* /
   // --chat-md-leading, see the chat-density section in styles.css) so the
   // 对话紧凑度 setting shapes the reply body itself, not just the gaps
@@ -915,20 +994,27 @@ export const Markdown = memo(function Markdown({
   // are untouched; the container alone controls the outer rhythm.
   return (
     <div
-      className="chat-md break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-md-leading)] [font-weight:var(--chat-font-weight)] [&>p]:my-[var(--chat-md-gap-sm)] [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+      className={cn(
+        "chat-md break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-md-leading)] [font-weight:var(--chat-font-weight)] [&>p]:my-[var(--chat-md-gap-sm)] [&>:first-child]:mt-0 [&>:last-child]:mb-0",
+        streaming && "chat-streaming-tail",
+      )}
     >
-      <MarkdownProjectContext.Provider value={projectPath ?? null}>
-        <MarkdownBaseDirContext.Provider value={baseDir ?? null}>
-          <ReactMarkdown
-            remarkPlugins={DEFAULT_REMARK_PLUGINS}
-            rehypePlugins={rehypePlugins}
-            urlTransform={urlTransform}
-            components={STATIC_MARKDOWN_COMPONENTS}
-          >
-            {children}
-          </ReactMarkdown>
-        </MarkdownBaseDirContext.Provider>
-      </MarkdownProjectContext.Provider>
+      <MarkdownStreamingContext.Provider value={streaming}>
+        <MarkdownProjectContext.Provider value={projectPath ?? null}>
+          <MarkdownBaseDirContext.Provider value={baseDir ?? null}>
+            <FileCitationContext.Provider value={cited.citations}>
+              <ReactMarkdown
+                remarkPlugins={DEFAULT_REMARK_PLUGINS}
+                rehypePlugins={rehypePlugins}
+                urlTransform={urlTransform}
+                components={STATIC_MARKDOWN_COMPONENTS}
+              >
+                {cited.text}
+              </ReactMarkdown>
+            </FileCitationContext.Provider>
+          </MarkdownBaseDirContext.Provider>
+        </MarkdownProjectContext.Provider>
+      </MarkdownStreamingContext.Provider>
     </div>
   );
 });

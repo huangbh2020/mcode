@@ -90,6 +90,7 @@ export function AutomationEditor({
   const customModels = useSessionStore((s) => s.customModels);
   const piModelMaps = useSessionStore((s) => s.piModelMaps);
   const opencodeModelVariants = useSessionStore((s) => s.opencodeModelVariants);
+  const antigravityModelVariants = useSessionStore((s) => s.antigravityModelVariants);
   const saveAutomation = useSessionStore((s) => s.saveAutomation);
 
   const [draft, setDraft] = useState<EditorDraft>(DEFAULT_DRAFT);
@@ -217,6 +218,7 @@ export function AutomationEditor({
     providerId: draft.providerId,
     piModelMaps,
     opencodeModelVariants,
+    antigravityModelVariants,
   });
   const hasEffort = (draftEffortLevels?.length ?? 0) > 0;
   const hasPerm = draftPermModes.length > 0;
@@ -510,6 +512,7 @@ export function AutomationEditor({
                               providerId: d.providerId,
                               piModelMaps,
                               opencodeModelVariants,
+                              antigravityModelVariants,
                             });
                             const isSwitchingModel = d.model !== modelId || d.customModelId !== customModelId;
                             return {

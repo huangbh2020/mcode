@@ -8,10 +8,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { GitHubGenerateIssueResult, GitHubIssueKind } from "@contracts/ipc";
-import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
 import { resolveModelForGitOp, loadSimpleGit } from "@main/ipc/git.js";
-import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
-import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
+import { buildCustomEnv, resolveActiveModel, type ClaudeCliEnv } from "@main/providers/claude-sdk/customEnv.js";
+import { runClaudeOneShot } from "@main/providers/claude-sdk/claudeOneShot.js";
 import { isKnownWorkspaceRoot } from "@main/lib/pathGuard.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import { UI_TITLE_GEN_MODEL_SETTING_KEY } from "@contracts/ipc";
@@ -122,14 +121,13 @@ export async function generateIssueContent(opts: {
     }
   }
 
-  const { query } = await loadClaudeSdk();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 60_000);
 
   let releaseBridge: (() => void) | undefined;
   try {
     let model: string | undefined;
-    let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
+    let env: ClaudeCliEnv | undefined;
 
     if (modelId) {
       const resolved = await resolveModelForGitOp(modelId, modelRole);
@@ -140,8 +138,6 @@ export async function generateIssueContent(opts: {
         env = buildCustomEnv(cfg);
       }
     }
-
-    const binaryPath = resolveSdkBinaryPath();
 
     const kindLabel =
       opts.kind === "bug"
@@ -162,32 +158,14 @@ export async function generateIssueContent(opts: {
       .filter(Boolean)
       .join("\n");
 
-    const q = query({
+    const { text: rawText } = await runClaudeOneShot({
       prompt: userPrompt,
-      options: {
-        abortController: ac,
-        maxTurns: 1,
-        model,
-        env,
-        systemPrompt: ISSUE_GEN_SYSTEM_PROMPT,
-        settingSources: ["project", "local"],
-        includePartialMessages: false,
-        tools: [],
-        ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
-      },
+      systemPrompt: ISSUE_GEN_SYSTEM_PROMPT,
+      model,
+      env,
+      tools: [],
+      abortController: ac,
     });
-
-    let rawText = "";
-    for await (const m of q) {
-      if (m.type === "assistant") {
-        const content = (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === "text" && block.text) rawText += block.text;
-          }
-        }
-      }
-    }
 
     // Parse JSON from output
     const jsonMatch = /\{[\s\S]*\}/.exec(rawText);

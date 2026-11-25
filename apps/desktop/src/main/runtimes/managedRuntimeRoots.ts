@@ -1,12 +1,17 @@
 /**
  * Registration + scan helpers for the managed agent-runtime directory.
  *
- * The agent runtimes (claude / codex binaries, pi JS library) are NOT bundled
+ * The agent runtimes (the codex binary, the pi JS library) are NOT bundled
  * with the installer anymore — they are downloaded on demand into
- * `<userData>/runtimes/<agent>/<version>/` by runtimeInstaller.ts. The three
- * resolvers (claude-sdk/sdkBinaryPath.ts, codex-sdk/codexBinaryResolve.ts,
- * pi-sdk/piSdkLoader.ts) look there FIRST and fall back to their legacy
- * bundled lookups.
+ * `<userData>/runtimes/<agent>/<version>/` by runtimeInstaller.ts. The
+ * resolvers (codex-sdk/codexBinaryResolve.ts, pi-sdk/piSdkLoader.ts) look
+ * there FIRST and fall back to their legacy bundled lookups.
+ *
+ * Claude left the managed set on 2026-11-24: Claude sessions run the user's
+ * own `claude` CLI (lib/claudeExecutable.ts), nothing is downloaded for it,
+ * and the panel no longer offers it (ipc/runtimes.ts). The download pipeline
+ * still knows the agent — see `removeOrphanedClaudeRuntime` for what happens
+ * to copies earlier Mcode versions left on disk.
  *
  * This module is deliberately PURE node (no electron import): the codex
  * resolver participates in the headless app-server smoke bundle, which must
@@ -15,6 +20,7 @@
  * the smoke harness) the managed branch is a no-op.
  */
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { promises as fsp } from "node:fs";
 import { join } from "node:path";
 import type { RuntimeAgentId } from "@contracts/ipc";
 
@@ -28,6 +34,25 @@ export function setManagedRuntimeRoot(root: string): void {
 /** Root of the managed runtimes dir, or null before registration. */
 export function getManagedRuntimeRoot(): string | null {
   return managedRoot;
+}
+
+/** Delete `<root>/claude` — the managed Claude runtime that earlier Mcode
+ *  versions downloaded (200MB+ per version dir, two kept) and nothing reads
+ *  any more. Only ever that one directory, which holds nothing but what the
+ *  installer itself extracted. Best effort and asynchronous (it runs once
+ *  per machine, off the startup path): a locked file (an older Mcode
+ *  instance still running) leaves the rest for the next start. Resolves true
+ *  when the directory is gone. */
+export async function removeOrphanedClaudeRuntime(): Promise<boolean> {
+  if (!managedRoot) return false;
+  const dir = join(managedRoot, "claude");
+  try {
+    if (!existsSync(dir)) return false;
+    await fsp.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    return !existsSync(dir);
+  } catch {
+    return false;
+  }
 }
 
 /** "0.3.258" style compare — numeric per dot segment, non-numeric segments

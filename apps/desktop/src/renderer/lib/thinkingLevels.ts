@@ -119,8 +119,19 @@ export function resolveEffortLevels(args: {
    *  Effort rides ModelRef.variant, so only declared variants (+ "default")
    *  are offerable; a model with no entry has no effort surface at all. */
   opencodeModelVariants?: Record<string, string[]>;
+  /** Per-model reasoning-effort variants from `agy models` (folded families). */
+  antigravityModelVariants?: Record<string, string[]>;
 }): ThinkingLevelOption[] | undefined {
-  const { providerLevels, customModels, customModelId, model, providerId, piModelMaps, opencodeModelVariants } = args;
+  const {
+    providerLevels,
+    customModels,
+    customModelId,
+    model,
+    providerId,
+    piModelMaps,
+    opencodeModelVariants,
+    antigravityModelVariants,
+  } = args;
   if (!providerLevels || providerLevels.length === 0) return undefined;
 
   // Model-level thinking declarations only exist on OpenAI-protocol custom
@@ -157,6 +168,16 @@ export function resolveEffortLevels(args: {
       const allowed = new Set(["default", ...(opencodeModelVariants[model] ?? [])]);
       return providerLevels.filter((l) => allowed.has(l.value));
     }
+  }
+
+  // Antigravity: folded families list explicit effort variants; non-folded
+  // models have no variants entry → default-only (hidden slider).
+  if (providerId === "antigravity-acp" && antigravityModelVariants) {
+    if (model in antigravityModelVariants) {
+      const allowed = new Set(["default", ...(antigravityModelVariants[model] ?? [])]);
+      return providerLevels.filter((l) => allowed.has(l.value));
+    }
+    return providerLevels.filter((l) => l.value === "default");
   }
 
   return providerLevels;

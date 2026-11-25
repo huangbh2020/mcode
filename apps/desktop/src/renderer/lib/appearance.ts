@@ -87,15 +87,10 @@ export function applyUserBubbleColor(rgbTriplet: string | null): void {
   }
 }
 
-/** Write the global brand/accent color (R G B triplet) as `--accent` on
- *  <html>. Pass null to remove the override and fall back to the per-theme
- *  default defined in styles.css (emerald-600 light / emerald-500 dark). */
-export function applyAccentColor(rgbTriplet: string | null): void {
-  if (rgbTriplet) {
-    document.documentElement.style.setProperty("--accent", rgbTriplet);
-  } else {
-    document.documentElement.style.removeProperty("--accent");
-  }
+/** Ensure any legacy custom brand/accent color override is removed from <html>
+ *  so the unified built-in theme color defined in styles.css takes effect. */
+export function applyAccentColor(_rgbTriplet?: string | null): void {
+  document.documentElement.style.removeProperty("--accent");
 }
 
 /**

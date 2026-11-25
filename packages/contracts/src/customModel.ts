@@ -142,13 +142,16 @@ export function reasoningEffortLevels(t?: CustomModelThinking): readonly string[
 }
 
 /** One selectable model on a custom endpoint. Mirrors the Pi side's flat
- *  per-provider model list: just the gateway-side model id plus a 1M-context
- *  declaration — no display name, no per-tier role. */
+ *  per-provider model list: gateway-side model id, optional display name,
+ *  plus a 1M-context declaration and optional thinking-mode descriptor. */
 export interface CustomModelEntry {
   /** The actual model id the gateway routes to, e.g. "deepseek-v4-pro".
-   *  Injected as ANTHROPIC_MODEL when selected; mirrored onto the background
-   *  tier env vars (bare, without the `[1m]` suffix). */
+   *  Injected as ANTHROPIC_MODEL when selected; mirrored onto empty tier
+   *  slots (bare, without the `[1m]` suffix). */
   id: string;
+  /** Optional human-friendly display name shown in pickers (e.g. "DeepSeek V4 Pro").
+   *  Falls back to `id` when omitted. */
+  displayName?: string;
   /** Declare 1M-token context support. When the session selects this model,
    *  ANTHROPIC_MODEL carries the `[1m]` suffix (the DeepSeek-style gateway
    *  convention). */
@@ -158,6 +161,66 @@ export interface CustomModelEntry {
    *  Explicitly setting `mode: "none"` hides the thinking chip entirely for
    *  this model. */
   thinking?: CustomModelThinking;
+}
+
+export type ClaudeMenuRoleKey = "sonnet" | "opus" | "fable" | "haiku";
+export type ClaudeRoleKey = ClaudeMenuRoleKey | "subagent";
+
+export interface ClaudeTierRoleMeta {
+  /** Optional display name shown in pickers for this role. */
+  displayName?: string;
+  /** Whether this role declares 1M context support (`[1m]`). */
+  supports1m?: boolean;
+}
+
+export type ClaudeTierRoleMetaMap = Partial<Record<ClaudeRoleKey, ClaudeTierRoleMeta>>;
+
+/**
+ * Per-provider Claude Code model-tier mappings (modeled on cc-switch's
+ * ClaudeFormFields). Any omitted/blank tier automatically falls back to the
+ * active session's selected model (bare id) so third-party gateways never fail
+ * with unknown built-in Anthropic model names.
+ */
+export interface ClaudeTierModels {
+  /** Default primary model (`ANTHROPIC_MODEL`), used when syncing to
+   *  settings.json and as the fallback default when picking the provider. */
+  defaultModel?: string;
+  /** Sonnet tier model (`ANTHROPIC_DEFAULT_SONNET_MODEL`). */
+  sonnet?: string;
+  /** Opus tier model (`ANTHROPIC_DEFAULT_OPUS_MODEL`). */
+  opus?: string;
+  /** Fable tier model (`ANTHROPIC_DEFAULT_FABLE_MODEL`). */
+  fable?: string;
+  /** Haiku tier model (`ANTHROPIC_DEFAULT_HAIKU_MODEL`). */
+  haiku?: string;
+  /** Task-tool subagent model (`CLAUDE_CODE_SUBAGENT_MODEL`). */
+  subagent?: string;
+  /** Per-role display name & 1M declaration so roles sharing the same model id
+   *  preserve independent metadata. */
+  roleMeta?: ClaudeTierRoleMetaMap;
+}
+
+/** Where activating/saving a Claude provider synchronizes `settings.json`. */
+export type ClaudeSettingsSyncTarget = "none" | "mcode" | "claude" | "both";
+
+/** Persisted sync & active-provider state for Claude settings. */
+export interface ClaudeSettingsSyncState {
+  activeProviderId: string | null;
+  syncTarget: ClaudeSettingsSyncTarget;
+}
+
+/** Parsed candidate extracted from an existing `settings.json` (`~/.claude` or
+ *  `~/.mcode`) for quick import into the settings form. */
+export interface ClaudeImportCandidate {
+  source: "claude" | "mcode";
+  baseUrl: string;
+  authMode: AuthMode;
+  authToken: string;
+  models: CustomModelEntry[];
+  tierModels?: ClaudeTierModels;
+  disableNonEssentialTraffic: boolean;
+  timeoutMs?: number;
+  customHeaders?: CustomHeaders;
 }
 
 /** Fully-resolved config passed to the provider at turn time (main-process
@@ -174,14 +237,18 @@ export interface ApiConfig {
    *  `models[].id`). It becomes ANTHROPIC_MODEL (with the `[1m]` suffix when
    *  the entry declares it). Falls back to the first entry. */
   selectedModel: string;
+  /** Optional role key chosen by the user for this selection (disambiguates
+   *  roles sharing the same model id). */
+  selectedRole?: ClaudeMenuRoleKey;
   /** The config's flat model list. The selected model's bare id is mirrored
    *  onto the background-tier env vars so background requests also route to
    *  the user's gateway. */
   models: CustomModelEntry[];
-  /** Model id (one of `models[].id`) pinned for Task-tool subagents in
-   *  sessions using this config — injected per-turn as
-   *  CLAUDE_CODE_SUBAGENT_MODEL, overriding the default mirror of the
-   *  selected model. Absent = follow the main session's model. */
+  /** Optional per-tier Claude Code model overrides (default/sonnet/opus/haiku/subagent).
+   *  Blank tiers fall back to the selected model's bare id. */
+  tierModels?: ClaudeTierModels;
+  /** Legacy top-level Task-subagent model pin; kept in sync with
+   *  `tierModels.subagent` for backward compatibility. */
   subagentModel?: string;
   /** Disable Claude Code's non-essential (telemetry) traffic. Default true
    *  for custom endpoints — almost always what you want on a gateway. */
@@ -212,6 +279,7 @@ export interface CustomModel {
   authMode: AuthMode;
   protocol: Protocol;
   models: CustomModelEntry[];
+  tierModels?: ClaudeTierModels;
   disableNonEssentialTraffic: boolean;
   timeoutMs?: number;
   customHeaders?: CustomHeaders;
@@ -232,6 +300,8 @@ export interface CustomModelPublic {
   /** Masked token, e.g. "sk-***ab12". For display only. */
   authTokenMasked: string;
   models: CustomModelEntry[];
+  /** Per-tier Claude model mappings (default/sonnet/opus/haiku/subagent). */
+  tierModels?: ClaudeTierModels;
   /** Task-subagent model pinned for this config (one of `models[].id`), or
    *  undefined = follow the main session's model. See ApiConfig.subagentModel. */
   subagentModel?: string;
@@ -252,6 +322,7 @@ export interface CustomModelMeta {
   /** Wire protocol. Absent on legacy records; resolve via {@link resolveProtocol}. */
   protocol?: Protocol;
   models: CustomModelEntry[];
+  tierModels?: ClaudeTierModels;
   /** Task-subagent model pinned for this config, or undefined = follow the
    *  main session's model. See ApiConfig.subagentModel. */
   subagentModel?: string;
@@ -276,6 +347,8 @@ export interface CustomModelInput {
   authToken?: string;
   /** The flat model list (≥1 entry, enforced by the IPC schema). */
   models: CustomModelEntry[];
+  /** Optional per-tier Claude model mappings. */
+  tierModels?: ClaudeTierModels;
   /** Task-subagent model to pin for this config. Must be one of
    *  `models[].id`; a value not in the list is dropped by the store (falls
    *  back to following the main model). Empty/undefined = no pin. */
@@ -293,6 +366,13 @@ export interface TestCustomModelResult {
   /** claude's version string or model echo, when available. */
   detail?: string;
   /** Error message on failure (auth / network / timeout / bad model). */
+  error?: string;
+}
+
+/** Result of fetching available models from a provider's `/v1/models` endpoint. */
+export interface FetchCustomModelsResult {
+  ok: boolean;
+  models: string[];
   error?: string;
 }
 

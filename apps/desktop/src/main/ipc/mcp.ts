@@ -33,7 +33,7 @@ import { ProjectRepo } from "@main/store/repositories.js";
 import { samePath } from "@main/lib/pathGuard.js";
 import { log } from "@main/lib/logger.js";
 import { MCODE_CONFIG_DIR } from "@main/providers/claude-sdk/customEnv.js";
-import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
+import { resolveClaudeExecutable } from "@main/lib/claudeExecutable.js";
 import {
   listPluginMcpPanelEntries,
   getPluginMcpServerConfig,
@@ -630,9 +630,9 @@ export function registerMcpHandlers(ipcMain: IpcMain): void {
     if (!/^https?:\/\/[^\s"'`<>^|]*$/.test(input.url)) {
       return { ok: false, error: "仅支持 http(s) 地址" };
     }
-    const claudeBin = resolveSdkBinaryPath();
-    if (!claudeBin) {
-      return { ok: false, error: "未找到 Claude CLI 运行时:请到「设置 → Agent」安装后再试。" };
+    const claudeExe = resolveClaudeExecutable();
+    if (!claudeExe) {
+      return { ok: false, error: "未找到 Claude CLI:请先安装(npm install -g @anthropic-ai/claude-code)后再试。" };
     }
 
     const cfg = await readUserClaudeJson();
@@ -650,7 +650,11 @@ export function registerMcpHandlers(ipcMain: IpcMain): void {
       await writeUserClaudeJson(cfg);
 
       const env = { ...process.env, CLAUDE_CONFIG_DIR: MCODE_CONFIG_DIR };
-      const res = await runCaptured(claudeBin, ["mcp", "login", input.name], { env, timeoutMs: 300_000 });
+      const res = await runCaptured(
+        claudeExe.command,
+        [...claudeExe.preArgs, "mcp", "login", input.name],
+        { env: { ...env, ...claudeExe.env }, timeoutMs: 300_000 },
+      );
       if (!res.ok) {
         return { ok: false, error: res.message || "claude mcp login 失败" };
       }
@@ -696,9 +700,9 @@ export function registerMcpHandlers(ipcMain: IpcMain): void {
     if (before.readable && !before.names.has(input.name)) {
       return { ok: false, error: "该 server 没有已存储的授权" };
     }
-    const claudeBin = resolveSdkBinaryPath();
-    if (!claudeBin) {
-      return { ok: false, error: "未找到 Claude CLI 运行时:请到「设置 → Agent」安装后再试。" };
+    const claudeExe = resolveClaudeExecutable();
+    if (!claudeExe) {
+      return { ok: false, error: "未找到 Claude CLI:请先安装(npm install -g @anthropic-ai/claude-code)后再试。" };
     }
 
     const cfg = await readUserClaudeJson();
@@ -714,7 +718,11 @@ export function registerMcpHandlers(ipcMain: IpcMain): void {
       await writeUserClaudeJson(cfg);
 
       const env = { ...process.env, CLAUDE_CONFIG_DIR: MCODE_CONFIG_DIR };
-      const res = await runCaptured(claudeBin, ["mcp", "logout", input.name], { env, timeoutMs: 60_000 });
+      const res = await runCaptured(
+        claudeExe.command,
+        [...claudeExe.preArgs, "mcp", "logout", input.name],
+        { env: { ...env, ...claudeExe.env }, timeoutMs: 60_000 },
+      );
       if (!res.ok) return { ok: false, error: res.message || "claude mcp logout 失败" };
       // A token still filed under this name is reported, not fatal: it can be a
       // legacy entry left under a credential key this server no longer uses

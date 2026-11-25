@@ -17,6 +17,7 @@ import { useNarrowViewport } from "@renderer/hooks/useNarrowViewport.js";
 import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
 import { EFFORT_HINT_KEYS } from "./EffortPermissionControl.js";
 import type { ThinkingLevelOption } from "@contracts/provider";
+import type { ClaudeMenuRoleKey } from "@contracts/customModel";
 
 /**
  * Merged model + thinking-level picker for the composer toolbar (one chip,
@@ -103,11 +104,27 @@ function initialOf(name: string): string {
   return name.trim().charAt(0).toUpperCase() || "•";
 }
 
+const CLAUDE_MENU_ROLES: readonly { key: ClaudeMenuRoleKey; label: string }[] = [
+  { key: "sonnet", label: "Sonnet" },
+  { key: "opus", label: "Opus" },
+  { key: "fable", label: "Fable" },
+  { key: "haiku", label: "Haiku" },
+];
+
+const strip1mSuffix = (s: string): string => s.replace(/(\[1m\])+$/i, "").trim();
+
 /** A normalized model row: the provider-specific badge quirks (pi hardcodes
  *  "1M" for hint-carrying entries, opencode adds the Free pill) resolve into
  *  one typed shape so the popup renders one list for every provider. */
 type NormBadge = { text: string; tone: "accent" | "neutral" | "success" };
-type NormModel = { id: string; label: string; badges: NormBadge[] };
+type NormModel = {
+  id: string;
+  label: string;
+  hint?: string;
+  role?: ClaudeMenuRoleKey;
+  roleLabel?: string;
+  badges: NormBadge[];
+};
 
 /** A normalized group: claude → a custom-endpoint config; pi/codex/opencode
  *  → a supplier bucket of the dynamic model list. */
@@ -239,6 +256,8 @@ export function ModelDropdown({
   const storeModel = useSessionStore((s) => s.model);
   const storeCustomModelId = useSessionStore((s) => s.customModelId);
   const customModels = useSessionStore((s) => s.customModels);
+  const activeClaudeProviderId = useSessionStore((s) => s.activeClaudeProviderId);
+  const activeClaudeRole = useSessionStore((s) => s.activeClaudeRole);
   const storeSetCustomModel = useSessionStore((s) => s.setCustomModel);
   const storeSetModel = useSessionStore((s) => s.setModel);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
@@ -247,8 +266,11 @@ export function ModelDropdown({
   const piAvailableModels = useSessionStore((s) => s.piAvailableModels);
   const codexAvailableModels = useSessionStore((s) => s.codexAvailableModels);
   const opencodeAvailableModels = useSessionStore((s) => s.opencodeAvailableModels);
+  const antigravityAvailableModels = useSessionStore((s) => s.antigravityAvailableModels);
+  const reloadAntigravityAvailableModels = useSessionStore((s) => s.reloadAntigravityAvailableModels);
   const piModelMaps = useSessionStore((s) => s.piModelMaps);
   const opencodeModelVariants = useSessionStore((s) => s.opencodeModelVariants);
+  const antigravityModelVariants = useSessionStore((s) => s.antigravityModelVariants);
   const storeEffort = useSessionStore((s) => s.effort);
   const storeSetEffort = useSessionStore((s) => s.setEffort);
   // Controlled override wins over the global slots; the pick callbacks route
@@ -256,9 +278,9 @@ export function ModelDropdown({
   const model = controller ? controller.model : storeModel;
   const customModelId = controller ? controller.customModelId : storeCustomModelId;
   const providerId = controller ? controller.providerId : storeProviderId;
-  const setCustomModel = (cfgId: string | null, modelId: string): void => {
+  const setCustomModel = (cfgId: string | null, modelId: string, role?: ClaudeMenuRoleKey | null): void => {
     if (controller) controller.onPick(cfgId, modelId);
-    else storeSetCustomModel(cfgId, modelId);
+    else storeSetCustomModel(cfgId, modelId, role);
   };
   const setModel = (modelId: string): void => {
     if (controller) controller.onPick(null, modelId);
@@ -269,11 +291,13 @@ export function ModelDropdown({
   const isPi = provider?.id === "pi-sdk";
   const isCodex = provider?.id === "codex-sdk";
   const isOpencode = provider?.id === "opencode-sdk";
+  const isAntigravity = provider?.id === "antigravity-acp";
   const isClaude = provider?.id === "claude-sdk";
   // Group-bearing providers drill between the group list and a group's model
-  // list; builtin-only providers render a flat list with no header.
+  // list; builtin-only and Antigravity render a flat list with no header.
   const hasGroups = isClaude || isPi || isCodex || isOpencode;
-  const builtinModels = provider?.capabilities.builtinModels ?? [];
+  const flatModels = isAntigravity ? antigravityAvailableModels : (provider?.capabilities.builtinModels ?? []);
+  const builtinModels = flatModels;
   const supportsCustomEndpoint = provider?.capabilities.supportsCustomEndpoint ?? false;
 
   // The provider's model surface normalized into groups (see NormGroup).
@@ -282,19 +306,49 @@ export function ModelDropdown({
   const groups: NormGroup[] = useMemo(() => {
     if (isClaude) {
       if (!supportsCustomEndpoint) return [];
-      return customModels.map((m) => ({
-        key: m.id,
-        name: m.name,
-        host: hostOf(m.baseUrl),
-        rowTitle: `${m.baseUrl}\ntoken: ${m.authTokenMasked} (${m.authMode === "api_key" ? "x-api-key" : "Bearer"})`,
-        models: m.models
-          .filter((e) => e.id.trim())
-          .map((e) => ({
-            id: e.id,
-            label: e.id,
-            badges: e.supports1m ? ([{ text: "1M", tone: "accent" }] as NormBadge[]) : [],
-          })),
-      }));
+      return customModels.map((m) => {
+        const roleModels: NormModel[] = [];
+        for (const r of CLAUDE_MENU_ROLES) {
+          const rawId = m.tierModels?.[r.key];
+          const bareId = rawId ? strip1mSuffix(rawId) : "";
+          if (!bareId) continue;
+          const meta = m.tierModels?.roleMeta?.[r.key];
+          const entry = m.models.find((e) => e.id === bareId);
+          const displayName = meta?.displayName?.trim() ?? entry?.displayName?.trim() ?? "";
+          const supports1m =
+            meta?.supports1m !== undefined ? meta.supports1m : Boolean(entry?.supports1m);
+          const label = displayName || bareId;
+          roleModels.push({
+            id: bareId,
+            label,
+            hint: label !== bareId ? bareId : undefined,
+            role: r.key,
+            roleLabel: r.label,
+            badges: supports1m ? [{ text: "1M", tone: "accent" }] : [],
+          });
+        }
+        const models: NormModel[] =
+          roleModels.length > 0
+            ? roleModels
+            : m.models
+                .filter((e) => e.id.trim())
+                .map((e) => {
+                  const label = e.displayName?.trim() || e.id;
+                  return {
+                    id: e.id,
+                    label,
+                    hint: label !== e.id ? e.id : undefined,
+                    badges: e.supports1m ? ([{ text: "1M", tone: "accent" }] as NormBadge[]) : [],
+                  };
+                });
+        return {
+          key: m.id,
+          name: m.name,
+          host: hostOf(m.baseUrl),
+          rowTitle: `${m.baseUrl}\ntoken: ${m.authTokenMasked} (${m.authMode === "api_key" ? "x-api-key" : "Bearer"})`,
+          models,
+        };
+      });
     }
     const list = isPi
       ? piAvailableModels
@@ -370,13 +424,23 @@ export function ModelDropdown({
   // when nothing is picked yet but exactly one group exists (the common
   // single-endpoint setup) — that one, so first-time users see models
   // directly instead of a single-row config list.
-  const listGroup = activeGroup ?? (groups.length === 1 ? groups[0] : undefined);
+  const listGroup =
+    activeGroup ??
+    (isClaude && activeClaudeProviderId
+      ? groups.find((g) => g.key === activeClaudeProviderId)
+      : undefined) ??
+    (groups.length === 1 ? groups[0] : undefined);
   // Opening resets the view: straight to models when a group is (or can be)
   // implied, the config list first otherwise. Builtin-only providers (no
   // group concept) always land on the flat models view.
   const handleOpenChange = (o: boolean): void => {
     setOpen(o);
-    if (o) setView(!hasGroups || listGroup ? "models" : "configs");
+    if (o) {
+      setView(!hasGroups || listGroup ? "models" : "configs");
+      if (isAntigravity && antigravityAvailableModels.length === 0) {
+        void reloadAntigravityAvailableModels(true);
+      }
+    }
   };
 
   // Thinking ladder for the CURRENT binding — the exact chain the standalone
@@ -393,6 +457,7 @@ export function ModelDropdown({
         providerId,
         piModelMaps,
         opencodeModelVariants,
+        antigravityModelVariants,
       });
   const setEffort = controller ? undefined : storeSetEffort;
   const effort = controller ? "" : storeEffort;
@@ -411,15 +476,25 @@ export function ModelDropdown({
     ? customModels.find((m) => m.id === customModelId)
     : undefined;
   const activeEntry = activeCustom?.models.find((e) => e.id === model);
+  const activeClaudeMenuRole = useMemo((): ClaudeMenuRoleKey | undefined => {
+    if (!activeCustom?.tierModels || !model || model === "default") return undefined;
+    if (activeClaudeRole && activeCustom.tierModels[activeClaudeRole]?.trim() === model) {
+      return activeClaudeRole;
+    }
+    return CLAUDE_MENU_ROLES.find((r) => activeCustom.tierModels?.[r.key]?.trim() === model)?.key;
+  }, [activeCustom, model, activeClaudeRole]);
+  const activeRoleDisplayName = activeClaudeMenuRole
+    ? activeCustom?.tierModels?.roleMeta?.[activeClaudeMenuRole]?.displayName?.trim()
+    : undefined;
   const builtin = builtinModels.find((b) => b.id === model);
   const piModel = isPi ? piAvailableModels.find((b) => b.id === model) : undefined;
   const codexModel = isCodex ? codexAvailableModels.find((b) => b.id === model) : undefined;
   const opencodeModel = isOpencode ? opencodeAvailableModels.find((b) => b.id === model) : undefined;
   const unselected = !(activeCustom
-    ? activeEntry
+    ? (activeClaudeMenuRole ? true : activeEntry)
     : piModel ?? codexModel ?? opencodeModel ?? builtin);
   const chipLabel = activeCustom
-    ? (activeEntry?.id ?? t("chat.model.unselected"))
+    ? (activeRoleDisplayName || activeEntry?.displayName?.trim() || (activeClaudeMenuRole ? model : activeEntry?.id) || t("chat.model.unselected"))
     : piModel?.label ?? codexModel?.label ?? opencodeModel?.label ?? builtin?.label ?? t("chat.model.unselected");
 
   const activeLevel = levels?.find((l) => l.value === effort);
@@ -488,14 +563,19 @@ export function ModelDropdown({
   // Both keep the popup open — choosing a model and its effort is one
   // interaction now.
   const pickGroup = (g: NormGroup): void => {
-    const first = g.models[0];
-    if (!first) return;
-    if (isClaude) setCustomModel(g.key, first.id);
-    else setModel(first.id);
+    if (g.models.length === 0) return;
+    if (isClaude) {
+      const cfg = customModels.find((m) => m.id === g.key);
+      const preferredId = cfg?.tierModels?.defaultModel?.trim();
+      const target = (preferredId ? g.models.find((m) => m.id === preferredId) : undefined) ?? g.models[0];
+      setCustomModel(g.key, target.id, target.role ?? null);
+    } else {
+      setModel(g.models[0].id);
+    }
     setView("models");
   };
   const pickModel = (g: NormGroup, m: NormModel): void => {
-    if (isClaude) setCustomModel(g.key, m.id);
+    if (isClaude) setCustomModel(g.key, m.id, m.role ?? null);
     else setModel(m.id);
   };
 
@@ -586,28 +666,51 @@ export function ModelDropdown({
                       instead; future providers that declare builtinModels
                       surface them here. */}
                   {!hasGroups && builtinModels.length > 0 && (
-                    <div className="border-b border-edge/60 pb-1">
-                      <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
-                        {t("chat.model.builtin")}
+                    <>
+                      <div className="pb-1">
+                        <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
+                          {isAntigravity ? t("chat.model.list") : t("chat.model.builtin")}
+                        </div>
+                        {builtinModels.map((b) => {
+                          const active = !activeCustom && model === b.id;
+                          return (
+                            <Menu.Item
+                              key={b.id}
+                              closeOnClick={false}
+                              onClick={() => setModel(b.id)}
+                              className={rowCls(active)}
+                            >
+                              <span className="flex min-w-0 items-baseline gap-2">
+                                <span className="font-medium">{b.label}</span>
+                                {b.hint && <span className="truncate text-xs text-content-subtle">{b.hint}</span>}
+                              </span>
+                              {active && <IconCheck size={14} className="shrink-0" />}
+                            </Menu.Item>
+                          );
+                        })}
                       </div>
-                      {builtinModels.map((b) => {
-                        const active = !activeCustom && model === b.id;
-                        return (
-                          <Menu.Item
-                            key={b.id}
-                            closeOnClick={false}
-                            onClick={() => setCustomModel(null, b.id)}
-                            className={rowCls(active)}
-                          >
-                            <span className="flex min-w-0 items-baseline gap-2">
-                              <span className="font-medium">{b.label}</span>
-                              {b.hint && <span className="truncate text-xs text-content-subtle">{b.hint}</span>}
-                            </span>
-                            {active && <IconCheck size={14} className="shrink-0" />}
-                          </Menu.Item>
-                        );
-                      })}
-                    </div>
+                      {sliderLevels && setEffort && (
+                        <>
+                          <div className="my-1 border-t border-edge/60" />
+                          <div className="model-effort">
+                            <div className="flex items-center justify-between px-3 pb-0.5">
+                              <span className="text-xs uppercase tracking-wide text-content-subtle">
+                                {t("chat.effort.section")}
+                              </span>
+                              <span className="text-[11.5px] font-bold text-accent-strong">
+                                {effortLabel}
+                              </span>
+                            </div>
+                            <EffortSlider
+                              levels={sliderLevels}
+                              value={effort}
+                              onChange={(v) => setEffort(v)}
+                              hintOf={fullHintOf}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </>
                   )}
 
                   {/* Group header: avatar + config/supplier name; click
@@ -647,32 +750,57 @@ export function ModelDropdown({
                         </span>
                         <span className="text-xs text-content-subtle">{listGroup.models.length}</span>
                       </div>
-                      {listGroup.models.map((m) => {
-                        const active = isClaude
-                          ? customModelId === listGroup.key && model === m.id
-                          : model === m.id;
-                        return (
-                          <Menu.Item
-                            key={m.id}
-                            closeOnClick={false}
-                            onClick={() => pickModel(listGroup, m)}
-                            className={rowCls(active)}
-                          >
-                            <span className="flex min-w-0 items-center gap-2">
-                              <span className="truncate">{m.label}</span>
-                              {m.badges.map((b) => (
-                                <span
-                                  key={b.text}
-                                  className={cn("shrink-0 rounded px-1 text-[10px]", BADGE_TONE[b.tone])}
-                                >
-                                  {b.text}
-                                </span>
-                              ))}
-                            </span>
-                            {active && <IconCheck size={14} className="shrink-0" />}
-                          </Menu.Item>
-                        );
-                      })}
+                      {(() => {
+                        const isBoundGroup = isClaude && customModelId === listGroup.key;
+                        const activeRoleMatch =
+                          isBoundGroup && activeClaudeRole
+                            ? listGroup.models.find((item) => item.role === activeClaudeRole && item.id === model)
+                            : undefined;
+                        const activeFallbackMatch = isBoundGroup
+                          ? listGroup.models.find((item) => item.id === model)
+                          : undefined;
+                        return listGroup.models.map((m) => {
+                          const active = isClaude
+                            ? isBoundGroup &&
+                              (activeRoleMatch
+                                ? m.role === activeRoleMatch.role && m.id === activeRoleMatch.id
+                                : activeFallbackMatch
+                                  ? m === activeFallbackMatch
+                                  : false)
+                            : model === m.id;
+                          return (
+                            <Menu.Item
+                              key={m.role ? `${m.role}:${m.id}` : m.id}
+                              closeOnClick={false}
+                              onClick={() => pickModel(listGroup, m)}
+                              className={rowCls(active)}
+                            >
+                              <span className="flex min-w-0 items-center gap-2">
+                                {m.roleLabel && (
+                                  <span className="shrink-0 rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-medium text-content-subtle">
+                                    {m.roleLabel}
+                                  </span>
+                                )}
+                                <span className="truncate">{m.label}</span>
+                                {m.hint && (
+                                  <span className="truncate text-[11px] text-content-subtle">
+                                    {m.hint}
+                                  </span>
+                                )}
+                                {m.badges.map((b) => (
+                                  <span
+                                    key={b.text}
+                                    className={cn("shrink-0 rounded px-1 text-[10px]", BADGE_TONE[b.tone])}
+                                  >
+                                    {b.text}
+                                  </span>
+                                ))}
+                              </span>
+                              {active && <IconCheck size={14} className="shrink-0" />}
+                            </Menu.Item>
+                          );
+                        });
+                      })()}
                       {listGroup.models.length === 0 && (
                         <div className="px-3 py-2 text-[13px] text-content-subtle">
                           {t("chat.model.noneAvailable")}
@@ -741,7 +869,9 @@ export function ModelDropdown({
                   </div>
                   <div className="my-1 border-t border-edge/60" />
                   {groups.map((g) => {
-                    const isActive = activeGroup?.key === g.key;
+                    const isActive = isClaude
+                      ? activeGroup?.key === g.key || (!activeGroup && g.key === activeClaudeProviderId)
+                      : activeGroup?.key === g.key;
                     const pickable = g.models.length > 0;
                     const rowContent = (
                       <>
@@ -761,9 +891,7 @@ export function ModelDropdown({
                               {g.host}
                             </span>
                           )}
-                          {!isClaude && (
-                            <span className="shrink-0 text-xs text-content-subtle">{g.models.length}</span>
-                          )}
+                          <span className="shrink-0 text-xs text-content-subtle">{g.models.length}</span>
                           {isActive && <IconCheck size={14} className="shrink-0" />}
                         </span>
                       </>

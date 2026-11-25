@@ -6,11 +6,12 @@
 
 ## 项目是什么
 
-**Mcode**(*my* Code)- 基于 Claude Agent SDK 构建的**桌面端 GUI**(Electron 三栏 IDE)。
+**Mcode**(*my* Code)- **桌面端 GUI**(Electron 三栏 IDE),Claude 会话直接运行用户本机安装的 Claude CLI。
 
-核心理念:**不重新实现 agent,只做 Claude 的交互界面**。通过 Agent SDK 驱动 claude agent loop;本应用负责会话管理、实时渲染、工具审批、IDE 能力(文件/git/终端)。
+核心理念:**不重新实现 agent,只做 Claude 的交互界面**。Mcode 拉起 `claude` CLI 并解析它的输出;本应用负责会话管理、实时渲染、工具审批、IDE 能力(文件/git/终端)。
 
-- 使用 `@anthropic-ai/claude-agent-sdk`,内部管理 claude 二进制(项目不直接 spawn)
+- Claude 会话**不依赖任何 Agent SDK 包**(2026-11-24 移除 `@anthropic-ai/claude-agent-sdk`):主进程直接 spawn 用户自己的 `claude`,说 CLI 的无头协议(stream-json + 控制请求),见「claude 解析」节
+- 不向 Claude 注入常驻提示词:模型拿到的是 CLI 原厂的系统提示词与工具集;审批/计划/提问弹框都是 CLI 自己发起的控制请求,Mcode 只负责渲染与应答
 - 项目 MIT,可独立开源
 - 架构受 [Synara](https://github.com/Emanuele-web04/synara) 启发,但用主流 TS 重写(无 effect-ts、无 bun)
 - 内置 `AgentProvider` 抽象层,后续可扩展其他 agent 平台(OpenAI Codex、Gemini CLI 等)
@@ -22,11 +23,12 @@
 | 主题 | 文档 |
 |------|------|
 | 技术栈、架构、踩坑记录 | [`docs/tech-stack.md`](docs/tech-stack.md) |
-| claude stream-json 数据格式(旧 CLI 方式的 dump 记录,SDK 的 SDKMessage 与此对应) | [`docs/claude-stream-json.md`](docs/claude-stream-json.md) |
+| claude stream-json 数据格式(CLI 真实输出的 dump 记录;`claudeStreamTypes.ts` 的类型与此对应) | [`docs/claude-stream-json.md`](docs/claude-stream-json.md) |
+| 接入 Claude CLI 技术文档(直连方案的全景讲解:协议、时序、设计取舍、踩坑、验证状态;学习 / 面试用) | [`docs/claude-cli-integration.md`](docs/claude-cli-integration.md) |
 | Pi SDK 接入记录 | [`docs/pi-sdk-integration.md`](docs/pi-sdk-integration.md) |
-| Claude Agent SDK 参考 | https://code.claude.com/docs/en/agent-sdk |
+| Claude CLI 无头模式 / 控制协议参考(Agent SDK 文档是同一协议的类型化说明) | https://code.claude.com/docs/en/agent-sdk |
 
-改 `SdkMessageAdapter` 或涉及 SDK 输出解析时,**必须**先读 stream-json 文档——SDK 的 `SDKMessage` 类型本质上是对 CLI stream-json 的类型化封装,字段语义一一对应。
+改 `SdkMessageAdapter` 或涉及 CLI 输出解析时,**必须**先读 stream-json 文档——本地类型 `claudeStreamTypes.ts` 是对 CLI stream-json 的结构化描述,字段语义一一对应。
 
 ---
 
@@ -37,11 +39,11 @@ Renderer (React 19, contextIsolation:true, nodeIntegration:false)
         ↕  Electron IPC(preload contextBridge + zod 校验)
 Main (Node.js)
   ├── RuntimeManager      持 ProviderRegistry,构造 ProviderContext
-  │     └── AgentProvider  ClaudeAgentSdkProvider(→ query() → SDKMessage → RuntimeEvent)
+  │     └── AgentProvider  ClaudeAgentSdkProvider(历史命名;→ runClaudeCliQuery → CLI 消息 → RuntimeEvent)
   ├── SessionManager      会话生命周期(SQLite via better-sqlite3)
   └── IDE Services        terminal / git / checkpoint(P4)
-        ↕  @anthropic-ai/claude-agent-sdk (query)
-     claude 二进制(SDK 内打包,项目不直接 spawn)
+        ↕  用户本机的 claude CLI(stream-json + 控制协议,cliTransport.ts 直接 spawn)
+     claude 进程(npm 全局包里的原生二进制,Mcode 不打包、不托管下载)
 ```
 
 **安全边界**:renderer 不能 `require()` 任何 Node 模块。通往 Node 的唯一桥梁是 preload 暴露的 `window.api`,所有消息经 zod 校验后才放行。新增 IPC 通道时,必须在 `packages/contracts/src/ipc.ts` 定义 schema + 通道常量,并在 preload 白名单注册。
@@ -64,9 +66,15 @@ apps/desktop/src/
       ApprovalBridge.ts        # 工具审批/AskUserQuestion 的 IPC 异步桥
     providers/
       registry.ts              # ProviderRegistry 单例(启动时注册所有 provider)
-      claude-sdk/
-        ClaudeAgentSdkProvider.ts  # AgentProvider 实现(query() 包装 + canUseTool 桥)
-        SdkMessageAdapter.ts       # ★ SDKMessage → RuntimeEvent 归一化(改前读 SDK 文档)
+      claude-sdk/              # 目录名与文件名是历史命名(provider id "claude-sdk" 持久化在 SQLite);这里没有任何 Agent SDK 依赖
+        ClaudeAgentSdkProvider.ts  # AgentProvider 实现(历史命名):拉起本机 CLI + canUseTool/onUserDialog 桥
+        cliTransport.ts            # ★ 直连传输:spawn + NDJSON + 控制帧路由(纯 node)
+        claudeCliQuery.ts          # ★ runClaudeCliQuery:Options → argv / initialize 负载 / 控制请求映射
+        claudeProtocol.ts          # ★ 控制协议类型 + 帧构造(信封、can_use_tool、request_user_dialog)
+        claudeStreamTypes.ts       # ★ CLI 输出消息的本地结构类型(替代原 SDK 类型;SdkMessageAdapter 的输入)
+        claudeOneShot.ts           # 单轮执行器:标题 / 提交信息 / 意图识别 / Issue / 端点探测
+        hostMcpHttp.ts             # ★ 进程内工具的 loopback Streamable-HTTP MCP 服务器(浏览器工具 / 编排工具)
+        SdkMessageAdapter.ts       # ★ CLI 消息 → RuntimeEvent 归一化(历史命名;改前读 stream-json 文档)
       pi-sdk/
         PiAgentSdkProvider.ts      # AgentProvider 实现(createAgentSession 包装 + 内联 Extension 注入)
         mcodeExtension.ts          # ★ 内联 Pi Extension:tool_call 权限/路径守卫 + AskUserQuestion 工具 + system prompt
@@ -75,6 +83,7 @@ apps/desktop/src/
     ipc/{claude,projects}.ts   # IPC handler
     lib/
       logger.ts                # 文件+stderr 日志(userData/logs/main.log)
+      claudeExecutable.ts      # ★ 定位用户本机的 claude CLI(PATH → ~/.local/bin;沿 npm 垫片跟到原生二进制)+ 版本探测
       askQuestion.ts           # ★ 共享:parseQuestions / formatAnswersForModel / ASK_SYSTEM_PROMPT(Claude + Pi 共用)
     store/{db,repositories}.ts # SQLite 持久化(better-sqlite3,2026-09-14 从 sql.js 迁移)
   preload/index.ts             # contextBridge 白名单 API
@@ -111,10 +120,12 @@ pnpm build
 - Node.js ≥ 22.13(pnpm 11 要求)
 - **Electron 37.10.3(2026-09-24 从 33 升级;内置 Node 22.21.1)**:主进程 Node 跟随 Electron 大版本,不能单独升——pi 0.87.x 需要的 `node:fs.globSync`/`markAsUncloneable`(Node ≥ 22.14)自此原生可用,`polyfillWorkerThreads` 自动变 no-op。升级要点:better-sqlite3 的 postinstall 钩子动态按新 Electron 版本拉 ABI 预构建(npmmirror 连 prebuild 都镜像,零手工);node-pty 1.1.0 自带 NAPI prebuilds,跨 ABI 免重建;electron-vite 2.3/electron-builder 25 无需动。注意 `^37.0.0` 曾被解析到 37.0.0 基线版,写 `"^37.10.3"` 显式下限
 - pnpm ≥ 9(经 `corepack enable` 启用,本机 11.16.0)
-- Claude Code CLI(本机装在 `D:\soft\nodejs\node_global`,非默认路径——`ClaudePathResolver` 已处理)
+- **Claude CLI(用户本机安装;2026-11-24 起 Claude 会话直接运行它)**:`npm i -g @anthropic-ai/claude-code` 或原生安装器。`lib/claudeExecutable.ts` 按 PATH → `~/.local/bin` 定位,并沿 npm 垫片(`claude.cmd`)跟到包内的原生 `claude.exe` 直接 spawn(不经 shell;`.cmd` 无法被 CreateProcess 拉起,`shell:true` 又会把参数交给 cmd.exe 解析)。结果缓存 10 分钟(`invalidateClaudeExecutableCache`,「终端会话类型」里安装/卸载后失效),启动 3s 后 `preloadClaudeCli` 预热。**最低版本 `MIN_CLAUDE_CLI_VERSION` = 2.1.218**(stdio 权限通道 2.1.199 引入、计划审批对话框 kind `permission_exit_plan_mode_v2` 在 2.1.218 确认),过低时拒绝启动并提示升级;未安装时回合报「未检测到 Claude CLI」错误卡。本机实测 2.1.303(npm 全局,`D:soft
+odejs
+ode_global`)
 - `.npmrc` 配了国内 electron 镜像(直连 GitHub 会超时),任何人重装不会踩
-- **`@anthropic-ai/claude-agent-sdk` 钉死精确版本 `0.3.293`(不带 `^`;2026-10-08 从 0.3.258 显式升级;2026-09-02 从 0.3.238 升到 0.3.258,commit 78fc445,修部分 Windows 大模型断流;更早 2026-08-27 从 0.3.218 升到 0.3.238)**:防止 `^0.3.x` 在普通 `pnpm install` 时静默漂移(2026-08-23 曾意外漂移)。本版捆绑 CLI 2.1.293;`task_notification` 载荷带 `output_file`(宿主侧读取后台命令累积输出的唯一入口,见「运行命令面板」节;0.3.280 起另带可选 `fireReason`,0.3.292 起带可选 `run_id`——adapter 只读具名字段,增量不破坏)、`Options.spawnClaudeCodeProcess` 暴露自定义 spawn 钩子(拿 CLI pid 的唯一宿主侧途径,后续 Job Object 方案的地基)。**0.3.258→0.3.293 与 Mcode 相关的要点**:① 0.3.284 修了「后续回合 Stream closed」(settle 门控针对的问题家族,workaround 保留——它还防 2.1.238 时代实测的恢复相位竞态,不能只凭上游修复条目拆除);② 0.3.292 修了 auto 权限模式下子代理绕过 canUseTool、重排了 background_tasks_changed 时序(文档明确 level 信号与边沿流不保证顺序——adapter 的 REPLACE 消费模式正是文档推荐形态);③ 0.3.285 起 bash 后台命令有超时上限(默认 30min/最大 2h,超时后「运行命令」面板会收到 failed 收尾——此前后台命令理论永生);④ 0.3.269 起 plan mode 写操作即使 bypass 也过 canUseTool(Mcode 不用 SDK plan mode,无影响)。升级要显式改版本号,升级前必查:changelog + issues 搜 "Stream closed"/permission;新包 manifest 的 testedWrapperVersions **天然滞后于 wrapper 发布**(0.3.293 的 manifest 只列到 0.3.285、0.3.258 的只列到 0.3.227,从未含自身——wrapper JS 不读它,仅 CLI 二进制内部消费,informational);`grep -ac "permission_exit_plan_mode_v2" claude.exe` 确认对话框 kind 没改名(0.3.293 实测 2 处,`permission_ask_user_question` 同在);二进制 grep `ANTHROPIC_CUSTOM_HEADERS`(27 处)/`CLAUDE_CODE_SUBAGENT_MODEL`(15 处)确认 env 通道未动;升级后回归计划审批/AskUserQuestion/工具审批/子代理收尾四条链路。另:新平台包发布未满 pnpm 的 minimumReleaseAge 冷却期时,`pnpm install` 会自动把 `@anthropic-ai/claude-agent-sdk-*@<版本>` 追加进 pnpm-workspace.yaml 的 `minimumReleaseAgeExclude`(2026-10-08 升 0.3.293 时自动发生),属预期副作用勿手删
-- **Claude 的 UI「计划模式」在 provider 层翻译为 SDK `default` + `CLAUDE_PLAN_MODE_NUDGE` 引导模型走 EnterPlanMode 工具**(2026-08-26):CLI 的 plan permission-mode 在"上一轮后台子代理刚完成、新一轮立即 resume"的竞态下会把 ExitPlanMode 的审批请求在规则层秒拒(`toolDenialKind:"permission-rule"`,tool_result 显示 `Tool permission request failed: AbortError: Stream closed`,记入 permission_denials,宿主 canUseTool/onUserDialog 均不会被调用)——2.1.218 与 2.1.238 都复现,与 SDK 版本无关;default 模式下模型自调 EnterPlanMode→ExitPlanMode 的审批链路则一直可靠。安全性由宿主侧保持:ApprovalBridge 仍按配置级 "plan" 判定,所有写操作逐个弹审批(对齐 Pi 侧计划模式的设计)。adapter 已做降级呈现:ExitPlanMode 的通道故障显示琥珀色警告卡(`planApprovalBroken` 词条)
+- **CLI 版本不由 Mcode 钉死**:用户自行升级(原生安装器会自动更新),Mcode 只能做兼容性适配。`claudeCliQuery.ts` 的启动参数只用 CLI 公开/实测接受的 flag(`--output-format stream-json --verbose --input-format stream-json --permission-prompt-tool=stdio --include-partial-messages --effort --model --resume=<id> --max-turns --tools= --allowedTools --setting-sources --forward-subagent-text --settings <file> --mcp-config <file> --plugin-dir[-no-mcp] --debug`,2.1.303 逐个实测不报错);握手与控制请求的线上格式以 `claudeProtocol.ts` / `claudeStreamTypes.ts` 为准(取自 Agent SDK 0.3.327 的 `sdk.d.ts` + `sdk.mjs` 实证——那个包本身已从依赖移除,别再去找它)。协议是增量演进的:未知消息类型/子类型/字段一律忽略或回 `unsupported_request`,绝不因为不认识而崩。**CLI 更新后的回归清单**:计划审批(`request_user_dialog`)、AskUserQuestion、工具审批(`can_use_tool` + `updatedInput`)、子代理收尾;可 `grep -ac "permission_exit_plan_mode_v2" claude.exe` 确认对话框 kind 没改名。冒烟 `scripts/claude-cli-transport-smoke/run.sh`(139 断言)用假 CLI 进程(`fake-claude.mjs`,讲同一套协议)把这些往返固化下来,不依赖模型、不联网
+- **Claude 的 UI「计划模式」= CLI 原生 `plan` 档(2026-11-24 起,Mcode 不再加工)**:2026-08-26 至 2026-11-23 之间它被翻译成 `default` + `CLAUDE_PLAN_MODE_NUDGE`,因为 CLI 的 plan 档在「上一轮后台子代理刚完成、新一轮立即 resume」的竞态下会把 ExitPlanMode 的审批在规则层秒拒(`Tool permission request failed: AbortError: Stream closed`,记入 permission_denials,宿主 canUseTool/onUserDialog 均不会被调用;2.1.218/2.1.238 复现)。改回原生的依据:常驻传输(2026-10-27)之后后续回合不再 resume,该竞态的前提已不存在;而且原厂语义就是计划阶段不落盘(写操作被 CLI 直接拒绝),不再有「计划阶段的验证性写入逐个弹审批」。ExitPlanMode 审批走 `request_user_dialog`(`permission_exit_plan_mode_v2`)→ `requestPlanApproval`;通道故障仍由 adapter 降级为琥珀色警告卡(`planApprovalBroken`)。**这条路径还没有在真实模型上回归过**(改造当天上游端点持续 503)——若用户反馈「计划审批瞬间失败」,优先怀疑这里,必要时把 plan→default+nudge 的老路(见 git 历史)作为兜底
 - **CLI 排障入口**:CLI 开了 `--debug`,自写日志按 SDK 会话落在 `~/.mcode/debug/<sessionId>.txt`(权限判定、hook、agent 生命周期都在里面,main.log 看不到的 CLI 内部行为来这里查)
 
 ---
@@ -142,8 +153,14 @@ pnpm build
 - 词典:`lib/i18n/zh/` 与 `en/` 按功能分区(common/layout/lib/chat-stream/chat-composer/ide/browser/settings/store),zh 是源(`MessageId` 由 zh 键派生),en 镜像同一类型——**缺键过不了 typecheck**。新词条 zh/en 同步加,键用分区前缀
 - **禁止硬编码新的用户可见中文/英文文案**;只翻 UI 文案,代码注释、console 日志、发给模型的 prompt、持久化标识符不进词典。模块级常量数组存 `labelKey: MessageId`,渲染时 `t()`
 
-### claude 解析(SdkMessageAdapter)
-- `SdkMessageAdapter.dispatch()` 将 SDK 的 `SDKMessage` 归一化为 `RuntimeEvent`
+### claude 解析(SdkMessageAdapter + 直连 CLI 传输层)
+- **直连 CLI 传输层(2026-11-24,`@anthropic-ai/claude-agent-sdk` 依赖移除)**:Mcode 自己 spawn 用户的 `claude`,说它的无头协议。分层:`cliTransport.ts`(进程 + NDJSON 读 + 控制帧路由,纯 node)→ `claudeCliQuery.ts`(`runClaudeCliQuery(prompt, options)`:把 provider 的 `ClaudeCliOptions` 翻译成 argv、`initialize` 握手负载和控制处理器,返回 `CliQuery`——provider 原来用的 `Query` 切片:`[Symbol.asyncIterator]` / `getContextUsage()` / `stopTask()` / `initialization`)→ `ClaudeAgentSdkProvider`(选项组装、审批桥、常驻传输管理,基本不动)→ `SdkMessageAdapter`(消息归一化,**只把类型导入换成了本地的 `claudeStreamTypes.ts`,逻辑零改动**)。与 SDK 行为逐项对齐的要点(都有冒烟):① `initialize` 是 stdin 上的第一帧——`appendSystemPrompt` 与 `supportedDialogKinds` **只能**走这条通道(公开 flag 里没有等价物;不声明 dialog kinds 则 CLI 视为宿主渲染不了,计划审批对话框根本不会发);其余配置走公开 flag,`settings` 与 `mcp-config` 写 **0600 临时文件**(命令行放 JSON 撞 Windows 长度/转义,MCP 配置还含凭据),进程退出即删;② CLI→宿主的 `can_use_tool` → `canUseTool`(返回 null = 不应答)、`request_user_dialog` → `onUserDialog`(无处理器 = 沉默,**绝不**替它回 `cancelled`——那是「用户关闭了对话框」的真实结算)、`elicitation` 一律 decline、未知子类型回 error + `error_code:"unsupported_request"`、`control_cancel_request` 触发处理器的 abort signal;③ stdin EOF = 优雅停止(宽限 2s 后强杀,provider 注入 `killProcessTree` 树杀——win32 上裸 SIGKILL 只杀 CLI 自己,模型起的 dev server 会变孤儿);④ 迭代器在 stdout 关闭后按进程结局收尾:非零退出/信号/spawn 失败抛 `CliClosedError`,用户中止抛 `CliAbortedError`(name 仍是 `AbortError`),干净退出正常结束;⑤ **错误结果原文替换退出码**:CLI 写了 `result{is_error}` 再非零退出时,抛 `Claude Code returned an error result: <原文>`——端点探测等调用方靠这段文本识别 401/403/503;⑥ `--version` 探测(缓存 10 分钟)做最低版本门槛;⑦ 不设 `CLAUDE_CODE_ENTRYPOINT`,CLI 自己会把无头调用标成 `sdk-cli`(交互终端是 `cli`)。**下文旧条目里出现的「SDK」**(常驻传输、settle、turn.incomplete、context-usage 路径 B、运行命令面板…)描述的**行为全部保留**,只是实现落点换成了 `cliTransport.ts` / `claudeCliQuery.ts`;`SDK_ERROR` 错误码、provider id `claude-sdk`、`ClaudeAgentSdkProvider` / `SdkMessageAdapter` 文件名都是历史命名,**刻意不改**(id 持久化在 SQLite,文档与冒烟按名引用)。真实 CLI 2.1.303 实测通过:拉起、握手(0.7s 应答)、`system/init`、stdin EOF 退出、超时强杀;模型调用当时上游 503,各控制请求的真实模型往返未跑,由冒烟 `scripts/claude-cli-transport-smoke/run.sh`(139 断言,假 CLI 进程走真实管道)覆盖
+- **宿主工具改走 loopback HTTP MCP(同日)**:SDK 的 `createSdkMcpServer`(进程内 MCP,经控制通道 `mcp_message` 转发)没有命令行等价物 → `hostMcpHttp.ts`:每个 transport 为每个宿主服务器起一个 127.0.0.1 随机端口的**无状态 Streamable-HTTP** MCP 服务器(路径带 48 位十六进制随机 token——任何本地进程否则都能驱动应用内浏览器;校验 Host 头防 DNS rebinding;`GET`=405、`DELETE`=204、纯 notifications=202),以 `{type:"http", url}` 并入同一个 `--mcp-config` 文件,transport 关闭即关。工具定义仍是 zod raw shape(`HostMcpTool`),`tools/list` 的 JSON Schema 由模块内的小转换器生成(enum / array 上下界 / optional·nullable / passthrough),`alwaysLoad` 经工具的 `_meta["anthropic/alwaysLoad"]`。工具名不变(`mcp__mcode-browser__*`、`mcp__mcode-orchestrator__orch_submit_plan`),canUseTool 侧的只读放行 / 域名闸门 / 编排免审批逻辑零改动;编排侧入口改为 `buildOrchPlanHostServer`(`planTool.ts`)。真实 CLI 2.1.303 实测:启动即连上,`system/init.mcp_servers` 报告 connected、工具进清单;HTTP 层 34 条断言由冒烟覆盖
+- **不再向 Claude 注入常驻提示词(同日,用户的明确要求:与官方 CLI 体验一致)**:`CLAUDE_IDENTITY_PROMPT`(自称 Mcode 助手)、`CLAUDE_TASK_TRACKING_NUDGE`、`CLAUDE_PLAN_MODE_NUDGE`、Windows 路径提示、`CLAUDE_CODE_ENABLE_TODO_TOOLS` + `todoFeatureEnabled` 全部移除——Claude 会话拿到的是 CLI 原厂系统提示词与官方工具集(本机 2.1.303 默认工具表里**没有** TaskCreate/TaskUpdate,任务进度胶囊对 Claude 会话因此不再有数据来源;Pi/Codex 仍注入各自的 identity prompt,不在本次范围)。保留的只有**用户自己触发**的三类追加,各自是一个离了它就不工作的功能:① `/schedule`——该会话用过一次后(provider 内存集合 `scheduleSessions`)每轮带 `SCHEDULED_TASK_PROPOSAL_NUDGE`,纯自然语言的定时请求不再自动触发提案卡;② composer 的自动编排开关——仅那一轮带 planner brief;③ 设置里的自定义提示词(用户自己的话)。追加内容烘在进程里,属于 `transportFingerprint` 的一部分(追加变化的回合会重启进程)。**`CLAUDE_CONFIG_DIR=~/.mcode` 重定向未动**——它让 Mcode 会话与用户终端里的 claude 用两套配置(settings/登录态/技能/转录目录),去掉它需要迁移既有会话转录、MCP 与技能,是独立的一步
+- **运行时面板的 Claude 卡片下线(同日)**:`claude` 不再是托管运行时。边界放在 `ipc/runtimes.ts`:list / checkUpdates 过滤掉它,install / installLocal / remove / rollback 一律拒绝并指向同一页的「终端会话类型」(那里经 npm 安装/更新,文案已注明 Claude 聊天会话也跑这个 CLI);启动时 `removeOrphanedClaudeRuntime` 异步删除旧版本下载的 `<userData>/runtimes/claude`(200MB+ × 2,再没有任何代码读它)。安装管线内部的 claude 分支、兼容名单的 `claude` 键**保留**:runtime-update-smoke 以它为安装/回滚/删除的夹具,远端名单也要兼容旧版客户端
+- **供应商下拉的 Claude 可用性改判 CLI 状态(同日修「新建会话选不了 Claude」)**:`ProviderDropdown` 的可用性门控原先读托管运行时列表(`runtimeAgentFor("claude-sdk") → runtimes 列表里的 claude 行`)——上一条把 claude 从 list/checkUpdates 里过滤掉之后,该行永远缺失,下拉里 Claude 恒灰「运行时未安装」不可选。新通道 `runtimes:claudeCli`(`RuntimesClaudeCliSchema{force?}` → `ClaudeCliStatus{installed,path?,version?,minVersion,usable,reason?:"not-installed"|"too-old"}`):main 侧 `resolveClaudeExecutable` + `probeClaudeCliVersion`(两者各带 10min 缓存;`force:true` 双双绕过)做**与 startTurn 同一个版本门**,保证下拉绿了的项不会在启动时才报「版本过旧」;菜单每次打开时 force 探一次(一个 `--version` spawn,覆盖「用户在 Mcode 外面装了 CLI」的场景;面板内安装/卸载本就经 `invalidateClaudeExecutableCache` 清缓存)。`isAvailable("claude-sdk")` = 探测结果 `usable`;探测未返回前按可用处理(避免闪灰,web 壳该调用 unsupported 抛错即回落 null)。行内不可用文案区分两种:`chat.provider.notInstalled`(未装)/ 新词条 `chat.provider.cliTooOld`(过低,指去更新)。`runtimeAgentFor` 的 pi/codex 分支照旧走运行时列表;手机壳无此门控,单处修复即可
+- 单轮调用(标题生成 / 提交信息 / 定时意图识别 / Issue 草稿 / 端点探测)统一走 `claudeOneShot.ts` 的 `runClaudeOneShot`:默认 `--max-turns 1 --tools=`(模型没有任何工具,用户输入只是素材)、project+local 设置、停在首个 `result`;**stdin 保持打开到运行结束**——发完提示词就关会让随后的控制应答(比如没人审批的工具请求的拒绝)送不进去,CLI 一直等(冒烟里有这条回归);端点探测用 `stopAtInit` 拿到 `system/init` 即止并等进程被杀干净。`healthCheck()` 改为 `--version` 探测(原来起一个会话等 init:`--max-turns 0` **并不**阻止 CLI 发起模型请求,实测照样打 API 并留下一条会话转录)
+- `SdkMessageAdapter.dispatch()` 将 CLI 的 stream-json 消息(本地类型 `ClaudeMessage`)归一化为 `RuntimeEvent`
 - 流是按 `message.type` 分发的 if/else 链,未知 type 静默忽略(向前兼容)
 - stream_event 的 text/thinking 增量**只在 delta 渲染**;assistant 完整消息只补全 tool_use,不重发 text(避免重复)
 - **渲染端增量缓冲(sessionStore 的 flushDeltas)按真实到达顺序应用**(2026-09-03):`DeltaEntry` 是有序 segment 列表(`appendDelta` 同类合并、换类开新段),不再是无序的 text/thinking 双槽——rAF 窗口横跨 text↔thinking 边界时,旧实现固定先 text 后 thinking,会把块跨边界对调(思考卡落在其后正文之后)。**纯空白 text 块三层防护**:模型在 `<think>` 段前后输出的裸换行经桥的 thinkTagSplitter 放行(只跳 length===0),在窗口边界被隔离成纯空白 text 块,渲染为空 Markdown 容器+块间距=空白行;防护 = ① MessageBlocks text 分支 `!block.text.trim()` 不渲染(护栏在 useDeferredValue 之后——流式块可能从纯空白长出正文,条件挂 hook 会崩 React);② toRecords 对 assistant 行剪除(用户行原样,编辑重发往返不受影响);③ fromRecords 水合同步剪除(pruneBlankTextBlocks,镜像 pruneUnchangedTurnFileBlocks,整条消息剪空则丢弃)——修复前的历史行同样被清理
@@ -399,6 +416,17 @@ pnpm build
 - **渲染(MessageRow)**:设置开启时,file 类 attachment 卡若其 `@<basename>` 标记**字面出现在正文**(basename 从完整 filePath 派生、避开 preview 的 24 字符截断;边界规则与 pill 匹配同一正则 `@name(?![A-Za-z0-9_-])`,防止「卡已隐藏而 pill 因尾随字符不渲染」的错位)则从媒体组剔除,顶部不再堆叠;**未命中正文的 file 卡照旧显示顶部卡**——设置开启前的历史消息、用户手删标记的引用都不会凭空消失。paste/quote/图片卡不受影响。
 - **正文 pill**:`MessageBlocks`/`BlockView` 新增可选 prop `inlineFiles`(已内联的 `{name, filePath}` 列表)转发给 `Markdown`;Markdown 照 `rehypeSkillInline` 先例新增 `rehypeFileInline` 插件,把文本节点中匹配的 `@name` 替换为 `<span class="file-pill-inline" title={完整路径}>`(跳过 code/pre;只匹配该消息自己声明的文件名,正文里手打的无关 `@xxx` 不受影响)。样式 `.file-pill-inline` 在 styles.css 的 `.skill-pill-inline` 旁,同族视觉(accent 色、0.85em、nowrap、hover 变淡)。pill 暂不可点击(Issue 的"或支持"为备选建议),title 悬停可看完整路径。
 
+### 模型输出的文件引用指令(2026-11-24,`::zcode-file-citation{…}`)
+- **是什么**:有些第三方模型(GLM-5.3-Flash、MiniMax-M3.1-Flash-Preview,经自定义端点跑在 Claude 会话里;库里 4 条消息 / 2 个会话)会用它被训练时的 agent 工具的标记来引用自己产出或读取的文件——`脚本已生成：::zcode-file-citation{path="D:\…\a.sql" purpose="output"}`。CLI 把它当普通正文透传,存进 assistant 的 text 块;Mcode 此前不认识,用户读到的是原始花括号。
+- **必须在 Markdown 解析之前提取**:引用里是带反斜杠的 Windows 路径,而 Markdown 把反斜杠当转义符——路径里的 `\.config`、`\[`、`\_`、`\(` 会被吃掉反斜杠,反引号会开出代码片段把一条指令劈成几个文本节点,GFM 表格还会按路径里的 `|` 切列。所以不走「解析完再替换文本节点」的老路(那三个 rehype 插件的做法),而是先扫原始文本。冒烟里有对照:原样渲染 `path="C:\Users\u\.config\a[1] (v2)_x.sql"` 得到 `u.config`,提取后路径原样。
+- **分层**:`renderer/lib/fileCitation.ts`(纯字符串函数)——`splitTextByFileCitations` 是唯一的扫描器,把文本切成 text / citation / partial 三种片段(拼回去与输入逐字相等);`preprocessFileCitations` 把每条引用换成占位符 `U+E000<序号>U+E001`(Markdown 对私有区字符没有任何语法)并按序号返回引用列表;`flattenFileCitations` 把引用换成纯路径(供剪贴板等纯文本面)。`renderer/lib/markdownFileCitations.ts` 的 `rehypeFileCitations` 在解析后的文本节点里把占位符换成带 `data-index` 的占位 `<span>`(class `file-citation`),`Markdown.tsx` 的 `span` 覆盖照 `rehypePathInline` → `FileLink` 的同一套分发,渲染成 `FileCitationChip`(文件类型图标 + 文件名 + 有摘录时的 `· 工作表!区域`;悬停显示完整路径;点击走 `FileLink` 既有解析)。引用列表经 `FileCitationContext` 传给覆盖组件,占位 span 的子文本就是占位符本身——没有引用却出现占位符时(GitHub 面板、.md 预览里用户文本恰好含 U+E000)原样显示,不凭空造芯片。`FileLink` 为此加了两个可选 prop:`chip`(芯片外观,替代点下划线)与 `title`(默认仍是「点击打开」提示)。
+- **语法,按实际输出的脏程度从宽**:`::{1,2}zcode-file-citation[空白]*\{…\}`,**单个冒号也算**——用户报告的那条消息里第二条引用就是 `数据来源 ：:zcode-file-citation{…}`(全角冒号在正文里,半角冒号只有一个);三个冒号时多出的那个留在正文。属性是 `key="value"`(单引号、裸值也接受,键名大小写不敏感),`path` 必需——没有 path 的指令不算引用、原样留在正文且不挡后面的扫描;`purpose` = output | source,`artifact_kind` / `sheet` / `range` 描述数据来源摘录(工作表单元格区域),未知属性忽略。值只做两种修复:`\"` → `"`;盘符后的 JSON 式双反斜杠(`D:\\x`)折回单反斜杠(模型偶尔把值按 JSON 转义而周围不是)——其余反斜杠原样保留,`\\server\share` 是真实的 UNC 前缀。花括号在双引号内算数据,扫描按引号状态与深度找闭合括号。
+- **只认这一个名字**:同形的 `::name{…}` 是 CSS 伪元素语法,库里正文有 30 处 `::before{…}` / `::after{…}`,泛匹配会把它们当指令。**代码区域不提取**:围栏代码块(``` / ~~~,未闭合的延伸到文末——流式中的代码块正是这个状态)与行内代码(按空行分段、等长反引号配对,未闭合的反引号是字面量,与 Markdown 一致)里的同形文本是模型在展示写法,不是引用。
+- **流式中的半截指令**:`Markdown` 新增 `streaming` prop(`BlockView` 文本块按 `isStreamingTail || liveTurn` 传入)。片段 `partial` 只会出现在末尾——名字还没到齐(冒号后至少 3 个字母且是指令名的前缀,或名字已完整但 `{` 未到)或括号已开但未闭合;流式时 `preprocessFileCitations` 把它丢掉,原始标记不会闪现;回合结束后不再丢,模型真正没闭合的指令保持可见而不是悄悄消失。「至少 3 个字母」是为了不以牙还牙地隐藏每句结尾的半角冒号(下一个 token 到了才发现不是指令,冒号会闪)。
+- **其它纯文本面**:复制消息(`ChatPane` 的 `blocksToText`,思考块一并)与思考卡的原文/摘要经 `flattenFileCitations` 显示为路径 + 括号里的摘录,剪贴板上不留标记。
+- **边界**:芯片点击沿用 `FileLink` 的解析与安全边界——已知项目下的绝对路径直接打开,**项目外的绝对路径**(用户报告里的桌面 xls 就是)落「未找到匹配文件」菜单,这是既有行为,没有为引用放开;手机壳(`packages/chat-ui`)自有渲染,未接;时间轴摘要(`MessageTimeline` 的 `blocksToText`)未处理;芯片外观只过了类型检查与构建,**没有在运行中的应用里目检过**。
+- **冒烟**:`apps/desktop/scripts/file-citation-smoke/run.sh`(109 断言;前两条样本逐字取自库里的真实消息,含单冒号畸形写法;Markdown 段驱动**真的 react-markdown** 证明路径不被改写、表格不切列、加粗内完整、代码块内不被提取、流式时隐藏/结束后显示;cjs bundle——`react-dom/server` 是带动态 require 的 CJS,过不了 esm)。冒烟抓到过两个真缺陷:括号深度计数起点写成 0(开括号已被消费,应为 1,第一条真实样本就被判成未闭合)、快速通道要求文本含完整指令名导致「名字未到齐」的半截永远识别不到。
+
 ### 回合结束重新锚定到本轮提问(2026-09-18)
 - **行为**:模型输出完毕(本轮回合结束)后,若长回答把用户自己的提问顶出了视口上缘,消息流不再滑落回底部,而是**定位回本轮用户消息处**(顶部对齐 + 8px 余量,回答在下方可续读)——对齐左缘时间轴(MessageTimeline)上该条 dash 的所指;提问仍在屏内的短回合保持原有贴底滑落,零行为变化。
 - **挂载点**:完全寄生在既有的「回合完成折叠」链路——`TurnPanel` 的 `justCompleted` one-shot fold 调 `pauseBottomAnchor({suspendDataChange:true})`("full" 模式),其 settle 回调(原 `scrollToEnd` 处,`TURN_FOLD_MS+60`)即是决策点。`wasNearBottom||recomputeNearBottom()` 门槛保留(用户滚离阅读时绝不打扰);定位执行时经 `holdAnchorSuspension("full", TURN_FOLD_MS+700)` 延长锚挂起,防 turn-files 卡片落地触发 bottom snap 与定位滚动打架。
@@ -587,6 +615,8 @@ pnpm build
 ---
 
 ### Agent 运行时按需下载(2026-09-07,安装包瘦身 ~600MB/平台)
+
+- **2026-11-24 更新:Claude 退出托管集**。Claude 会话改为直接运行用户本机的 `claude` CLI(`lib/claudeExecutable.ts`),Mcode 不再为它下载任何二进制;`@anthropic-ai/claude-agent-sdk` 包及全部平台包已从依赖移除。设置页「Agent」里不再有 Claude 运行时卡片(`ipc/runtimes.ts` 过滤并拒绝相关操作,启动时清理旧版遗留的 `<userData>/runtimes/claude`)。**下文凡涉及 claude 的描述(平台包、wrapper 成对安装、G1 配对闸门、sdkLoader 等)均为 2026-11-23 之前的历史**,保留作设计记录;codex / pi 两条线仍然有效。安装管线内部的 claude 分支与兼容名单的 `claude` 键刻意保留(runtime-update-smoke 以它为夹具,远端名单需兼容旧版客户端)
 
 - **动机与形态**:三个 agent 运行时原先随安装包分发——claude 平台包 209MB(单 claude.exe)+ codex 平台包 378MB(vendor 树)+ pi JS 依赖闭包 44MB/28 包,合计约 600MB/平台,是安装包体积的绝对大头。现全部改为**按需下载**,安装到 `<userData>/runtimes/<agent>/<version>/`(main/index.ts 启动早期 `setManagedRuntimeRoot` 注册根目录)。JS 客户端保留捆绑的只有 `@anthropic-ai/claude-agent-sdk` 本体(4.9MB,进程内协议驱动;2026-09-24 起**同时**成对装入管理目录并由 sdkLoader 优先加载,asar 副本退为 fallback,见下)。
 - **依赖迁移**:`@openai/codex` 与 `@earendil-works/pi-coding-agent` 移入 devDependencies(pi 改精确版本 `0.83.0`,类型检查/开发用,electron-builder 不打 devDeps)→ 平台包是其 optionalDependencies,自动从安装包消失;electron-builder.yml 对应的两条 `asarUnpack`(claude-agent-sdk-* / @openai/codex*)已删除。新 dependencies 只加 `tar@^7`(纯 JS 解包,7.x 自带类型,无需 @types)。

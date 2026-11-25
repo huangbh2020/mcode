@@ -5,8 +5,8 @@
 # check for updates from within the app.
 #
 # macOS is split into two build jobs on matching runners (macos-latest=arm64,
-# macos-15-intel=x64) so the claude-agent-sdk platform subpackage and node-pty
-# native addon are installed + rebuilt for the correct arch. Building both archs
+# macos-15-intel=x64) so the node-pty native addon and the other
+# platform-specific optionalDependencies are installed for the correct arch. Building both archs
 # from a single arm64 runner produced x64 DMGs containing arm64 binaries, which
 # triggered a Rosetta prompt on Intel Macs.
 #

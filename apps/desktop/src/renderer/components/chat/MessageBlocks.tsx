@@ -48,6 +48,7 @@ import { ToolPathDisplay } from "./ToolPathDisplay.js";
 import { MediaGallery, type MediaBlock, type ToolMeta } from "./mediaGallery.js";
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
+import { flattenFileCitations } from "@renderer/lib/fileCitation.js";
 import { formatPathWithMaxDirsText, sameEditPath } from "@renderer/lib/path.js";
 import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import { BUILT_IN_COMMANDS } from "@renderer/lib/slashCommands.js";
@@ -204,7 +205,7 @@ const MessageBlocks = memo(function MessageBlocks({
               block={seg.block}
               defaultOpen={seg.defaultOpen}
               beforeMap={beforeMap}
-              isStreamingTail={isStreamingTail}
+              isStreamingTail={Boolean(isStreamingTail) && i === segments.length - 1}
               thinkingActive={Boolean(isStreamingTail) && seg.block.kind === "thinking" && i === segments.length - 1}
               onOpenPlan={onOpenPlan}
               projectPath={projectPath}
@@ -607,7 +608,7 @@ function MultiBatchToolGroup({
           holdFold(!open);
           toggleHoldPosition(e, setOpen);
         }}
-        className="flex w-full items-center gap-2 rounded-md py-1 text-left text-content-muted hover:bg-surface-muted/40 hover:text-content transition-colors select-none group"
+        className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-content-muted hover:bg-surface-muted/45 hover:text-content transition-colors select-none group"
       >
         {/* Leading icon: pulse on the running group; semantic icon on settled
             ones (last executed tool, brain for pure-thinking groups). */}
@@ -659,24 +660,97 @@ function MultiBatchToolGroup({
         <div
           ref={listRef}
           onScroll={handleScroll}
-          className="mt-1 max-h-72 space-y-1.5 overflow-y-auto border-l border-edge py-1 pl-2"
+          className="mt-1 ml-1.5 max-h-72 space-y-1.5 overflow-y-auto border-l border-edge/60 py-1 pl-2.5"
         >
-          {blocks.map((b, i) => (
-            <RenderErrorBoundary key={b.kind === "tool_use" ? `tu:${b.toolCallId}` : `th:${i}`}>
-              <BlockView
-                block={b}
-                beforeMap={beforeMap}
-                liveTurn={turnActive}
-                thinkingActive={turnActive && b.kind === "thinking" && i === blocks.length - 1}
-                projectPath={projectPath}
-                defaultOpen={false}
-              />
-            </RenderErrorBoundary>
-          ))}
+          {groupBatchReadBlocks(blocks).map((item, idx) => {
+            if (item.kind === "read_group") {
+              const anyRunning = item.blocks.some((b) => b.status === "running");
+              return (
+                <div
+                  key={`rg:${item.blocks[0].toolCallId}`}
+                  className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-1.5 py-0.5 [font-size:var(--chat-fs-sm)]"
+                >
+                  <span className="inline-flex items-center gap-1.5 mr-0.5">
+                    <ToolIcon name="Read" className="shrink-0 text-content-subtle" />
+                    <span className={cn("font-medium text-content-muted", anyRunning && turnActive && "shimmer-text")}>
+                      {toolDisplayName(t, "Read")}
+                    </span>
+                  </span>
+                  {item.blocks.map((b, bIdx) => {
+                    const fp = extractToolFilePath(b.toolName, b.input);
+                    if (!fp) return null;
+                    return (
+                      <span key={b.toolCallId} className="inline-flex items-center gap-1.5">
+                        {bIdx > 0 && <span className="text-content-subtle/60">·</span>}
+                        <span
+                          className={cn(
+                            "inline-flex max-w-full items-center font-mono",
+                            b.status === "running" && turnActive && "shimmer-text",
+                          )}
+                        >
+                          <FileLink
+                            token={fp}
+                            projectPath={projectPath}
+                            display={<ToolPathDisplay filePath={fp} highlightFileName />}
+                          />
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              );
+            }
+            const b = item.block;
+            return (
+              <RenderErrorBoundary key={b.kind === "tool_use" ? `tu:${b.toolCallId}` : `th:${idx}`}>
+                <BlockView
+                  block={b}
+                  beforeMap={beforeMap}
+                  liveTurn={turnActive}
+                  thinkingActive={turnActive && b.kind === "thinking" && item.originalIndex === blocks.length - 1}
+                  projectPath={projectPath}
+                  defaultOpen={false}
+                />
+              </RenderErrorBoundary>
+            );
+          })}
         </div>
       )}
     </div>
   );
+}
+
+/** Group consecutive successful Read tool_use blocks into horizontal pill rows
+ *  so a burst of file reads doesn't stretch the process list vertically. */
+function groupBatchReadBlocks(
+  blocks: ReadonlyArray<ProceduralBlock>,
+): Array<
+  | { kind: "read_group"; blocks: ToolUseBlock[] }
+  | { kind: "single"; block: ProceduralBlock; originalIndex: number }
+> {
+  const out: Array<
+    | { kind: "read_group"; blocks: ToolUseBlock[] }
+    | { kind: "single"; block: ProceduralBlock; originalIndex: number }
+  > = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    const isReadPill =
+      b.kind === "tool_use" &&
+      (b.toolName === "Read" || b.toolName === "read") &&
+      b.status !== "error" &&
+      !!extractToolFilePath(b.toolName, b.input);
+    if (isReadPill) {
+      const prev = out[out.length - 1];
+      if (prev && prev.kind === "read_group") {
+        prev.blocks.push(b);
+      } else {
+        out.push({ kind: "read_group", blocks: [b] });
+      }
+    } else {
+      out.push({ kind: "single", block: b, originalIndex: i });
+    }
+  }
+  return out;
 }
 
 /** Render a collapsible chevron icon (▾ when open, ▸ when closed). An optional
@@ -1091,54 +1165,97 @@ export function TurnPanel({
       {blocks.length > 0 && (
       <div className="chat-fold" data-open={open ? "true" : "false"}>
         <div className="chat-fold-inner">
-          <div className="chat-ledger-body space-y-1.5">
-            {(() => {
-              const segments = groupBlocks(blocks);
-              const segKeys = segmentKeys(segments);
-              return segments.map((seg, i) => {
-                const hasFollowingText = segments.slice(i + 1).some(
-                  (s) => s.kind === "single" && s.block.kind === "text" && s.block.text.trim().length > 0,
-                );
-                return seg.kind === "single" ? (
-                  <RenderErrorBoundary key={segKeys[i]}>
-                    <BlockView
-                      block={seg.block}
-                      defaultOpen={seg.defaultOpen}
-                      beforeMap={beforeMap}
-                      liveTurn={turnActive}
-                      thinkingActive={turnActive && seg.block.kind === "thinking" && i === segments.length - 1}
-                      onOpenPlan={onOpenPlan}
-                      projectPath={projectPath}
-                    />
-                  </RenderErrorBoundary>
-                ) : seg.kind === "editRun" ? (
-                  <RenderErrorBoundary key={segKeys[i]}>
-                    <EditRunRow blocks={seg.blocks} beforeMap={beforeMap} live={turnActive} projectPath={projectPath} />
-                  </RenderErrorBoundary>
-                ) : seg.kind === "media" ? (
-                  <RenderErrorBoundary key={segKeys[i]}>
-                    <MediaGallery blocks={seg.blocks} />
-                  </RenderErrorBoundary>
-                ) : seg.kind === "attachments" ? (
-                  <RenderErrorBoundary key={segKeys[i]}>
-                    <AttachmentRow blocks={seg.blocks} />
-                  </RenderErrorBoundary>
-                ) : (
-                  <RenderErrorBoundary key={segKeys[i]}>
-                    <BatchToolGroup
-                      blocks={seg.blocks}
-                      beforeMap={beforeMap}
-                      turnActive={turnActive}
-                      hasFollowingText={hasFollowingText}
-                      thinkingActive={
-                        turnActive && i === segments.length - 1 && seg.blocks[seg.blocks.length - 1].kind === "thinking"
-                      }
-                      projectPath={projectPath}
-                    />
-                  </RenderErrorBoundary>
-                );
-              });
-            })()}
+          <div className="chat-ledger-body">
+            <div className="relative ml-2 border-l border-edge pl-4 space-y-2 py-1">
+              {(() => {
+                const segments = groupBlocks(blocks);
+                const segKeys = segmentKeys(segments);
+                return segments.map((seg, i) => {
+                  const hasFollowingText = segments.slice(i + 1).some(
+                    (s) => s.kind === "single" && s.block.kind === "text" && s.block.text.trim().length > 0,
+                  );
+                  if (seg.kind === "single" && seg.block.kind === "text") {
+                    return (
+                      <RenderErrorBoundary key={segKeys[i]}>
+                        <div className="pl-1.5 text-content-muted">
+                          <BlockView
+                            block={seg.block}
+                            defaultOpen={seg.defaultOpen}
+                            beforeMap={beforeMap}
+                            liveTurn={turnActive}
+                            thinkingActive={false}
+                            onOpenPlan={onOpenPlan}
+                            projectPath={projectPath}
+                          />
+                        </div>
+                      </RenderErrorBoundary>
+                    );
+                  }
+                  const isThinkingNode =
+                    (seg.kind === "single" && seg.block.kind === "thinking") ||
+                    (seg.kind === "batch" && seg.blocks.every((b) => b.kind === "thinking"));
+                  const isNodeRunning =
+                    turnActive &&
+                    i === segments.length - 1 &&
+                    ((seg.kind === "single" &&
+                      (seg.block.kind === "thinking" ||
+                        (seg.block.kind === "tool_use" && seg.block.status === "running"))) ||
+                      (seg.kind === "batch" &&
+                        seg.blocks.some((b) => b.kind === "tool_use" && b.status === "running")));
+                  const showDot = seg.kind !== "media" && seg.kind !== "attachments";
+                  return (
+                    <RenderErrorBoundary key={segKeys[i]}>
+                      <div className="relative">
+                        {showDot && (
+                          <span
+                            aria-hidden
+                            className={cn(
+                              "pointer-events-none absolute -left-[20.5px] top-2 h-2 w-2 rounded-full ring-4 ring-surface",
+                              isThinkingNode
+                                ? isNodeRunning
+                                  ? "bg-accent animate-pulse"
+                                  : "bg-content-subtle/50"
+                                : cn(
+                                    "border bg-surface",
+                                    isNodeRunning ? "border-accent" : "border-content-subtle",
+                                  ),
+                            )}
+                          />
+                        )}
+                        {seg.kind === "single" ? (
+                          <BlockView
+                            block={seg.block}
+                            defaultOpen={seg.defaultOpen}
+                            beforeMap={beforeMap}
+                            liveTurn={turnActive}
+                            thinkingActive={turnActive && seg.block.kind === "thinking" && i === segments.length - 1}
+                            onOpenPlan={onOpenPlan}
+                            projectPath={projectPath}
+                          />
+                        ) : seg.kind === "editRun" ? (
+                          <EditRunRow blocks={seg.blocks} beforeMap={beforeMap} live={turnActive} projectPath={projectPath} />
+                        ) : seg.kind === "media" ? (
+                          <MediaGallery blocks={seg.blocks} />
+                        ) : seg.kind === "attachments" ? (
+                          <AttachmentRow blocks={seg.blocks} />
+                        ) : (
+                          <BatchToolGroup
+                            blocks={seg.blocks}
+                            beforeMap={beforeMap}
+                            turnActive={turnActive}
+                            hasFollowingText={hasFollowingText}
+                            thinkingActive={
+                              turnActive && i === segments.length - 1 && seg.blocks[seg.blocks.length - 1].kind === "thinking"
+                            }
+                            projectPath={projectPath}
+                          />
+                        )}
+                      </div>
+                    </RenderErrorBoundary>
+                  );
+                });
+              })()}
+            </div>
           </div>
         </div>
       </div>
@@ -1245,23 +1362,34 @@ const BlockView = memo(function BlockView({
       // ("rendered more hooks than previous render").
       if (!block.text.trim()) return null;
       return (
-        <Markdown projectPath={projectPath} skillNames={skillNames} inlineFiles={inlineFiles}>
+        <Markdown
+          projectPath={projectPath}
+          skillNames={skillNames}
+          inlineFiles={inlineFiles}
+          // A file-citation directive that is mid-stream is held back until it
+          // completes. Only a block at the tail of a live turn can end in one.
+          streaming={Boolean(isStreamingTail) || Boolean(liveTurn)}
+        >
           {deferredText}
         </Markdown>
       );
     }
 
-    case "thinking":
+    case "thinking": {
+      // Thinking is shown as raw text, so a model-emitted file citation is
+      // spelled out as the path it names instead of left as markup.
+      const text = flattenFileCitations(block.text);
       return (
         <Collapsible
           label={t("chatStream.thinking")}
-          hint={summarize(block.text)}
+          hint={summarize(text)}
           defaultOpen={defaultOpen}
           running={Boolean(thinkingActive)}
         >
-          {block.text}
+          {text}
         </Collapsible>
       );
+    }
 
     case "tool_use":
       return <ToolCard block={block} defaultOpen={defaultOpen} beforeMap={beforeMap} liveTurn={liveTurn} projectPath={projectPath} />;
@@ -1886,6 +2014,11 @@ const ORCH_PLAN_TOOL_FULL = "mcp__mcode-orchestrator__orch_submit_plan";
  *  折叠态 = 一行「提交编排任务图 · 目标摘要 · N 个任务」,展开态 = 目标 +
  *  逐任务简报列表。原始入参 JSON 不再整段平铺 —— 任务图是结构化数据,
  *  画布才是它的可读形态,卡片只留过程痕迹。 */
+const TOOL_CARD_SHELL_CLASS = "[font-size:var(--chat-fs-sm)]";
+const TOOL_CARD_BTN_CLASS =
+  "group flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-surface-muted/45";
+const TOOL_CARD_BODY_CLASS = "mt-1 ml-1.5 space-y-2 border-l border-edge/60 py-1.5 pl-2.5";
+
 function OrchPlanToolCard({
   block,
   defaultOpen = false,
@@ -1905,13 +2038,13 @@ function OrchPlanToolCard({
   const goal = typeof input.goal === "string" ? input.goal : "";
   const tasks = Array.isArray(input.tasks) ? (input.tasks as Record<string, unknown>[]) : [];
   return (
-    <div className="[font-size:var(--chat-fs-sm)]">
+    <div className={TOOL_CARD_SHELL_CLASS}>
       <button
         onClick={(e) => {
           holdFold(!open);
           toggleHoldPosition(e, setOpen);
         }}
-        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
+        className={TOOL_CARD_BTN_CLASS}
       >
         <ToolIcon name={block.toolName} className="text-content-subtle" />
         <span className={cn("shrink-0 font-medium text-content-muted", block.status === "running" && !!live && "shimmer-text")}>
@@ -1931,7 +2064,7 @@ function OrchPlanToolCard({
         </span>
       </button>
       {open && (
-        <div className="space-y-2 border-l border-edge py-2 pl-2">
+        <div className={TOOL_CARD_BODY_CLASS}>
           {goal && (
             <div>
               <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("orch.tool.goal")}</div>
@@ -2003,13 +2136,13 @@ function EditToolCard({
   const { adds, dels } = useMemo(() => diffSummary(diff), [diff]);
 
   return (
-    <div className="[font-size:var(--chat-fs-sm)]">
+    <div className={TOOL_CARD_SHELL_CLASS}>
       <button
         onClick={(e) => {
           holdFold(!open);
           toggleHoldPosition(e, setOpen);
         }}
-        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
+        className={TOOL_CARD_BTN_CLASS}
       >
         <ToolIcon name="Edit" className="shrink-0 text-content-subtle" />
         <span className={cn("shrink-0 font-medium text-content-muted", status === "running" && !!live && "shimmer-text")}>
@@ -2024,7 +2157,7 @@ function EditToolCard({
         </span>
       </button>
       {open && (
-        <div className="space-y-2 border-l border-edge py-2 pl-2">
+        <div className={TOOL_CARD_BODY_CLASS}>
           <DiffView diff={diff} />
           {result !== undefined && (
             <div>
@@ -2097,13 +2230,13 @@ function WriteToolCard({
   const { adds, dels } = useMemo(() => (diff ? diffSummary(diff) : { adds: 0, dels: 0 }), [diff]);
 
   return (
-    <div className="[font-size:var(--chat-fs-sm)]">
+    <div className={TOOL_CARD_SHELL_CLASS}>
       <button
         onClick={(e) => {
           holdFold(!open);
           toggleHoldPosition(e, setOpen);
         }}
-        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
+        className={TOOL_CARD_BTN_CLASS}
       >
         <ToolIcon name="Write" className="shrink-0 text-content-subtle" />
         <span className={cn("shrink-0 font-medium text-content-muted", status === "running" && !!live && "shimmer-text")}>
@@ -2119,7 +2252,7 @@ function WriteToolCard({
         </span>
       </button>
       {open && (
-        <div className="space-y-2 border-l border-edge py-2 pl-2">
+        <div className={TOOL_CARD_BODY_CLASS}>
           {diff ? (
             <div>
               <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">
@@ -2230,13 +2363,13 @@ function EditRunGroup({
   const anyError = blocks.some((b) => b.status === "error");
 
   return (
-    <div className="[font-size:var(--chat-fs-sm)]">
+    <div className={TOOL_CARD_SHELL_CLASS}>
       <button
         onClick={(e) => {
           holdFold(!open);
           toggleHoldPosition(e, setOpen);
         }}
-        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
+        className={TOOL_CARD_BTN_CLASS}
       >
         <ToolIcon name={head.toolName} className="shrink-0 text-content-subtle" />
         <span className={cn("shrink-0 font-medium text-content-muted", anyRunning && !!live && "shimmer-text")}>
@@ -2252,7 +2385,7 @@ function EditRunGroup({
         </span>
       </button>
       {open && (
-        <div className="space-y-1 border-l border-edge py-2 pl-2">
+        <div className="mt-1 ml-1.5 space-y-1 border-l border-edge/60 py-1.5 pl-2.5">
           {blocks.map((b) => (
             <ToolCard key={b.toolCallId} block={b} defaultOpen={false} beforeMap={beforeMap} liveTurn={live} projectPath={projectPath} />
           ))}
@@ -2301,13 +2434,13 @@ function GenericToolCard({
   const approvalBroken = isPlanApprovalChannelFailure(block);
 
   return (
-    <div className="[font-size:var(--chat-fs-sm)]">
+    <div className={TOOL_CARD_SHELL_CLASS}>
       <button
         onClick={(e) => {
           holdFold(!open);
           toggleHoldPosition(e, setOpen);
         }}
-        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
+        className={TOOL_CARD_BTN_CLASS}
       >
         <ToolIcon name={block.toolName} className="shrink-0 text-content-subtle" />
         <span className={cn("shrink-0 font-medium text-content-muted", block.status === "running" && !!live && "shimmer-text")}>
@@ -2340,7 +2473,7 @@ function GenericToolCard({
         </div>
       )}
       {open && (
-        <div className="space-y-2 border-l border-edge py-2 pl-2">
+        <div className={TOOL_CARD_BODY_CLASS}>
           <div>
             <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.tool.input")}</div>
             <pre className="max-h-60 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
@@ -2361,7 +2494,8 @@ function GenericToolCard({
   );
 }
 
-/** A collapsible section (used for thinking blocks). */
+/** A collapsible thinking row: quiet one-line summary that expands on click
+ *  with a subtle accent-tinted left guide line (no heavy outer box). */
 function Collapsible({
   label,
   hint,
@@ -2380,37 +2514,33 @@ function Collapsible({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const holdFold = useFoldHold();
+  const bodyText = typeof children === "string" ? children.trim() : "";
+  const preview = (bodyText || hint).replace(/\s+/g, " ");
+
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
+        type="button"
         onClick={(e) => {
           holdFold(!open);
           toggleHoldPosition(e, setOpen);
         }}
-        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left text-content-muted hover:bg-surface-muted/40"
+        className="group flex w-full items-center gap-2 rounded-md px-1.5 py-0.5 text-left text-content-muted transition-colors hover:bg-surface-muted/45 hover:text-content"
       >
-        {!running && <IconBrain size={13} className="shrink-0 text-content-subtle" />}
-        {/* shrink-0 + whitespace-nowrap keep the short label on one line even
-            in a narrow pane; flex-1 + min-w-0 let the hint own the leftover
-            width and truncate with an ellipsis instead of pushing the header
-            onto two lines. While running, label + hint sweep (the hint's
-            resting tone is one stop lighter, hence the subtle variant). */}
-        <span className={cn("shrink-0 whitespace-nowrap font-medium text-content-muted", running && "shimmer-text")}>
+        <IconBrain size={13} className="shrink-0 text-content-subtle" />
+        <span className={cn("shrink-0 whitespace-nowrap font-medium text-content-muted group-hover:text-content", running && "shimmer-text")}>
           {label}
         </span>
         <span
           className={cn("min-w-0 flex-1 truncate text-content-subtle", running && "shimmer-text shimmer-text-subtle")}
         >
-          {hint}
+          {preview}
         </span>
-        <Chevron open={open} className="ml-auto" />
+        <Chevron open={open} className={cn("ml-auto", !open && "opacity-50 group-hover:opacity-100")} />
       </button>
       {open && (
-        // Cap height so a long thinking block doesn't stretch the stream;
-        // it scrolls internally instead. The left border marks this as an
-        // expanded body, visually nested under its header.
-        <div className="max-h-80 overflow-y-auto border-l border-edge py-2 pl-2 text-content-muted">
-          <p className="whitespace-pre-wrap break-words leading-relaxed">{children as unknown as string}</p>
+        <div className="mt-1 ml-1.5 max-h-80 overflow-y-auto border-l-2 border-accent/40 py-1 pl-2.5 text-content-muted">
+          <p className="whitespace-pre-wrap break-words leading-relaxed">{bodyText || hint}</p>
         </div>
       )}
     </div>

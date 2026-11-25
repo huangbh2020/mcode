@@ -25,7 +25,7 @@ import {
 import { Menu } from "@base-ui/react/menu";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
-import { TabBarChevronButton, TabBarOverflowMenu } from "./TabBarChrome.js";
+import { TabBarChevronButton, TabBarOverflowMenu, TabInverseCorners } from "./TabBarChrome.js";
 import { SortableSessionTab, findSession } from "./SessionTabs.js";
 import {
   MENU_ITEM_CLASS,
@@ -41,6 +41,40 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 /** Stable empty array so the selector never returns a fresh [] (Zustand
  *  Object.is rule — a new [] every render causes an infinite loop). */
 const EMPTY_OPEN_FILES: string[] = [];
+
+/** Returns true when the leftmost rendered tab in UnifiedTabsBar is active. */
+export function useIsFirstTabActive(): boolean {
+  return useSessionStore((s) => {
+    const activeId = s.activeSessionId;
+    const wide = s.widePanelOpen;
+    const placement = s.tabsFilePreviewPlacement;
+    const pid = s.activeProjectId;
+    const activeFile = pid ? s.ideActiveFileByProject[pid] ?? null : null;
+    const planTabActive = activeId ? s.planTabActiveBySession[activeId] ?? false : false;
+    const editorFocused =
+      !wide &&
+      s.centerTabFocus === "editor" &&
+      ((!!activeFile && placement !== "sidebar") || planTabActive);
+
+    if (s.openTabs.length > 0) {
+      if (editorFocused) return false;
+      const firstId = s.openTabs[0];
+      if (firstId === activeId) return true;
+      return !!activeId && !!s.splitGroupsBySession[firstId]?.includes(activeId);
+    }
+
+    const openFiles =
+      placement === "sidebar" || wide || !pid
+        ? EMPTY_OPEN_FILES
+        : s.ideOpenFilesByProject[pid] ?? EMPTY_OPEN_FILES;
+    if (openFiles.length > 0) {
+      return editorFocused && !planTabActive && openFiles[0] === activeFile;
+    }
+
+    const hasPlanTab = !!(activeId && s.planDrawerPlanBySession[activeId]) && !wide;
+    return hasPlanTab && editorFocused && planTabActive;
+  });
+}
 
 /** The unified tab strip: ONE row holding the open session tabs AND the
  *  editor's file tabs (+ the per-session plan pseudo-tab) side by side. Both
@@ -328,7 +362,7 @@ export function UnifiedTabsBar() {
       // min-w-0 and the track scrolls, but if the strip is ever squeezed
       // below its own chrome (shrink-0 chevrons/⋯), clipping HERE beats
       // spilling over the git pill and workbench toggles to its right.
-      className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden"
+      className="relative z-10 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden"
     >
       {/* Left chevron — only when there's content scrolled off the left edge. */}
       {canScrollLeft && (
@@ -344,12 +378,12 @@ export function UnifiedTabsBar() {
           the titlebar's drag region: dragging empty track space moves the
           window (browser convention); every interactive child opts out
           individually with WebkitAppRegion: "no-drag". */}
-      <div className="relative min-w-0 flex-1">
+      <div className="relative flex min-w-0 flex-1 items-stretch self-stretch">
         <div
           ref={scrollRef}
           onScroll={recomputeScrollState}
           onWheel={onWheel}
-          className="no-scrollbar flex items-center gap-1 overflow-x-auto"
+          className="no-scrollbar flex flex-1 items-end gap-1.5 overflow-x-auto px-2.5 pt-1.5"
         >
           <DndContext
             sensors={sensors}
@@ -357,7 +391,7 @@ export function UnifiedTabsBar() {
             onDragEnd={onDragEnd}
           >
             <SortableContext items={tabs} strategy={horizontalListSortingStrategy}>
-              {tabs.map((id) => {
+              {tabs.map((id, idx) => {
                 const displayId = displayedIdFor(id);
                 const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, displayId, orchWorkersById);
                 return (
@@ -365,6 +399,7 @@ export function UnifiedTabsBar() {
                     key={id}
                     session={sess}
                     sessionId={id}
+                    isFirst={idx === 0}
                     isActive={isTabActive(id) && !editorFocused}
                     running={!!runningBySession[displayId] || orchAnchors[displayId] != null}
                     unreadCount={unreadBySession[displayId] ?? 0}
@@ -388,14 +423,19 @@ export function UnifiedTabsBar() {
                 the plan pseudo-tab) on the right. Only rendered when both
                 groups have content. */}
             {tabs.length > 0 && (openFiles.length > 0 || showPlanTab) && (
-              <div aria-hidden className="mx-1 h-3.5 w-px shrink-0 self-center bg-edge/70" />
+              <div
+                aria-hidden
+                className="mx-2 mb-2 h-[18px] w-[2px] shrink-0 rounded-full bg-gradient-to-b from-sky-400 via-violet-500 to-emerald-400"
+              />
             )}
 
             <SortableContext items={openFiles} strategy={horizontalListSortingStrategy}>
-              {openFiles.map((path) => (
+              {openFiles.map((path, idx) => (
                 <SortableFileTab
                   key={path}
                   path={path}
+                  variant="attached"
+                  isFirst={tabs.length === 0 && idx === 0}
                   isActive={path === activeFile && editorFocused && !planTabActive}
                   dirty={dirtySet.has(path)}
                   registerNode={(node) => {
@@ -432,21 +472,27 @@ export function UnifiedTabsBar() {
               role="tab"
               aria-selected={planTabActive && editorFocused}
               title={t("ide.editor.viewPlan")}
+              onMouseDown={(e) => {
+                if (e.button === 0 && !(planTabActive && editorFocused) && activeId) {
+                  clearIdeActiveFile();
+                  setPlanTabActive(activeId, true);
+                }
+              }}
               onClick={() => {
-                if (activeId) {
+                if (!(planTabActive && editorFocused) && activeId) {
                   clearIdeActiveFile();
                   setPlanTabActive(activeId, true);
                 }
               }}
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               className={cn(
-                // Apple-style Compact Integrated Card Plan Tab (方案 1)
-                "group flex h-[27px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-lg px-2.5 text-[11px] transition-all duration-150 min-w-0 shrink-0",
+                "group relative flex h-[34px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-t-xl rounded-b-none px-2.5 text-[11px] min-w-0 shrink-0",
                 planTabActive && editorFocused
-                  ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
-                  : "text-content-muted hover:text-content hover:bg-surface-hover/50 border border-transparent",
+                  ? "z-10 pb-px bg-surface text-content font-medium border-t border-x border-edge"
+                  : "text-content-muted hover:text-content hover:bg-surface-hover/50 border-t border-x border-transparent",
               )}
             >
+              {planTabActive && editorFocused && <TabInverseCorners />}
               <IconClipboard size={12} className="shrink-0 text-emerald-500" />
               <span className="min-w-0 flex-1 truncate">{t("ide.editor.planTab")}</span>
               {/* Close button leaves the layout on inactive tabs (title fills
@@ -459,6 +505,7 @@ export function UnifiedTabsBar() {
                   if (activeId) closePlanDrawer(activeId);
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
                 className={cn(
                   // Always in flow (opacity swap) — same hover-jump fix as
                   // the session/file chips.

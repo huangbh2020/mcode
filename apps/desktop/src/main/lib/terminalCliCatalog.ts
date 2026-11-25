@@ -32,6 +32,7 @@ import type {
 } from "@contracts/ipc";
 import { which } from "@main/lib/binaryResolve.js";
 import { resolveClaudeCliPath } from "@main/lib/claudeCli.js";
+import { invalidateClaudeExecutableCache } from "@main/lib/claudeExecutable.js";
 import { log } from "@main/lib/logger.js";
 
 /** One catalog row. providerId doubles as the terminal session row's
@@ -181,9 +182,12 @@ export async function listTerminalCliStatuses(force = false): Promise<TerminalCl
   return statuses;
 }
 
-/** Drop one CLI's cached probe (after install/uninstall). */
+/** Drop one CLI's cached probe (after install/uninstall). Claude's launch
+ *  resolution (lib/claudeExecutable.ts) has its own cache — chat sessions
+ *  spawn through it — so it is dropped together. */
 function invalidateProbe(providerId: TerminalCliId): void {
   probeCache.delete(providerId);
+  if (providerId === "claude-sdk") invalidateClaudeExecutableCache();
 }
 
 /* ── npm actions ── */

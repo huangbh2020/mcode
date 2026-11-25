@@ -7,7 +7,16 @@ import { z } from "zod";
 import type { RuntimeEvent } from "./runtime.js";
 import type { Project, Session, MessageRecord, TurnInput, ApprovalDecision, SessionBookmark } from "./session.js";
 import type { ProviderCapabilities, UserInputAnswers, BuiltinModelOption } from "./provider.js";
-import type { CustomModelPublic, CustomModelInput, TestCustomModelResult } from "./customModel.js";
+import type {
+  CustomModelPublic,
+  CustomModelInput,
+  TestCustomModelResult,
+  FetchCustomModelsResult,
+  ClaudeMenuRoleKey,
+  ClaudeSettingsSyncTarget,
+  ClaudeSettingsSyncState,
+  ClaudeImportCandidate,
+} from "./customModel.js";
 import type { PiProviderConfig, PiProviderPublic } from "./piModel.js";
 import type { CodexProviderPublic } from "./codexModel.js";
 import type { ThemeName, EffectiveTheme, ThemeChangedMessage } from "./theme.js";
@@ -1798,6 +1807,7 @@ export type FocusSessionInput = z.infer<typeof FocusSessionSchema>;
 /** One selectable model within a custom-model config. */
 const CustomModelEntrySchema = z.object({
   id: z.string().min(1),
+  displayName: z.string().optional(),
   supports1m: z.boolean().optional(),
   /** Thinking-control declaration (OpenAI-protocol configs only). Shape only
    *  — the value set is small and the renderer form is a Select, so the enum
@@ -1810,6 +1820,45 @@ const CustomModelEntrySchema = z.object({
     })
     .optional(),
 });
+
+const ClaudeTierRoleMetaSchema = z.object({
+  displayName: z.string().optional(),
+  supports1m: z.boolean().optional(),
+});
+
+export const ClaudeTierModelsSchema = z.object({
+  defaultModel: z.string().optional(),
+  sonnet: z.string().optional(),
+  opus: z.string().optional(),
+  fable: z.string().optional(),
+  haiku: z.string().optional(),
+  subagent: z.string().optional(),
+  roleMeta: z
+    .object({
+      sonnet: ClaudeTierRoleMetaSchema.optional(),
+      opus: ClaudeTierRoleMetaSchema.optional(),
+      fable: ClaudeTierRoleMetaSchema.optional(),
+      haiku: ClaudeTierRoleMetaSchema.optional(),
+      subagent: ClaudeTierRoleMetaSchema.optional(),
+    })
+    .optional(),
+});
+
+export const ClaudeSettingsSyncTargetSchema = z.enum(["none", "mcode", "claude", "both"]);
+
+export const SetActiveCustomModelSchema = z.object({
+  id: z.string().nullable(),
+  model: z.string().optional(),
+  role: z.enum(["sonnet", "opus", "fable", "haiku"]).optional(),
+});
+
+export const SetClaudeSyncTargetSchema = z.object({
+  target: ClaudeSettingsSyncTargetSchema,
+});
+
+export const ImportClaudeSettingsSchema = z.object({
+  source: z.enum(["claude", "mcode"]).optional(),
+}).optional();
 
 const AuthModeSchema = z.enum(["auth_token", "api_key"]);
 
@@ -1832,8 +1881,8 @@ export const SaveCustomModelSchema = z.object({
   protocol: ProtocolSchema.optional(),
   authToken: z.string().optional(),
   models: z.array(CustomModelEntrySchema).min(1),
-  /** Task-subagent model pin (one of models[].id); the store drops a value
-   *  not present in the list. Absent = follow the main session's model. */
+  tierModels: ClaudeTierModelsSchema.optional(),
+  /** Task-subagent model pin (legacy field; kept for backward compat). */
   subagentModel: z.string().optional(),
   disableNonEssentialTraffic: z.boolean().optional(),
   timeoutMs: z.number().optional(),
@@ -1847,8 +1896,9 @@ export const DeleteCustomModelSchema = z.object({ id: z.string() });
  *  user can verify auth/baseUrl/a-specific-model before committing. The probe
  *  tests ONE model at a time (the user picks which model in the UI). */
 export const TestCustomModelSchema = z.object({
+  id: z.string().optional(),
   baseUrl: z.string().min(1),
-  authToken: z.string().min(1),
+  authToken: z.string().optional(),
   authMode: AuthModeSchema.optional(),
   protocol: ProtocolSchema.optional(),
   /** The single model id to probe in this request. */
@@ -1863,6 +1913,16 @@ export const TestCustomModelSchema = z.object({
   customHeaders: CustomHeadersSchema.optional(),
 });
 export type TestCustomModelInput = z.infer<typeof TestCustomModelSchema>;
+
+export const FetchCustomModelsSchema = z.object({
+  id: z.string().optional(),
+  baseUrl: z.string().min(1),
+  authToken: z.string().optional(),
+  authMode: AuthModeSchema.optional(),
+  protocol: ProtocolSchema.optional(),
+  customHeaders: CustomHeadersSchema.optional(),
+});
+export type FetchCustomModelsInput = z.infer<typeof FetchCustomModelsSchema>;
 
 /** Fetch the cleartext auth token for an already-saved custom-model config.
  *  This BREAKS the usual "cleartext never crosses IPC" rule on purpose: it
@@ -1979,6 +2039,25 @@ export interface OpenCodeModelOption {
   variants?: string[];
   /** Zen public models usable without any login (apiKey "public"). */
   free?: boolean;
+}
+
+/** Model entry returned by `antigravity.listModels` (with `<family>-<level>`
+ *  variants folded into a base model + effort options). */
+export interface AntigravityModelOption {
+  id: string;
+  label: string;
+  hint?: string;
+  variants?: string[];
+}
+
+/** Status of the user's local Antigravity CLI (`agy`) for ACP chats. */
+export interface AntigravityCliStatus {
+  installed: boolean;
+  path?: string;
+  version?: string;
+  minVersion: string;
+  usable: boolean;
+  reason?: "not-installed" | "too-old";
 }
 
 export const OpenCodeListModelsSchema = z.object({
@@ -3845,6 +3924,33 @@ export type RuntimesCheckInput = z.infer<typeof RuntimesCheckSchema>;
 export const RuntimesRollbackSchema = z.object({ agent: RuntimeAgentSchema });
 export type RuntimesRollbackInput = z.infer<typeof RuntimesRollbackSchema>;
 
+/** Status of the USER'S Claude CLI — the runtime Claude sessions actually
+ *  run since the managed download was retired (2026-11-24). Consumed by the
+ *  provider picker to gate the claude-sdk item: a session on this provider
+ *  spawns this CLI, so "installed" here — not the managed-runtime list — is
+ *  what "available" means. */
+export interface ClaudeCliStatus {
+  /** The `claude` executable was found (PATH / ~/.local/bin). */
+  installed: boolean;
+  /** The path a user would recognise (`which claude`), when installed. */
+  path?: string;
+  /** Dotted version from `claude --version`, when the probe answered. */
+  version?: string;
+  /** Oldest version whose control protocol Mcode can drive. */
+  minVersion: string;
+  /** installed AND (no readable version OR version ≥ minVersion) — the same
+   *  gate startTurn applies, so a green item cannot still fail at launch. */
+  usable: boolean;
+  /** Why not usable: `not-installed` (nothing on PATH) or `too-old` (the
+   *  probe read a version below minVersion). Absent when usable. */
+  reason?: "not-installed" | "too-old";
+}
+
+/** Probe the user's Claude CLI. Cached ~10 min on the main side (a spawn
+ *  per probe); `force` bypasses the caches for a just-happened install. */
+export const RuntimesClaudeCliSchema = z.object({ force: z.boolean().optional() });
+export type RuntimesClaudeCliInput = z.infer<typeof RuntimesClaudeCliSchema>;
+
 export interface ClaudeEventMessage {
   channel: "claude:event";
   sessionId: string;
@@ -5116,11 +5222,20 @@ export interface RpcMap {
   "notification.focusSession": (input: FocusSessionInput) => Promise<void>;
   // Custom models (user-defined Anthropic-compatible endpoints)
   "customModel.list": () => Promise<{ models: CustomModelPublic[] }>;
-  "customModel.save": (input: SaveCustomModelInput) => Promise<{ models: CustomModelPublic[] }>;
-  "customModel.delete": (input: { id: string }) => Promise<{ models: CustomModelPublic[] }>;
+  "customModel.save": (input: SaveCustomModelInput) => Promise<{ models: CustomModelPublic[]; activeProviderId: string | null; syncWarning?: string }>;
+  "customModel.delete": (input: { id: string }) => Promise<{ models: CustomModelPublic[]; activeProviderId: string | null }>;
   "customModel.test": (input: TestCustomModelInput) => Promise<TestCustomModelResult>;
+  "customModel.fetchModels": (input: FetchCustomModelsInput) => Promise<FetchCustomModelsResult>;
   /** Settings UI eye-icon only — returns cleartext token for display. */
   "customModel.getToken": (input: GetCustomModelTokenInput) => Promise<{ token: string | null }>;
+  "customModel.getSyncState": () => Promise<ClaudeSettingsSyncState>;
+  "customModel.setActive": (input: {
+    id: string | null;
+    model?: string;
+    role?: ClaudeMenuRoleKey;
+  }) => Promise<{ state: ClaudeSettingsSyncState; warning?: string }>;
+  "customModel.setSyncTarget": (input: { target: ClaudeSettingsSyncTarget }) => Promise<{ state: ClaudeSettingsSyncState; warning?: string }>;
+  "customModel.importSettings": (input?: { source?: "claude" | "mcode" }) => Promise<{ candidate: ClaudeImportCandidate | null }>;
   // Pi models (visual editor for ~/.pi/agent/models.json)
   "piModels.list": () => Promise<{ providers: Record<string, PiProviderPublic> }>;
   "piModels.save": (input: SavePiProviderInput) => Promise<{ providers: Record<string, PiProviderPublic> }>;
@@ -5169,6 +5284,16 @@ export interface RpcMap {
   "opencode.connectKey": (input: OpenCodeConnectKeyInput) => Promise<{ ok: boolean; error?: string }>;
   /** Remove one stored credential (logout). Desktop-only. */
   "opencode.logout": (input: OpenCodeLogoutInput) => Promise<{ ok: boolean; error?: string }>;
+  // Antigravity (`agy acp`) — model listing & CLI availability probe.
+  "antigravity.listModels": (input?: {
+    force?: boolean;
+  }) => Promise<{
+    installed: boolean;
+    models: AntigravityModelOption[];
+    loggedIn: boolean;
+    error?: string;
+  }>;
+  "antigravity.cliStatus": (input?: { force?: boolean }) => Promise<AntigravityCliStatus>;
   // GitHub integration (PR / issue panel)
   /** Token status + github.com repos discoverable under a project path. */
   "github.getContext": (input: GithubGetContextInput) => Promise<{ context: GitHubContextResult }>;
@@ -5565,6 +5690,9 @@ export interface RpcMap {
   "runtimes.rollback": (
     input: RuntimesRollbackInput,
   ) => Promise<{ ok: boolean; rolledBackTo?: string; error?: string }>;
+  /** Status of the user's Claude CLI (see {@link ClaudeCliStatus}). The
+   *  provider picker gates the claude-sdk item on `usable`. */
+  "runtimes.claudeCli": (input: RuntimesClaudeCliInput) => Promise<ClaudeCliStatus>;
   // ── Plugins (settings panel; docs/plugin-feasibility.md v1) ──
   /** List installed plugins (manifest + component summaries + enable state).
    *  Enabled plugins are delivered to providers at the next turn start. */
@@ -5776,7 +5904,12 @@ export const IPC = {
   CUSTOM_MODEL_SAVE: "customModel:save",
   CUSTOM_MODEL_DELETE: "customModel:delete",
   CUSTOM_MODEL_TEST: "customModel:test",
+  CUSTOM_MODEL_FETCH_MODELS: "customModel:fetchModels",
   CUSTOM_MODEL_GET_TOKEN: "customModel:getToken",
+  CUSTOM_MODEL_GET_SYNC_STATE: "customModel:getSyncState",
+  CUSTOM_MODEL_SET_ACTIVE: "customModel:setActive",
+  CUSTOM_MODEL_SET_SYNC_TARGET: "customModel:setSyncTarget",
+  CUSTOM_MODEL_IMPORT_SETTINGS: "customModel:importSettings",
   // Pi models (visual editor for ~/.pi/agent/models.json)
   PI_MODELS_LIST: "piModels:list",
   PI_MODELS_SAVE: "piModels:save",
@@ -5795,6 +5928,9 @@ export const IPC = {
   OPENCODE_AUTH_STATUS: "opencode:authStatus",
   OPENCODE_CONNECT_KEY: "opencode:connectKey",
   OPENCODE_LOGOUT: "opencode:logout",
+  // Antigravity (`agy acp`)
+  ANTIGRAVITY_LIST_MODELS: "antigravity:listModels",
+  ANTIGRAVITY_CLI_STATUS: "antigravity:cliStatus",
   // Theme / color scheme
   THEME_GET: "theme:get",
   THEME_SET: "theme:set",
@@ -5982,6 +6118,7 @@ export const IPC = {
   RUNTIMES_REMOVE: "runtimes:remove",
   RUNTIMES_CHECK_UPDATES: "runtimes:checkUpdates",
   RUNTIMES_ROLLBACK: "runtimes:rollback",
+  RUNTIMES_CLAUDE_CLI: "runtimes:claudeCli",
   RUNTIMES_EVENT: "runtimes:event",
   // Plugins (settings panel): list/install (local/git/marketplace)/enable/
   // remove + marketplace management. No push channel — every RPC resolves

@@ -11,8 +11,8 @@
 | 维度 | 选型 |
 |------|------|
 | 应用形态 | Electron 桌面应用(三栏 IDE 布局) |
-| 核心理念 | **不重新实现 agent,只做 Claude 的交互界面**。通过 Agent SDK(封装了 claude 原生的 agent loop)驱动,本项目提供会话管理、流式渲染、工具审批、IDE 能力 |
-| 与 Claude 的关系 | 使用 `@anthropic-ai/claude-agent-sdk` 驱动(内部仍 spawn 打包的二进制,由 SDK 管理);项目自身 MIT,可独立开源 |
+| 核心理念 | **不重新实现 agent,只做 Claude 的交互界面**。直接拉起用户本机的 `claude` CLI 并解析它的输出(agent loop 完全在 CLI 里),本项目提供会话管理、流式渲染、工具审批、IDE 能力 |
+| 与 Claude 的关系 | 直接 spawn 用户安装的 `claude`(stream-json + 控制协议,见 `providers/claude-sdk/cliTransport.ts`);**不依赖任何 Agent SDK 包**(2026-11-24 移除,见 §5.1);项目自身 MIT,可独立开源 |
 | 架构参考 | [Synara](https://github.com/Emanuele-web04/synara) 的分层设计(provider adapter、归一化 runtime 事件、IPC 边界),但用**主流 TS**重写(无 effect-ts、无 bun) |
 | 扩展性 | 内置 `AgentProvider` 抽象层 + `ProviderRegistry`,后续扩展其他 agent 平台(OpenAI Codex、Gemini CLI 等)只需实现接口并注册
 
@@ -158,7 +158,19 @@ mcode/
 
 ## 五、关键技术决策
 
-### 5.1 为什么从 spawn CLI 迁移到 Agent SDK
+### 5.1 spawn CLI ↔ Agent SDK 的两次转向
+
+> **现状(2026-11-24):回到直接 spawn CLI**,`@anthropic-ai/claude-agent-sdk` 已从依赖移除。下面的迁移决策表是 2026-07 的历史记录,保留下来是因为它列出的三个"硬伤"正是这次必须逐条解决的东西:
+>
+> | 当年的硬伤 | 现在怎么解决 |
+> |-----------|-------------|
+> | 审批:`-p` 模式下 `--permission-prompt-tool` 形同虚设 | 2.1.199 起 CLI 原生支持 `--permission-prompt-tool=stdio`:审批 / 提问 / 计划都是 CLI 发出的 `control_request`,宿主在 stdin 上回 `control_response`(`cliTransport.ts` + `claudeProtocol.ts`)。Agent SDK 本来就只是这套协议的一个薄客户端——读它的 `sdk.mjs` 可见它 spawn 的也是同一个二进制、同一组参数 |
+> | 协议脆弱、没有类型 | 协议形状取自 SDK 0.3.327 的 `sdk.d.ts` / `sdk.mjs` 实证,落在 `claudeProtocol.ts` / `claudeStreamTypes.ts`;未知类型/字段一律忽略;`scripts/claude-cli-transport-smoke` 用假 CLI 进程把每条往返固化 |
+> | 进程管理(找 exe、.cmd 垫片、退出判定) | `lib/claudeExecutable.ts` 沿 npm 垫片跟到原生 `claude.exe`;`cliTransport.ts` 对齐 SDK 的 EOF 宽限 + 强杀、退出码 → 错误映射 |
+>
+> 转回的理由是产品层面的:用户要的是**与官方 CLI 一致的体验**——由用户自己的 CLI、自己的版本驱动,Mcode 只渲染它的输出,不往系统提示词里加东西。代价是 CLI 版本不再由 Mcode 钉死(用户自行升级),兼容性要靠回归清单与冒烟来守,见 AGENTS.md「环境」节。
+
+#### 历史:2026-07 为什么从 spawn CLI 迁移到 Agent SDK
 
 | 维度 | spawn claude.exe (旧) | Agent SDK (新) |
 |------|----------------------|---------------|
@@ -170,7 +182,7 @@ mcode/
 | 安装包大小 | ✅ 0(不打包 claude) | 🔴 SDK + 原生二进制增大安装包 |
 | 维护成本 | 🔴 高(追 CLI 版本变动) | 🟡 中(SDK 封装,但底层二进制仍随版本变) |
 
-**迁移决定**:在审批、解析脆弱性、进程管理三大硬伤 vs Max 订阅损失的 trade-off 中,选 SDK。原 spawn 方式的 `ClaudeRuntime.ts` 和 `ClaudePathResolver.ts` 逻辑已迁入 `providers/claude-sdk/` 目录并删除。
+**迁移决定(2026-07)**:在审批、解析脆弱性、进程管理三大硬伤 vs Max 订阅损失的 trade-off 中,选 SDK。原 spawn 方式的 `ClaudeRuntime.ts` 和 `ClaudePathResolver.ts` 逻辑已迁入 `providers/claude-sdk/` 目录并删除。
 
 ### 5.2 为什么不用 Synara 的 effect-ts?
 
