@@ -173,6 +173,7 @@ export const en = {
   "chatStream.activity.deck.commandsAndAgents": "Commands & Subagents",
   "chatStream.activity.deck.todos": "Task Progress",
   "chatStream.activity.deck.assets": "Session Assets",
+  "chatStream.activity.deck.assetsCount": "Assets · {n}",
   "chatStream.activity.deck.allSettled": "All Settled",
   "chatStream.activity.deck.shortServices": "{n} services",
   "chatStream.activity.deck.shortCommands": "{n} cmds",

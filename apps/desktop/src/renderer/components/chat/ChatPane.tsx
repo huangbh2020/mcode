@@ -4557,55 +4557,6 @@ function ChatPaneForSession({
         </div>
       )}
 
-      {/* Activity cluster (方案 B「收放」) — a 30px progress button in the
-          stream's top-right corner that grows a text bar only when there is
-          something to say. It is an overlay (the list reserves no width for
-          it), so the bar can cover the tail of the first row while it is open;
-          that is the deliberate trade for being almost invisible when idle.
-          The console it opens drops down from it (see ActivityCluster). */}
-      {!empty && (hasActivity || streamRate != null) && (
-        <ActivityCluster
-          subagents={subagents}
-          todos={todos}
-          planBlocks={planBlocks}
-          bookmarks={bookmarks}
-          bashTasks={bashTasks}
-          // Live generation-rate readout (freshness checked inside the
-          // cluster against the shared clock) — 2026-11-17: moved here from
-          // the composer-top chips row.
-          streamRate={streamRate}
-          onStopBashTask={(task) => void stopBashTask(sessionId, task.taskId)}
-          services={services}
-          onStopService={(service) => void stopService(sessionId, service)}
-          onOpenService={(service) => openUrlInBrowser(`http://localhost:${service.port}`)}
-          sideChats={sideChats}
-          sideChatRunningIds={sideChatRunningIds}
-          // The side panel lists the ACTIVE session's side chats — if this
-          // pane is a background tab, activate it first so the panel's bucket
-          // and the clicked row line up (imperative reads keep this pane free
-          // of activeSessionId subscriptions, per its design note).
-          onOpenSideChat={(sc) => {
-            const st = useSessionStore.getState();
-            if (st.activeSessionId !== sessionId) void st.openTab(sessionId);
-            st.openSideChatPanel();
-            void st.selectSideChat(sc.id);
-          }}
-          automations={automations}
-          onOpenSchedPanel={() => openSchedPanel(sessionId)}
-          onNewSched={() => setTaskScheduleEditorOpen(sessionId, true)}
-          // The session's pending AskUserQuestion (declared above) is the
-          // strongest "this needs you" signal the cluster can report.
-          waiting={!!pendingQuestion}
-          isBookmarkStale={(b) => !msgToRenderIndex.has(b.messageId)}
-          onPickBookmark={(b) => jumpToMessage(b.messageId, b.excerpt)}
-          onPickSubagent={(agent) => openSubagentTranscript(sessionId, agent.taskId)}
-          onRemoveBookmark={(b) => void removeBookmark(sessionId, b.id)}
-          onRenameBookmark={(b, title) => void renameBookmark(sessionId, b.id, title)}
-          onPickPlan={(p) => openPlanDrawer(sessionId, p)}
-          bookmarkNodeRef={bookmarkNodeRef}
-        />
-      )}
-
       {/* Floating [copy | add bookmark | add to chat | ask side chat] toolbar
           over the current text selection (portals to body — see
           SelectionToolbar). */}
@@ -4786,6 +4737,40 @@ function ChatPaneForSession({
             <SessionDirectoryChip sessionId={sessionId} />
             <WorktreeModeChip sessionId={sessionId} />
           </div>
+          {/* Composer-top activity tray (方案 B「部分拆开」) — 实时焦点 + 任务进度 + 资产收纳 */}
+          {!empty && (hasActivity || streamRate != null) && !hideComposer && !(hasPendingPrompt && !composerPortalTarget) && (
+            <ActivityCluster
+              subagents={subagents}
+              todos={todos}
+              planBlocks={planBlocks}
+              bookmarks={bookmarks}
+              bashTasks={bashTasks}
+              streamRate={streamRate}
+              onStopBashTask={(task) => void stopBashTask(sessionId, task.taskId)}
+              services={services}
+              onStopService={(service) => void stopService(sessionId, service)}
+              onOpenService={(service) => openUrlInBrowser(`http://localhost:${service.port}`)}
+              sideChats={sideChats}
+              sideChatRunningIds={sideChatRunningIds}
+              onOpenSideChat={(sc) => {
+                const st = useSessionStore.getState();
+                if (st.activeSessionId !== sessionId) void st.openTab(sessionId);
+                st.openSideChatPanel();
+                void st.selectSideChat(sc.id);
+              }}
+              automations={automations}
+              onOpenSchedPanel={() => openSchedPanel(sessionId)}
+              onNewSched={() => setTaskScheduleEditorOpen(sessionId, true)}
+              waiting={!!pendingQuestion}
+              isBookmarkStale={(b) => !msgToRenderIndex.has(b.messageId)}
+              onPickBookmark={(b) => jumpToMessage(b.messageId, b.excerpt)}
+              onPickSubagent={(agent) => openSubagentTranscript(sessionId, agent.taskId)}
+              onRemoveBookmark={(b) => void removeBookmark(sessionId, b.id)}
+              onRenameBookmark={(b, title) => void renameBookmark(sessionId, b.id, title)}
+              onPickPlan={(p) => openPlanDrawer(sessionId, p)}
+              bookmarkNodeRef={bookmarkNodeRef}
+            />
+          )}
           <div
             ref={composerCardRef}
             // composer-card: hooks for the 方案 B polish layers in styles.css —

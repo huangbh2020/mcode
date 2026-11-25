@@ -178,6 +178,7 @@ export const zh = {
   "chatStream.activity.deck.commandsAndAgents": "后台进程与子代理",
   "chatStream.activity.deck.todos": "任务进度",
   "chatStream.activity.deck.assets": "会话资产",
+  "chatStream.activity.deck.assetsCount": "资产 · {n}",
   "chatStream.activity.deck.allSettled": "全部已就绪",
   "chatStream.activity.deck.shortServices": "{n} 服务",
   "chatStream.activity.deck.shortCommands": "{n} 命令",

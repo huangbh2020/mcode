@@ -1,45 +1,25 @@
 /**
- * ActivityCluster — the chat's activity cluster in the stream's top-right
- * corner (方案 B「收放」, `prototypes/chat-activity-capsule-directions.html`).
+ * ActivityCluster — 输入框上方的三段式活动托盘（方案 B「部分拆开」）。
  *
- * The design lets the control's SIZE follow urgency instead of parking a
- * fixed-width strip:
+ * 按紧急度与关注频率将原右上角胶囊拆分为三层，贴合输入框上沿渲染：
+ *   1. 左侧 · 实时焦点芯片（服务 / 命令 / 子代理 / 注意态 / 运行中定时任务）
+ *   2. 左侧 · 任务进度芯片（todos 迷你进度条 + done/total）
+ *   3. 右侧 · 静态资产收纳（计划 / 书签 / 子会话 / 定时排期）+ 流式速率 (tok/s)
  *
- *   idle / all tasks done → a 30px round button: a conic progress ring around
- *                           three quiet dots, saying "nothing needs you";
- *   something running     → a text bar grows out of the button (the button
- *                           stays its head): "2 个子代理运行中", the task
- *                           fraction with a 34px mini progress bar, and a
- *                           plain "3 计划" link;
- *   needs attention       → the same bar turns amber and says what is wrong
- *                           ("2 个子代理失败" / "等待你的回答") instead of
- *                           making the user hover to find out.
- *
- * Why it replaced the vertical rail: the rail reserved a strip of every row
- * and read as an index (icons + counts, hover to learn what they mean). This
- * cluster is almost invisible when there is nothing to say, and says the
- * thing in words when there is — no hover required. It is an OVERLAY in the
- * corner again, so its bar can cover the tail of the first row while it is
- * open; that is the deliberate trade for "空闲时几乎不可见" (the rail's
- * zero-occlusion property is gone, and 方案 D in the same doc is the variant
- * that keeps it).
- *
- * Everything below the cluster is unchanged: clicking any part opens the
- * ActivityConsole, dropped straight down from the cluster with a notch on its
- * top edge — the console owns its own content, this file owns the chrome.
+ * 点击任意芯片在输入框上方就地向上弹出 ActivityConsole；移动端/Web 壳
+ * 保留底部的 ActivitySheet 交互。
  */
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { useNow } from "@renderer/hooks/useNow.js";
-import { STREAM_RATE_STALE_MS, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
+import { STREAM_RATE_STALE_MS, type StreamRateSnapshot, type TodoItem } from "@renderer/stores/sessionStore.js";
 import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
 import type { Session, SessionBookmark } from "@contracts/session";
-import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import { ActivitySheet } from "@renderer/components/mobile/ActivitySheet.js";
-import { IconBookmark, IconCheck, IconChevronDown, IconClipboard, IconMessages, PiRobot } from "@renderer/lib/icons.js";
-import { ActivityConsole, hasNodeData } from "./ActivityConsole.js";
+import { IconCheck, IconChevronUp, IconLayoutGrid, IconServer, IconTerminal2, PiRobot } from "@renderer/lib/icons.js";
+import { ActivityPopoverCard } from "./ActivityPopoverCard.js";
 import {
   primaryKind,
   useActivityTabs,
@@ -48,6 +28,57 @@ import {
 } from "./activityShared.js";
 import type { Automation } from "@contracts/automation";
 import { isInFlightAutomation } from "@renderer/components/automation/automationFormat.js";
+
+type ChipTone = "default" | "accent" | "warning" | "success";
+
+function TrayChip({
+  active,
+  tone = "default",
+  onClick,
+  title,
+  ariaExpanded,
+  children,
+}: {
+  active?: boolean;
+  tone?: ChipTone;
+  onClick: () => void;
+  title?: string;
+  ariaExpanded?: boolean;
+  children: ReactNode;
+}) {
+  const toneCls =
+    tone === "warning"
+      ? active
+        ? "border-warning bg-warning/20 text-warning ring-2 ring-warning/20"
+        : "border-warning/50 bg-warning/10 text-warning hover:bg-warning/20"
+      : tone === "success"
+        ? active
+          ? "border-success bg-success/15 text-success"
+          : "border-success/40 bg-success/10 text-success hover:bg-success/15"
+        : tone === "accent"
+          ? active
+            ? "border-accent bg-accent/15 text-accent"
+            : "border-edge bg-surface text-content hover:border-accent/50"
+          : active
+            ? "border-accent bg-accent/12 text-accent"
+            : "border-edge bg-surface/80 text-content-muted hover:border-content-subtle/50 hover:text-content";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-haspopup="dialog"
+      aria-expanded={ariaExpanded}
+      className={cn(
+        "inline-flex h-7 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-[11.5px] font-medium transition-all duration-150 active:scale-[0.98]",
+        toneCls,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
 
 export function ActivityCluster({
   subagents,
@@ -60,11 +91,6 @@ export function ActivityCluster({
   sideChatRunningIds,
   onOpenSideChat,
   automations = [],
-  /** Live generation-rate snapshot for this session (2026-11-17, moved from
-   *  the composer-top chips row). Freshness is checked here against the
-   *  shared clock; while it is fresh the main island carries a "tok/s"
-   *  readout — alone when nothing else is live, appended after the live
-   *  copy otherwise. Stale (>2s since the last delta) renders nothing. */
   streamRate = null,
   waiting,
   isBookmarkStale,
@@ -86,14 +112,10 @@ export function ActivityCluster({
   bookmarks: SessionBookmark[];
   bashTasks?: BashTaskSnapshot[];
   services?: ServiceSnapshot[];
-  /** Quick-ask threads parented to this session — their mere presence keeps
-   *  the cluster visible (any activity type must surface the icon). */
   sideChats?: Session[];
-  /** Ids of side chats with a live turn. */
   sideChatRunningIds?: ReadonlySet<string>;
   onOpenSideChat?: (s: Session) => void;
   automations?: Automation[];
-  /** Live generation-rate snapshot (see prop doc). */
   streamRate?: StreamRateSnapshot | null;
   waiting?: boolean;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
@@ -110,18 +132,15 @@ export function ActivityCluster({
   bookmarkNodeRef?: RefObject<HTMLDivElement | null>;
 }) {
   const { t } = useI18n();
-  // Shared 1s clock — drives the rate snapshot's freshness window (the only
-  // time-based member of hasAny/hasLiveRunning).
   const now = useNow();
   const [openKind, setOpenKind] = useState<ActivityNodeKey | null>(null);
+  const [alignRight, setAlignRight] = useState(false);
   const [sheetNode, setSheetNode] = useState<ActivityNodeKey | null>(null);
-  // Filter tabs per kind, owned here (the console unmounts on close).
   const { tabs, setTab } = useActivityTabs();
   const panelRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Escape / outside-press dismissal. Capture phase, so the panel closes before
-  // any surface underneath reacts to the same press.
+  // Escape / outside-press dismissal (capture phase)
   useEffect(() => {
     if (!openKind && !sheetNode) return;
     const onKey = (e: KeyboardEvent) => {
@@ -133,8 +152,6 @@ export function ActivityCluster({
     const onDown = (e: PointerEvent) => {
       const target = e.target as Node | null;
       if (!target) return;
-      // Inside the console or on the cluster: keep it (the cluster's own click
-      // decides, so switching kinds never flickers through a close).
       if (panelRef.current?.contains(target) || rootRef.current?.contains(target)) return;
       setOpenKind(null);
       setSheetNode(null);
@@ -151,17 +168,13 @@ export function ActivityCluster({
   const serviceList = services ?? [];
   const sideChatList = sideChats ?? [];
   const inFlightSched = automations.filter(isInFlightAutomation);
-  // Fresh rate = the model streamed a text/thinking delta within the staleness
-  // window. It is live evidence (the island exists to say "working"), so it
-  // counts toward hasAny (a bare text-only stream must still grow the island)
-  // and hasLiveRunning; a stale snapshot renders nothing and, if it was the
-  // only member, lets the island shrink away.
   const rateFresh = !!streamRate && now - streamRate.lastDeltaAt <= STREAM_RATE_STALE_MS;
   const rateText = streamRate
     ? t("chatStream.streamRate", {
         n: streamRate.tokensPerSec >= 100 ? String(Math.round(streamRate.tokensPerSec)) : streamRate.tokensPerSec.toFixed(1),
       })
     : "";
+
   const hasAny =
     subagents.length > 0 ||
     todos.length > 0 ||
@@ -182,359 +195,58 @@ export function ActivityCluster({
   const pct = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
   const primary = primaryKind(subagents, todos, planBlocks, bookmarks, commands, serviceList);
 
-  // Attention outranks activity: a pending question or a failed subagent is the
-  // reason the bar exists at all. A failed agent while others still run keeps
-  // the running copy (per the design doc's rule) — the console lists it.
   const attn = !!waiting || (running.length === 0 && failed.length > 0);
   const attnText = waiting
     ? t("chatStream.activity.cluster.waiting")
     : t("chatStream.activity.cluster.failed", { n: failed.length });
 
-  const openConsole = (kind: ActivityNodeKey) => {
-    if (isElectron) setOpenKind((prev) => (prev === kind ? null : kind));
-    else setSheetNode((prev) => (prev === kind ? null : kind));
+  const assetsCount =
+    planBlocks.length + bookmarks.length + sideChatList.length + automations.length;
+
+  const openConsole = (kind: ActivityNodeKey, right = false) => {
+    if (!isElectron) {
+      setSheetNode((prev) => (prev === kind ? null : kind));
+      return;
+    }
+    setAlignRight(right);
+    setOpenKind((prev) => (prev === kind ? null : kind));
   };
 
-  // hasLiveRunning deliberately includes attn so a pending question with
-  // satellite data still grows the satellite island (the attention branch owns
-  // the main island's copy either way).
-  const hasLiveRunning =
-    running.length > 0 ||
-    runningCommands.length > 0 ||
-    serviceList.length > 0 ||
-    inFlightSched.length > 0 ||
-    runningSideChats.length > 0 ||
-    rateFresh ||
-    attn;
-  const hasSatelliteData = todos.length > 0 || planBlocks.length > 0;
-  const isSplit = hasLiveRunning && hasSatelliteData;
-  // Rate owns the island outright only when nothing else is live — otherwise
-  // it appends after the primary live copy behind a hairline divider.
-  const ratePrimary =
-    rateFresh &&
-    serviceList.length === 0 &&
-    runningCommands.length === 0 &&
-    running.length === 0 &&
-    runningSideChats.length === 0 &&
-    inFlightSched.length === 0;
-
-  const cluster = (
-    <div
-      ref={bookmarkNodeRef}
-      className={cn(
-        "group pointer-events-auto relative inline-flex items-center gap-1.5 transition-all duration-300 ease-[cubic-bezier(0.34,1.4,0.64,1)]",
-        isSplit && "hover:gap-2.5",
-      )}
-    >
-      {/* ── 主岛 (Main Island) ── */}
-      <div
-        onClick={() => openConsole(primary)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            openConsole(primary);
-          }
-        }}
-        aria-haspopup="dialog"
-        aria-expanded={isElectron ? !!openKind : !!sheetNode}
-        aria-label={t("chatStream.activity.cluster.aria")}
-        className={cn(
-          "relative inline-flex h-[36px] cursor-pointer select-none items-center gap-2.5 rounded-full px-3.5 py-1",
-          "border backdrop-blur-2xl transition-all duration-200 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
-          "hover:scale-[1.02] active:scale-[0.98]",
-          attn
-            ? "border-warning/60 bg-warning/20 text-warning shadow-[0_0_16px_rgb(var(--warning)/0.35)]"
-            : cn(
-                "border-slate-300 bg-white text-slate-900 shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:border-slate-400 hover:shadow-[0_6px_20px_rgba(0,0,0,0.12)]",
-                "dark:border-white/[0.14] dark:bg-[#090a0f]/95 dark:text-white dark:shadow-[0_4px_16px_rgba(0,0,0,0.3)] dark:hover:border-white/25",
-              ),
-        )}
-      >
-        {/* 1. Attention State */}
-        {attn ? (
-          <div className="flex items-center gap-2">
-            <span className="apple-live-dot bg-warning" />
-            <span className="whitespace-nowrap text-[12px] font-bold text-warning">{attnText}</span>
-            <IconChevronDown
-              size={11}
-              strokeWidth={2.4}
-              className="text-warning/80 transition-transform duration-200 group-hover:translate-y-0.5"
-            />
-          </div>
-        ) : hasLiveRunning ? (
-          /* 2. Live core — the SAME per-type copy whether or not a satellite
-             island trails (todos/plans). Previously the no-satellite case
-             collapsed every live type into a generic "任务" label, which is
-             why Task-tool agents read as invisible while they ran. */
-          <div className="flex items-center gap-2">
-            {serviceList.length > 0 ? (
-              <div className="flex items-center gap-1.5">
-                <span className="dynamic-island-wave text-emerald-600 dark:text-emerald-400">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-                <span className="font-mono text-[11.5px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded dark:border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300">
-                  :{serviceList[0]?.port ?? 3000}
-                </span>
-                {serviceList.length > 1 && (
-                  <span className="text-[11px] font-medium text-slate-500 dark:text-white/70">
-                    +{serviceList.length - 1}
-                  </span>
-                )}
-              </div>
-            ) : runningCommands.length > 0 ? (
-              <div className="flex items-center gap-1.5">
-                <span className="apple-live-dot bg-accent" />
-                <span className="whitespace-nowrap text-[11.5px] font-bold text-slate-900 dark:text-white">
-                  {t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}
-                </span>
-              </div>
-            ) : running.length > 0 ? (
-              <div className="flex items-center gap-1.5">
-                <span className="apple-live-dot bg-warning" />
-                <span className="whitespace-nowrap text-[11.5px] font-bold text-warning">
-                  {t("chatStream.activity.deck.shortAgents", { n: running.length })}
-                </span>
-              </div>
-            ) : runningSideChats.length > 0 ? (
-              <div className="flex items-center gap-1.5">
-                <span className="apple-live-dot bg-indigo-500 dark:bg-indigo-400" />
-                <span className="whitespace-nowrap text-[11.5px] font-bold text-indigo-600 dark:text-indigo-300">
-                  {t("chatStream.activity.deck.shortSideChats", { n: runningSideChats.length })}
-                </span>
-              </div>
-            ) : inFlightSched.length > 0 ? (
-              <div className="flex items-center gap-1.5">
-                <span className="apple-live-dot bg-sky-400" />
-                <span className="whitespace-nowrap text-[11.5px] font-bold text-sky-500 dark:text-sky-400">
-                  {t("chatStream.activity.cluster.schedRunning")}
-                </span>
-              </div>
-            ) : (
-              /* Rate-only: text/thinking is streaming but no process roster
-                 is live — the rate IS the working signal. */
-              <div className="flex items-center gap-1.5">
-                <span className="apple-live-dot bg-accent" />
-                <span className="whitespace-nowrap text-[11.5px] font-bold tabular-nums text-slate-900 dark:text-white">
-                  {rateText}
-                </span>
-              </div>
-            )}
-
-            {/* Additional mini badge if multiple distinct live types */}
-            {serviceList.length > 0 && runningCommands.length > 0 && (
-              <>
-                <span aria-hidden className="h-2.5 w-px bg-slate-300 dark:bg-white/20" />
-                <span className="text-[11px] font-semibold text-slate-700 dark:text-white/80">
-                  {t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}
-                </span>
-              </>
-            )}
-
-            {/* Appended generation-rate readout (2026-11-17, from the
-                composer-top row) — only when the island's primary copy is
-                something else; the rate-only variant above already shows it. */}
-            {rateFresh && !ratePrimary && (
-              <>
-                <span aria-hidden className="h-2.5 w-px bg-slate-300 dark:bg-white/20" />
-                <span
-                  className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-slate-500 dark:text-white/60"
-                  title={t("chatStream.streamRateHint")}
-                >
-                  {rateText}
-                </span>
-              </>
-            )}
-
-            <IconChevronDown
-              size={11}
-              strokeWidth={2.4}
-              className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-transform duration-200 group-hover:translate-y-0.5"
-            />
-          </div>
-        ) : (
-          /* 4. Ambient / All Settled State (Single Merged Pebble Island).
-             Pecking order: todos → subagents → side chats → plans →
-             bookmarks — every roster the console tracks can be the reason
-             the pebble says something other than "全部已就绪". */
-          <div className="flex items-center gap-2 text-slate-900 dark:text-white">
-            {/* Emblem Icon Dock */}
-            {todos.length > 0 && pct === 100 ? (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 shadow-sm">
-                <IconCheck size={12} strokeWidth={2.8} />
-              </span>
-            ) : todos.length > 0 ? (
-              <span className="relative grid h-[20px] w-[20px] shrink-0 place-items-center">
-                <svg className="-rotate-90" width="18" height="18">
-                  <circle
-                    cx="9"
-                    cy="9"
-                    r="6.5"
-                    stroke="currentColor"
-                    strokeWidth="2.2"
-                    fill="none"
-                    className="text-slate-200 dark:text-white/20"
-                  />
-                  <circle
-                    cx="9"
-                    cy="9"
-                    r="6.5"
-                    stroke="currentColor"
-                    strokeWidth="2.2"
-                    fill="none"
-                    className="text-emerald-600 dark:text-emerald-400"
-                    strokeDasharray="40.84"
-                    strokeDashoffset={`${40.84 * (1 - pct / 100)}`}
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </span>
-            ) : subagents.length > 0 ? (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-warning/15 text-warning shadow-sm">
-                <PiRobot size={11} />
-              </span>
-            ) : sideChatList.length > 0 ? (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-indigo-500/15 text-indigo-600 dark:text-indigo-300 shadow-sm">
-                <IconMessages size={11} strokeWidth={2.2} />
-              </span>
-            ) : planBlocks.length > 0 ? (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 shadow-sm">
-                <IconClipboard size={11} strokeWidth={2.2} />
-              </span>
-            ) : bookmarks.length > 0 ? (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-300 shadow-sm">
-                <IconBookmark size={11} strokeWidth={2.2} />
-              </span>
-            ) : (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-slate-100 text-slate-700 dark:bg-white/10 dark:text-white/80 shadow-sm">
-                <IconCheck size={11} strokeWidth={2.4} />
-              </span>
-            )}
-
-            {/* Typography */}
-            {todos.length > 0 ? (
-              <div className="flex items-center gap-1.5 leading-none">
-                <span className="font-mono text-[12px] font-bold tabular-nums tracking-tight text-slate-900 dark:text-white">
-                  {done}/{todos.length}
-                </span>
-                <span className="text-[11px] font-medium text-slate-500 dark:text-white/70">
-                  {pct === 100 ? t("chatStream.activity.groupCompleted") : t("chatStream.activity.node.tasks")}
-                </span>
-              </div>
-            ) : subagents.length > 0 ? (
-              <span className="whitespace-nowrap text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
-                {t("chatStream.activity.deck.shortAgents", { n: subagents.length })}
-              </span>
-            ) : sideChatList.length > 0 ? (
-              <span className="whitespace-nowrap text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
-                {t("chatStream.activity.deck.shortSideChats", { n: sideChatList.length })}
-              </span>
-            ) : planBlocks.length > 0 ? (
-              <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
-                {t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })}
-              </span>
-            ) : bookmarks.length > 0 ? (
-              <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
-                {t("chatStream.activity.deck.shortBookmarks", { n: bookmarks.length })}
-              </span>
-            ) : (
-              <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
-                {t("chatStream.activity.deck.allSettled")}
-              </span>
-            )}
-
-            {/* Secondary tag alongside settled todos — plans, then agents,
-                then side chats (first non-empty wins). */}
-            {todos.length > 0 &&
-              (planBlocks.length > 0 || subagents.length > 0 || sideChatList.length > 0) && (
-                <>
-                  <span aria-hidden className="h-1 w-1 rounded-full bg-slate-300 dark:bg-white/30" />
-                  <span className="whitespace-nowrap text-[11px] font-medium text-slate-500 dark:text-white/70">
-                    {planBlocks.length > 0
-                      ? t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })
-                      : subagents.length > 0
-                        ? t("chatStream.activity.deck.shortAgents", { n: subagents.length })
-                        : t("chatStream.activity.deck.shortSideChats", { n: sideChatList.length })}
-                  </span>
-                </>
-              )}
-
-            <IconChevronDown
-              size={11}
-              strokeWidth={2.4}
-              className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-all duration-200 group-hover:translate-y-0.5"
-            />
-          </div>
-        )}
-      </div>
-
-      {/* ── 伴随卫星岛 (Satellite Island) ──
-          Only renders when split: displays task progress or secondary stats */}
-      {isSplit && (
-        <div
-          onClick={() => openConsole(todos.length > 0 ? "tasks" : "plans")}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              openConsole(todos.length > 0 ? "tasks" : "plans");
-            }
-          }}
-          title={
-            todos.length > 0
-              ? `${done}/${todos.length} (${pct}%)`
-              : t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })
-          }
-          className={cn(
-            "relative grid h-[36px] w-[36px] cursor-pointer select-none place-items-center rounded-full",
-            "border backdrop-blur-2xl transition-all duration-200 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
-            "border-slate-300 bg-white text-slate-900 shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:border-slate-400 hover:shadow-[0_6px_20px_rgba(0,0,0,0.12)] hover:scale-[1.08] active:scale-[0.95]",
-            "dark:border-white/[0.14] dark:bg-[#090a0f]/95 dark:text-white dark:shadow-[0_4px_16px_rgba(0,0,0,0.3)] dark:hover:border-white/25",
-          )}
-        >
-          {todos.length > 0 ? (
-            <svg className="-rotate-90" width="18" height="18">
-              <circle
-                cx="9"
-                cy="9"
-                r="6.5"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                fill="none"
-                className="text-slate-200 dark:text-white/20"
-              />
-              <circle
-                cx="9"
-                cy="9"
-                r="6.5"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                fill="none"
-                className="text-accent"
-                strokeDasharray="40.84"
-                strokeDashoffset={`${40.84 * (1 - pct / 100)}`}
-                strokeLinecap="round"
-              />
-            </svg>
-          ) : (
-            <IconClipboard size={12} className="text-slate-700 dark:text-white/80" />
-          )}
-        </div>
-      )}
-    </div>
-  );
-
-  // Mobile / web shell: a 390px panel does not fit a phone, so the same console
-  // opens in the existing bottom sheet instead.
+  // Mobile / web shell: render a compact trigger row that opens the bottom sheet.
   if (!isElectron) {
     return (
       <>
-        <div ref={rootRef} className="pointer-events-none absolute right-5 top-3.5 z-30 flex items-center">
-          {cluster}
+        <div ref={rootRef} className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+          <div ref={bookmarkNodeRef} className="flex flex-wrap items-center gap-1.5">
+            {attn && (
+              <TrayChip tone="warning" onClick={() => openConsole(waiting ? primary : "subagents")}>
+                <span className="apple-live-dot bg-warning" />
+                <span>{attnText}</span>
+              </TrayChip>
+            )}
+            {running.length > 0 && (
+              <TrayChip tone="accent" onClick={() => openConsole("subagents")}>
+                <span className="apple-live-dot bg-warning" />
+                <span>{t("chatStream.activity.cluster.running", { n: running.length })}</span>
+              </TrayChip>
+            )}
+            {todos.length > 0 && (
+              <TrayChip tone={pct === 100 ? "success" : "accent"} onClick={() => openConsole("tasks")}>
+                <span className="font-mono font-semibold">{done}/{todos.length}</span>
+                <span>{t("chatStream.activity.node.tasks")}</span>
+              </TrayChip>
+            )}
+            {!attn && running.length === 0 && todos.length === 0 && (
+              <TrayChip onClick={() => openConsole(primary)}>
+                <span>{t("chatStream.activity.cluster.aria")}</span>
+              </TrayChip>
+            )}
+          </div>
+          {rateFresh && (
+            <span className="shrink-0 text-[11px] font-medium tabular-nums text-content-subtle">
+              {rateText}
+            </span>
+          )}
         </div>
         {sheetNode && (
           <ActivitySheet
@@ -563,48 +275,183 @@ export function ActivityCluster({
   }
 
   return (
-    <div ref={rootRef} className="pointer-events-none absolute right-5 top-3.5 z-30 flex items-center">
-      {cluster}
+    <div ref={rootRef} className="relative mb-1.5 flex w-full items-center justify-between gap-2 px-0.5">
+      {/* ── 左侧：实时焦点 + 任务进度 ── */}
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        {/* 1. 注意/阻塞态 */}
+        {attn && (
+          <TrayChip
+            tone="warning"
+            active={openKind === (waiting ? primary : "subagents")}
+            ariaExpanded={openKind === (waiting ? primary : "subagents")}
+            onClick={() => openConsole(waiting ? primary : "subagents")}
+          >
+            <span className="apple-live-dot bg-warning" />
+            <span>{attnText}</span>
+          </TrayChip>
+        )}
+
+        {/* 2. 实时服务 */}
+        {serviceList.length > 0 && (
+          <TrayChip
+            tone="success"
+            active={openKind === "services"}
+            ariaExpanded={openKind === "services"}
+            onClick={() => openConsole("services")}
+          >
+            <IconServer size={12} />
+            <span className="font-mono font-semibold">:{serviceList[0]?.port ?? 3000}</span>
+            {serviceList.length > 1 && <span className="opacity-75">+{serviceList.length - 1}</span>}
+          </TrayChip>
+        )}
+
+        {/* 3. 运行中命令 */}
+        {runningCommands.length > 0 && (
+          <TrayChip
+            tone="accent"
+            active={openKind === "commands"}
+            ariaExpanded={openKind === "commands"}
+            onClick={() => openConsole("commands")}
+          >
+            <span className="apple-live-dot bg-accent" />
+            <IconTerminal2 size={12} />
+            <span>{t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}</span>
+          </TrayChip>
+        )}
+
+        {/* 4. 子代理（运行中突出；仅历史时轻量展示） */}
+        {running.length > 0 ? (
+          <TrayChip
+            tone="accent"
+            active={openKind === "subagents"}
+            ariaExpanded={openKind === "subagents"}
+            onClick={() => openConsole("subagents")}
+          >
+            <span className="apple-live-dot bg-warning" />
+            <span>{t("chatStream.activity.cluster.running", { n: running.length })}</span>
+          </TrayChip>
+        ) : subagents.length > 0 && !attn ? (
+          <TrayChip
+            active={openKind === "subagents"}
+            ariaExpanded={openKind === "subagents"}
+            onClick={() => openConsole("subagents")}
+          >
+            <PiRobot size={12} />
+            <span>{t("chatStream.activity.deck.shortAgents", { n: subagents.length })}</span>
+          </TrayChip>
+        ) : null}
+
+        {/* 5. 运行中子会话 */}
+        {runningSideChats.length > 0 && (
+          <TrayChip
+            tone="accent"
+            active={openKind === "sidechats"}
+            ariaExpanded={openKind === "sidechats"}
+            onClick={() => openConsole("sidechats")}
+          >
+            <span className="apple-live-dot bg-indigo-500 dark:bg-indigo-400" />
+            <span>{t("chatStream.activity.deck.shortSideChats", { n: runningSideChats.length })}</span>
+          </TrayChip>
+        )}
+
+        {/* 6. 执行中定时任务 */}
+        {inFlightSched.length > 0 && (
+          <TrayChip
+            tone="accent"
+            active={openKind === "sched"}
+            ariaExpanded={openKind === "sched"}
+            onClick={() => openConsole("sched")}
+          >
+            <span className="apple-live-dot bg-sky-400" />
+            <span>{t("chatStream.activity.cluster.schedRunning")}</span>
+          </TrayChip>
+        )}
+
+        {/* 7. 任务进度（独立拆出） */}
+        {todos.length > 0 && (
+          <TrayChip
+            tone={pct === 100 ? "success" : "accent"}
+            active={openKind === "tasks"}
+            ariaExpanded={openKind === "tasks"}
+            onClick={() => openConsole("tasks")}
+            title={`${done}/${todos.length} (${pct}%)`}
+          >
+            {pct === 100 ? (
+              <IconCheck size={12} strokeWidth={2.5} />
+            ) : (
+              <span className="h-1.5 w-7 overflow-hidden rounded-full bg-edge">
+                <span className="block h-full rounded-full bg-accent transition-all duration-300" style={{ width: `${pct}%` }} />
+              </span>
+            )}
+            <span className="font-mono font-semibold tabular-nums">
+              {done}/{todos.length}
+            </span>
+            <span className="text-content-muted">{t("chatStream.activity.node.tasks")}</span>
+          </TrayChip>
+        )}
+      </div>
+
+      {/* ── 右侧：静态资产收纳 + 流式速率 ── */}
+      <div ref={bookmarkNodeRef} className="flex shrink-0 items-center gap-1.5">
+        {assetsCount > 0 && (
+          <TrayChip
+            active={openKind === "overview"}
+            ariaExpanded={openKind === "overview"}
+            onClick={() => openConsole("overview", true)}
+            title={t("chatStream.activity.deck.assets")}
+          >
+            <IconLayoutGrid size={12} />
+            <span>{t("chatStream.activity.deck.assetsCount", { n: assetsCount })}</span>
+            <IconChevronUp
+              size={11}
+              className={cn("transition-transform duration-150", openKind === "overview" && "rotate-180")}
+            />
+          </TrayChip>
+        )}
+        {rateFresh && (
+          <span
+            className="whitespace-nowrap px-1 text-[11px] font-medium tabular-nums text-content-subtle"
+            title={t("chatStream.streamRateHint")}
+          >
+            {rateText}
+          </span>
+        )}
+      </div>
+
+      {/* ── 向上弹出的专属详情卡片 ── */}
       {openKind && (
         <div
           ref={panelRef}
           className={cn(
-            "pointer-events-auto absolute right-0 top-[48px] z-40 flex max-h-[78dvh] w-[420px]",
-            "max-w-[calc(100vw-40px)] flex-col overflow-hidden rounded-[26px] border backdrop-blur-3xl transition-all",
-            "border-slate-300 bg-white text-slate-900 shadow-[0_20px_50px_rgba(15,23,42,0.14)]",
-            "dark:border-white/[0.14] dark:bg-[#0c0d12]/95 dark:text-white dark:shadow-[0_28px_70px_-15px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.18)]",
-            "animate-[capsule-pop-in_240ms_cubic-bezier(0.34,1.3,0.64,1)]",
+            "pointer-events-auto absolute bottom-[calc(100%+8px)] z-40",
+            alignRight ? "right-0" : "left-0",
+            "animate-[capsule-pop-up_200ms_cubic-bezier(0.22,1,0.36,1)]",
           )}
         >
-          <ActivityConsole
+          <ActivityPopoverCard
             node={openKind}
-            nodeTabs
-            onPickNode={setOpenKind}
             subagents={subagents}
             todos={todos}
             planBlocks={planBlocks}
             bookmarks={bookmarks}
             bashTasks={commands}
-            onStopBashTask={onStopBashTask}
             services={serviceList}
-            onStopService={onStopService}
-            onOpenService={onOpenService}
             sideChats={sideChatList}
             sideChatRunningIds={sideChatRunningIds}
-            onOpenSideChat={onOpenSideChat}
             automations={automations}
-            onOpenSchedPanel={onOpenSchedPanel}
-            onNewSched={onNewSched}
             isBookmarkStale={isBookmarkStale}
-            tabs={tabs}
-            onTabChange={setTab}
             onClose={() => setOpenKind(null)}
             onPickPlan={onPickPlan}
             onPickSubagent={onPickSubagent}
+            onStopBashTask={onStopBashTask}
+            onStopService={onStopService}
+            onOpenService={onOpenService}
             onPickBookmark={onPickBookmark}
             onRemoveBookmark={onRemoveBookmark}
             onRenameBookmark={onRenameBookmark}
-            showKeyHint
+            onOpenSideChat={onOpenSideChat}
+            onOpenSchedPanel={onOpenSchedPanel}
+            onNewSched={onNewSched}
           />
         </div>
       )}
