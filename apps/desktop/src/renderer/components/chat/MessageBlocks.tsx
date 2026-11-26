@@ -347,11 +347,11 @@ export function fileEditRowInfo(
 ): { block: ToolUseBlock; path: string; opKind: FileEditOpKind } | null {
   if (block.kind !== "tool_use") return null;
   if (block.toolName === "Edit" || block.toolName === "edit") {
-    const path = getNormalizedEditInput(block.input)?.filePath ?? null;
+    const path = getNormalizedEditInput(block.input)?.filePath ?? pathField(block.input);
     return path === null ? null : { block, path, opKind: "edit" };
   }
   if (block.toolName === "Write" || block.toolName === "write") {
-    const path = getNormalizedWriteInput(block.input)?.filePath ?? null;
+    const path = getNormalizedWriteInput(block.input)?.filePath ?? pathField(block.input);
     return path === null ? null : { block, path, opKind: "write" };
   }
   return null;
@@ -2308,6 +2308,7 @@ function computeFileOpStats(
   diff: ReturnType<typeof lineDiff> | null;
   writeContent?: string;
   writeBefore?: string;
+  rawInput?: unknown;
 } | null {
   const edit = block.toolName === "Edit" || block.toolName === "edit" ? getNormalizedEditInput(block.input) : null;
   if (edit) {
@@ -2325,6 +2326,17 @@ function computeFileOpStats(
     }
     const lineCount = write.content ? write.content.split("\n").length : 0;
     return { filePath: write.filePath, adds: lineCount, dels: 0, diff: null, writeContent: write.content };
+  }
+  if (
+    block.toolName === "Edit" ||
+    block.toolName === "edit" ||
+    block.toolName === "Write" ||
+    block.toolName === "write"
+  ) {
+    const fallbackPath = pathField(block.input);
+    if (fallbackPath !== null) {
+      return { filePath: fallbackPath, adds: 0, dels: 0, diff: null, rawInput: block.input };
+    }
   }
   return null;
 }
@@ -2363,6 +2375,7 @@ interface AggregatedEditFile {
     diff: ReturnType<typeof lineDiff> | null;
     writeContent?: string;
     writeBefore?: string;
+    rawInput?: unknown;
   }>;
   adds: number;
   dels: number;
@@ -2417,6 +2430,7 @@ function EditRunGroup({
         diff: stats.diff,
         writeContent: stats.writeContent,
         writeBefore: stats.writeBefore,
+        rawInput: stats.rawInput,
       });
       entry.adds += stats.adds;
       entry.dels += stats.dels;
@@ -2566,13 +2580,22 @@ function EditRunGroup({
                     )}
                     <DiffView diff={op.diff} />
                   </div>
-                ) : (
+                ) : op.writeContent !== undefined ? (
                   <div>
                     <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">
                       {t("chatStream.diff.newFileContent")}
                     </div>
                     <pre className="max-h-80 overflow-auto rounded border border-edge/50 bg-surface-card p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
                       {op.writeContent || t("chatStream.emptyPlaceholder")}
+                    </pre>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                      {t("chatStream.tool.input")}
+                    </div>
+                    <pre className="max-h-60 overflow-auto rounded border border-edge/50 bg-surface-card p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+                      {safeStringify(op.rawInput)}
                     </pre>
                   </div>
                 )}
@@ -3049,9 +3072,9 @@ function pathField(input: unknown): string | null {
  *  (capitalized) and OpenCode/Pi (lowercase) tool names. */
 function extractToolFilePath(toolName: string, input: unknown): string | null {
   const normEdit = getNormalizedEditInput(input);
-  if ((toolName === "Edit" || toolName === "edit") && normEdit) return normEdit.filePath;
+  if (toolName === "Edit" || toolName === "edit") return normEdit?.filePath ?? pathField(input);
   const normWrite = getNormalizedWriteInput(input);
-  if ((toolName === "Write" || toolName === "write") && normWrite) return normWrite.filePath;
+  if (toolName === "Write" || toolName === "write") return normWrite?.filePath ?? pathField(input);
   if (toolName === "Read" || toolName === "read") return pathField(input);
   if (toolName === "find" || toolName === "Glob") return pathField(input);
   return null;
