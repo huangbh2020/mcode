@@ -678,23 +678,23 @@ function MultiBatchToolGroup({
           {groupBatchReadBlocks(blocks).map((item, idx) => {
             if (item.kind === "read_group") {
               const anyRunning = item.blocks.some((b) => b.status === "running");
+              const readEntries = item.blocks
+                .map((b) => ({ b, fp: extractToolFilePath(b.toolName, b.input) }))
+                .filter((x): x is { b: ToolUseBlock; fp: string } => !!x.fp);
               return (
                 <div
                   key={`rg:${item.blocks[0].toolCallId}`}
-                  className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-1.5 py-0.5 [font-size:var(--chat-fs-sm)]"
+                  className="flex items-start gap-2 px-1.5 py-0.5 [font-size:var(--chat-fs-sm)]"
                 >
-                  <span className="inline-flex items-center gap-1.5 mr-0.5">
+                  <span className="inline-flex shrink-0 items-center gap-1.5 leading-5">
                     <ToolIcon name="Read" className="shrink-0 text-content-subtle" />
                     <span className={cn("font-medium text-content-muted", anyRunning && turnActive && "shimmer-text")}>
                       {toolDisplayName(t, "Read")}
                     </span>
                   </span>
-                  {item.blocks.map((b, bIdx) => {
-                    const fp = extractToolFilePath(b.toolName, b.input);
-                    if (!fp) return null;
-                    return (
-                      <span key={b.toolCallId} className="inline-flex items-center gap-1.5">
-                        {bIdx > 0 && <span className="text-content-subtle/60">·</span>}
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-5">
+                    {readEntries.map(({ b, fp }, bIdx) => (
+                      <span key={b.toolCallId} className="inline-flex max-w-full items-center gap-1.5">
                         <span
                           className={cn(
                             "inline-flex max-w-full items-center font-mono",
@@ -707,9 +707,12 @@ function MultiBatchToolGroup({
                             display={<ToolPathDisplay filePath={fp} highlightFileName />}
                           />
                         </span>
+                        {bIdx < readEntries.length - 1 && (
+                          <span className="select-none text-content-subtle/60">·</span>
+                        )}
                       </span>
-                    );
-                  })}
+                    ))}
+                  </div>
                 </div>
               );
             }
@@ -2457,25 +2460,24 @@ function EditRunGroup({
 
   return (
     <div className={TOOL_CARD_SHELL_CLASS}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-1.5 py-1">
-        <span className="inline-flex shrink-0 items-center gap-1.5">
+      <div className="flex items-start gap-2 rounded-md px-1.5 py-1">
+        <span className="inline-flex shrink-0 items-center gap-1.5 border border-transparent py-0.5 leading-5">
           <ToolIcon name={head.toolName} className="shrink-0 text-content-subtle" />
           <span className={cn("font-medium text-content-muted", anyRunning && !!live && "shimmer-text")}>
             {toolDisplayName(t, head.toolName)}
           </span>
         </span>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5 font-mono">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 font-mono">
           {files.map((f, idx) => {
             const isActive = activeFile !== null && sameEditPath(activeFile.fullPath, f.fullPath);
             return (
               <span key={f.fullPath} className="inline-flex max-w-full items-center gap-1">
-                {idx > 0 && <span className="text-content-subtle/50 select-none">·</span>}
                 <button
                   type="button"
                   title={f.fullPath}
                   onClick={(e) => toggleFile(e, f.fullPath)}
                   className={cn(
-                    "group/chip inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-left transition-colors border",
+                    "group/chip inline-flex max-w-full items-center gap-1 rounded border px-1.5 py-0.5 text-left leading-5 transition-colors",
                     isActive
                       ? "border-accent/40 bg-accent/15 text-accent-strong"
                       : "border-transparent text-accent-strong hover:border-accent/25 hover:bg-accent/10",
@@ -2507,12 +2509,15 @@ function EditRunGroup({
                     )}
                   />
                 </button>
+                {idx < files.length - 1 && (
+                  <span className="select-none text-content-subtle/50">·</span>
+                )}
               </span>
             );
           })}
         </div>
         {(anyError || totalAdds > 0 || totalDels > 0) && (
-          <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono [font-size:var(--chat-fs-xxs)]">
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-transparent py-0.5 font-mono leading-5 [font-size:var(--chat-fs-xxs)]">
             {anyError && <span className="text-danger">{t("chatStream.opFailed")}</span>}
             {totalAdds > 0 && <span className="text-success">+{totalAdds}</span>}
             {totalDels > 0 && <span className="text-danger">−{totalDels}</span>}
