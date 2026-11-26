@@ -39,10 +39,23 @@ const MENU_ITEM_CLASS = cn(
   "data-[highlighted]:bg-surface-muted",
 );
 
+/**
+ * Accent hyperlink face shared by the bare-span face and the `asLink` anchor
+ * face. Markdown file links (the `a` override in Markdown.tsx) render through
+ * `asLink`, so a model-emitted `[label](path)` link looks EXACTLY like an
+ * auto-linkified path in the same reply — one clickable-file affordance, never
+ * a second color.
+ */
+export const FILE_LINK_FACE_CLASS = cn(
+  "rounded-[2px] underline decoration-dotted decoration-accent/60 underline-offset-2 text-accent-strong hover:bg-accent/10",
+);
+
 /** Chip face — pure text hyperlink style without background or border.
- *  Displays an icon + underlined link text, blending naturally into prose. */
+ *  Displays an icon + underlined link text, blending naturally into prose.
+ *  Same accent text as {@link FILE_LINK_FACE_CLASS} (file citation chips are
+ *  clickable files too — never the violet info color). */
 const CHIP_CLASS = cn(
-  "inline-flex max-w-full items-center gap-1 align-middle text-info transition-opacity hover:opacity-80 [font-size:var(--chat-fs-xs)]",
+  "inline-flex max-w-full items-center gap-1 align-middle text-accent-strong transition-opacity hover:opacity-80 [font-size:var(--chat-fs-xs)]",
 );
 
 export function FileLink({
@@ -53,6 +66,7 @@ export function FileLink({
   chip = false,
   title,
   line,
+  endLine,
   column,
 }: {
   token: string;
@@ -71,8 +85,12 @@ export function FileLink({
    *  path when the visible text is only a file name. */
   title?: string;
   /** 1-based position jumped to after opening (from a `path:line[:col]`
-   *  suffix absorbed at split time). */
+   *  suffix or a GitHub-style `#L133` anchor absorbed at split time). */
   line?: number;
+  /** Last line of the highlighted range (from a `#L133-L152` anchor). When
+   *  present the editor selects + highlights `line..endLine` instead of
+   *  placing a lone caret. */
+  endLine?: number;
   column?: number;
 }) {
   const elRef = useRef<HTMLElement | null>(null);
@@ -104,7 +122,7 @@ export function FileLink({
   const openCandidatePath = (c: ResolvedCandidate) => {
     const store = useSessionStore.getState();
     if (isElectron) {
-      store.openFileInIde(c.path, { line, column });
+      store.openFileInIde(c.path, { line, endLine, column });
     } else {
       // Mobile viewer has no editor gutter to jump to.
       store.openMobileViewer({ kind: "file", name: basename(c.path), path: c.path });
@@ -171,7 +189,7 @@ export function FileLink({
           title={tooltip}
           onClick={handleClick}
           onAuxClick={(e) => e.preventDefault()}
-          className={cn("cursor-pointer underline hover:opacity-80", loading && "opacity-60")}
+          className={cn("cursor-pointer", FILE_LINK_FACE_CLASS, loading && "opacity-60")}
         >
           {content}
         </a>
@@ -191,7 +209,7 @@ export function FileLink({
               ? CHIP_CLASS
               : // accent-strong: small accent TEXT must sit at the 700 stop in
                 // light theme (≥4.5:1); dark theme's strong === default accent.
-                "rounded-[2px] underline decoration-dotted decoration-accent/60 underline-offset-2 text-accent-strong hover:bg-accent/10",
+                FILE_LINK_FACE_CLASS,
             loading && "opacity-60",
           )}
         >

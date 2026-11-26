@@ -594,7 +594,7 @@ export function SortableFileTab({
         isDragging && "shadow-lg opacity-80 z-20 bg-surface",
       )}
     >
-      {variant === "attached" && isActive && <TabInverseCorners />}
+      {variant === "attached" && isActive && <TabInverseCorners showLeft={!isFirst} />}
       {variant === "vscode" && isActive && (
         <span
           aria-hidden

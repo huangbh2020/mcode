@@ -44,6 +44,18 @@ interface Props {
    *  pending dismissal, leaving schedules it (usePeekAutoClose in App.tsx). */
   onRightPeekMouseEnter?: () => void;
   onRightPeekMouseLeave?: () => void;
+  /** Pull the main pane and docked right sidebar up by 1px so their top
+   *  borders sit directly under the z-20 titlebar's bottom edge; the active
+   *  attached tab then masks the 1px seam seamlessly without a separate
+   *  titlebar hairline cutting across the top-left arc. */
+  attachToTitlebar?: boolean;
+  /** True when the leftmost tab is active and flush with the main pane's left
+   *  edge — square off top-left so the tab's left border continues straight
+   *  down into the pane. */
+  flushTopLeft?: boolean;
+  /** True when the left sidebar is collapsed so the main pane runs flush
+   *  against the window's left edge (drops left border and left-edge arcs). */
+  flushLeftEdge?: boolean;
   bottomTerminalHeight?: number;
   onResizeLeft?: (deltaPx: number) => void;
   onResizeRight?: (deltaPx: number) => void;
@@ -84,6 +96,9 @@ export function ThreePaneLayout({
   rightPeekOpen,
   onRightPeekMouseEnter,
   onRightPeekMouseLeave,
+  attachToTitlebar = false,
+  flushTopLeft = false,
+  flushLeftEdge = false,
   bottomTerminalHeight,
   onResizeLeft,
   onResizeRight,
@@ -130,7 +145,10 @@ export function ThreePaneLayout({
          Stacks the center content above an optional bottom terminal bar. */}
       <main
         className={cn(
-          "relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden rounded-bl-2xl border-l border-edge bg-surface",
+          "relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden border-t border-edge bg-surface",
+          attachToTitlebar && "-mt-px",
+          !flushLeftEdge && "rounded-bl-2xl border-l",
+          !flushLeftEdge && !flushTopLeft && "rounded-tl-xl",
           rightMaximized && "hidden",
         )}
       >
@@ -215,6 +233,7 @@ export function ThreePaneLayout({
                 )
               : cn(
                   "border-t border-edge-panel",
+                  attachToTitlebar && "-mt-px",
                   !rightOpen && "hidden",
                   rightMaximized && "w-full flex-1",
                   !isDraggingRight && "transition-[width] duration-200 ease-out",

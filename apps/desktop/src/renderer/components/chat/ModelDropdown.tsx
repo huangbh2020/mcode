@@ -10,14 +10,18 @@ import {
   IconChevronRight,
   IconCpu,
   IconPlus,
+  IconTrash,
+  IconUser,
 } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { useNarrowViewport } from "@renderer/hooks/useNarrowViewport.js";
 import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
 import { EFFORT_HINT_KEYS } from "./EffortPermissionControl.js";
+import { AntigravityAccountDialog } from "./AntigravityAccountDialog.js";
 import type { ThinkingLevelOption } from "@contracts/provider";
 import type { ClaudeMenuRoleKey } from "@contracts/customModel";
+import type { AntigravityAuthMethod } from "@contracts/ipc";
 
 /**
  * Merged model + thinking-level picker for the composer toolbar (one chip,
@@ -252,7 +256,10 @@ export function ModelDropdown({
   // reads — hoisted hook order is stable because both states precede it on
   // every render.
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState<"models" | "configs">("models");
+  const [view, setView] = useState<"models" | "configs" | "accounts">("models");
+  const [accountDialogOpen, setAccountDialogOpen] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [switchingAccountId, setSwitchingAccountId] = useState<string | null>(null);
   const storeModel = useSessionStore((s) => s.model);
   const storeCustomModelId = useSessionStore((s) => s.customModelId);
   const customModels = useSessionStore((s) => s.customModels);
@@ -268,6 +275,11 @@ export function ModelDropdown({
   const opencodeAvailableModels = useSessionStore((s) => s.opencodeAvailableModels);
   const antigravityAvailableModels = useSessionStore((s) => s.antigravityAvailableModels);
   const reloadAntigravityAvailableModels = useSessionStore((s) => s.reloadAntigravityAvailableModels);
+  const antigravityAccounts = useSessionStore((s) => s.antigravityAccounts);
+  const antigravityActiveAccountId = useSessionStore((s) => s.antigravityActiveAccountId);
+  const reloadAntigravityAccounts = useSessionStore((s) => s.reloadAntigravityAccounts);
+  const selectAntigravityAccount = useSessionStore((s) => s.selectAntigravityAccount);
+  const deleteAntigravityAccount = useSessionStore((s) => s.deleteAntigravityAccount);
   const piModelMaps = useSessionStore((s) => s.piModelMaps);
   const opencodeModelVariants = useSessionStore((s) => s.opencodeModelVariants);
   const antigravityModelVariants = useSessionStore((s) => s.antigravityModelVariants);
@@ -436,10 +448,60 @@ export function ModelDropdown({
   const handleOpenChange = (o: boolean): void => {
     setOpen(o);
     if (o) {
+      setAccountError(null);
       setView(!hasGroups || listGroup ? "models" : "configs");
-      if (isAntigravity && antigravityAvailableModels.length === 0) {
-        void reloadAntigravityAvailableModels(true);
+      if (isAntigravity) {
+        void reloadAntigravityAccounts();
+        if (antigravityAvailableModels.length === 0) {
+          void reloadAntigravityAvailableModels(true);
+        }
       }
+    }
+  };
+
+  const activeAgyAccount = useMemo(
+    () =>
+      antigravityAccounts.find((a) => a.id === antigravityActiveAccountId) ??
+      antigravityAccounts[0],
+    [antigravityAccounts, antigravityActiveAccountId],
+  );
+
+  const agyMethodBadge = (method: AntigravityAuthMethod): string => {
+    switch (method) {
+      case "default":
+        return t("chat.agyAccount.methodDefault");
+      case "oauth-personal":
+        return t("chat.agyAccount.methodGoogle");
+      case "gemini-api-key":
+        return t("chat.agyAccount.methodApiKey");
+      case "agent-platform":
+        return t("chat.agyAccount.methodGcp");
+    }
+  };
+
+  const handleSelectAgyAccount = async (accountId: string): Promise<void> => {
+    if (switchingAccountId) return;
+    setAccountError(null);
+    setSwitchingAccountId(accountId);
+    try {
+      const res = await selectAntigravityAccount(accountId);
+      if (!res.ok) {
+        setAccountError(res.error ?? "Switch failed");
+        return;
+      }
+      setView("models");
+    } finally {
+      setSwitchingAccountId(null);
+    }
+  };
+
+  const handleDeleteAgyAccount = async (e: React.MouseEvent, accountId: string): Promise<void> => {
+    e.stopPropagation();
+    e.preventDefault();
+    setAccountError(null);
+    const res = await deleteAntigravityAccount(accountId);
+    if (!res.ok) {
+      setAccountError(res.error ?? "Delete failed");
     }
   };
 
@@ -661,6 +723,50 @@ export function ModelDropdown({
               {/* ── models view: group header + flat model list + effort ── */}
               {view === "models" && (
                 <>
+                  {/* Antigravity account switcher bar at top of model picker */}
+                  {isAntigravity && !controller && (
+                    <>
+                      <div className="px-1 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setView("accounts")}
+                          title={t("chat.agyAccount.switchHint")}
+                          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none select-none transition-colors duration-100 hover:bg-surface-muted"
+                        >
+                          <span
+                            className="model-group-avatar"
+                            style={{ background: avatarColor(activeAgyAccount?.id ?? "default") }}
+                            aria-hidden
+                          >
+                            {activeAgyAccount?.method === "default" ? (
+                              <IconUser size={12} />
+                            ) : (
+                              initialOf(activeAgyAccount?.name ?? "A")
+                            )}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-1.5">
+                              <span className="truncate text-[13px] font-semibold text-content">
+                                {activeAgyAccount?.method === "default"
+                                  ? t("chat.agyAccount.defaultName")
+                                  : (activeAgyAccount?.name ?? t("chat.agyAccount.defaultName"))}
+                              </span>
+                              <span className="shrink-0 rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-medium text-content-subtle">
+                                {agyMethodBadge(activeAgyAccount?.method ?? "default")}
+                              </span>
+                            </span>
+                            {activeAgyAccount?.hint && (
+                              <span className="block truncate text-[11px] text-content-subtle">
+                                {activeAgyAccount.hint}
+                              </span>
+                            )}
+                          </span>
+                          <IconChevronRight size={13} className="shrink-0 opacity-60" />
+                        </button>
+                      </div>
+                      <div className="my-1 border-t border-edge/60" />
+                    </>
+                  )}
                   {/* Built-in aliases (provider-declared, no group concept).
                       Claude/Pi/Codex/OpenCode all use the grouped surface
                       instead; future providers that declare builtinModels
@@ -915,6 +1021,102 @@ export function ModelDropdown({
                 </>
               )}
 
+              {/* ── accounts view (Antigravity multi-account switcher) ── */}
+              {view === "accounts" && isAntigravity && (
+                <>
+                  <div className="px-1 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setView("models")}
+                      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs font-medium text-content-muted transition-colors hover:bg-surface-muted hover:text-content"
+                    >
+                      <IconChevronLeft size={13} className="shrink-0" />
+                      <span>{t("chat.agyAccount.backToModels")}</span>
+                    </button>
+                  </div>
+                  <div className="my-1 border-t border-edge/60" />
+                  <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
+                    {t("chat.agyAccount.section")}
+                  </div>
+                  {accountError && (
+                    <div className="mx-2 mb-1 rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-[11px] text-danger">
+                      {accountError}
+                    </div>
+                  )}
+                  <div className="max-h-60 overflow-y-auto">
+                    {antigravityAccounts.map((acc) => {
+                      const isActive = acc.id === antigravityActiveAccountId;
+                      const isSwitching = switchingAccountId === acc.id;
+                      const displayName =
+                        acc.method === "default" ? t("chat.agyAccount.defaultName") : acc.name;
+                      return (
+                        <div
+                          key={acc.id}
+                          onClick={() => void handleSelectAgyAccount(acc.id)}
+                          className={cn(
+                            rowCls(isActive),
+                            "group cursor-pointer hover:bg-surface-muted",
+                            isSwitching && "opacity-60",
+                          )}
+                        >
+                          <span className="flex min-w-0 flex-1 items-center gap-2">
+                            <span
+                              className="model-group-avatar shrink-0"
+                              style={{ background: avatarColor(acc.id) }}
+                              aria-hidden
+                            >
+                              {acc.method === "default" ? (
+                                <IconUser size={12} />
+                              ) : (
+                                initialOf(displayName)
+                              )}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-1.5">
+                                <span className="truncate font-medium">{displayName}</span>
+                                <span className="shrink-0 rounded bg-surface-muted px-1 py-0.5 text-[10px] text-content-subtle">
+                                  {agyMethodBadge(acc.method)}
+                                </span>
+                              </span>
+                              {acc.hint && (
+                                <span className="block truncate text-[11px] text-content-subtle">
+                                  {acc.hint}
+                                </span>
+                              )}
+                            </span>
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1">
+                            {acc.method !== "default" && (
+                              <button
+                                type="button"
+                                onClick={(e) => void handleDeleteAgyAccount(e, acc.id)}
+                                title={t("chat.agyAccount.deleteTitle")}
+                                className="inline-flex h-5 w-5 items-center justify-center rounded text-content-subtle opacity-0 transition-opacity hover:bg-danger/15 hover:text-danger group-hover:opacity-100"
+                              >
+                                <IconTrash size={12} />
+                              </button>
+                            )}
+                            {isActive && <IconCheck size={14} className="shrink-0 text-accent" />}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="my-1 border-t border-edge/60" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      setAccountDialogOpen(true);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-content-muted transition-colors hover:bg-surface-muted hover:text-content"
+                  >
+                    <IconPlus size={14} />
+                    <span>{t("chat.agyAccount.add")}</span>
+                  </button>
+                </>
+              )}
+
               {/* Manage-models entry — shown for providers that own a model
                   configuration surface (claude + pi + codex + opencode). All
                   live on the unified "custom-models" settings page,
@@ -953,6 +1155,12 @@ export function ModelDropdown({
           </div>,
           document.body,
         )}
+      {isAntigravity && (
+        <AntigravityAccountDialog
+          open={accountDialogOpen}
+          onClose={() => setAccountDialogOpen(false)}
+        />
+      )}
     </>
   );
 }

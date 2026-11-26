@@ -36,7 +36,8 @@ export const FILE_PATH_LINK_CLASS = "file-path-link";
  * Split a text value into plain-text nodes and file-path placeholder spans.
  * Returns [] when no path token matched, so the caller keeps the original
  * node untouched. Line/column data rides along as data- attributes so the
- * component override can hand them to FileLink for position jumps.
+ * component override can hand them to FileLink for position jumps; an
+ * absorbed `#L133-L152` anchor additionally carries the range end.
  */
 export function transformTextByPaths(value: string): HastNode[] {
   const segs = splitTextByPathTokens(value);
@@ -52,6 +53,7 @@ export function transformTextByPaths(value: string): HastNode[] {
             dataToken: s.token,
             ...(s.line !== undefined ? { dataLine: String(s.line) } : {}),
             ...(s.column !== undefined ? { dataColumn: String(s.column) } : {}),
+            ...(s.endLine !== undefined ? { dataEndLine: String(s.endLine) } : {}),
           },
           children: [{ type: "text", value: s.token }],
         },

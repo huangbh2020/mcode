@@ -236,12 +236,27 @@ const api = {
       ipcRenderer.invoke(IPC.OPENCODE_LOGOUT, input)) as RpcMap["opencode.logout"],
   },
 
-  /** Antigravity (`agy acp`) — local CLI probe + model listing. */
+  /** Antigravity (`agy acp`) — local CLI probe + model listing + quota usage + accounts. */
   antigravity: {
     listModels: ((input) =>
       ipcRenderer.invoke(IPC.ANTIGRAVITY_LIST_MODELS, input)) as RpcMap["antigravity.listModels"],
     cliStatus: ((input) =>
       ipcRenderer.invoke(IPC.ANTIGRAVITY_CLI_STATUS, input)) as RpcMap["antigravity.cliStatus"],
+    usage: ((input) =>
+      ipcRenderer.invoke(IPC.ANTIGRAVITY_USAGE, input)) as RpcMap["antigravity.usage"],
+    listAccounts: (() =>
+      ipcRenderer.invoke(IPC.ANTIGRAVITY_LIST_ACCOUNTS)) as RpcMap["antigravity.listAccounts"],
+    selectAccount: ((input) =>
+      ipcRenderer.invoke(IPC.ANTIGRAVITY_SELECT_ACCOUNT, input)) as RpcMap["antigravity.selectAccount"],
+    saveAccount: ((input) =>
+      ipcRenderer.invoke(IPC.ANTIGRAVITY_SAVE_ACCOUNT, input)) as RpcMap["antigravity.saveAccount"],
+    captureGoogleAccount: ((input) =>
+      ipcRenderer.invoke(
+        IPC.ANTIGRAVITY_CAPTURE_GOOGLE_ACCOUNT,
+        input,
+      )) as RpcMap["antigravity.captureGoogleAccount"],
+    deleteAccount: ((input) =>
+      ipcRenderer.invoke(IPC.ANTIGRAVITY_DELETE_ACCOUNT, input)) as RpcMap["antigravity.deleteAccount"],
   },
 
   /** Color scheme: get/set the preference; theme.changed fires when the

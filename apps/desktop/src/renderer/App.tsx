@@ -7,6 +7,7 @@ import { getSessionDragPayload, isSessionDrag } from "@renderer/lib/sessionDrag.
 import { ThreePaneLayout } from "./components/layout/ThreePaneLayout.js";
 import { Divider } from "./components/layout/Divider.js";
 import { Titlebar } from "./components/layout/Titlebar.js";
+import { useIsFirstTabActive } from "./components/layout/UnifiedTabsBar.js";
 import { LeftBar } from "./components/layout/LeftBar.js";
 import { StreamSidebar } from "./components/layout/StreamSidebar.js";
 import {
@@ -187,6 +188,7 @@ export function App() {
    *  a sibling view (not a modal) sharing the same titlebar + pane shell. */
   const settingsOpen = useSessionStore((s) => s.settingsOpen);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
+  const isFirstTabActive = useIsFirstTabActive();
 
   /** 定时任务只读查看页 — same full-bleed overlay form as the settings page
    *  (mutually exclusive with it; see setSchedPageOpen). */
@@ -511,6 +513,16 @@ export function App() {
             center={<CenterPane wide={widePanelOpen} />}
             right={<RightPanel />}
             leftOpen={false}
+            attachToTitlebar
+            flushTopLeft={
+              leftOpen &&
+              !widePanelOpen &&
+              !browserPanelOpen &&
+              !settingsOpen &&
+              !schedPageOpen &&
+              isFirstTabActive
+            }
+            flushLeftEdge={!leftOpen}
             rightOpen={rightOpen}
             rightWidth={rightWidth}
             rightMaximized={rightPanelMaximized}

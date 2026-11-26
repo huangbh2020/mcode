@@ -357,6 +357,29 @@ div:has(> [role="menu"]) {
   color: color-mix(in srgb, rgb(var(--content)) 70%, rgb(var(--content-muted)));
 }
 
+/* ───────────── Link-wrapped inline code inherits the link face ─────────────
+ * Models often emit file links whose LABEL is backticked —
+ * [`Foo.bar`](src/Foo.java) — and the inline-code override forces its own
+ * foreground (--code-fg), so the chip punched out of the accent link as a
+ * white island with only the underline hinting it was clickable. Inside an
+ * anchor the chip is part of ONE clickable-file affordance: inherit the
+ * link's accent color (FileLink face / Markdown `a` override). Scoped to
+ * .chat-md; code blocks (`pre code`) are never inside anchors. */
+.chat-md a code {
+  color: inherit;
+}
+
+/* ───────────── IDE anchor highlight (#L133-L152 file-link jumps) ─────────────
+ * A chat file link with a GitHub-style range anchor opens the file AND keeps
+ * the cited lines visibly highlighted — the selection alone would vanish on
+ * the first click, so a Monaco whole-line decoration (FileEditor applyReveal)
+ * paints the range until the next reveal supersedes it. Accent-tinted so it
+ * reads as "this is where the chat sent you", theme-consistent for free. */
+.ide-reveal-range {
+  background: rgb(var(--accent) / 0.13);
+  border-left: 2px solid rgb(var(--accent) / 0.55);
+}
+
 /* ───────────── Font-weight ladder shifts ─────────────
  * Pairs with the base font-weight set on :root (500, light) and .dark (600,
  * dark). Because the inherited base is lifted, the raw Tailwind utilities

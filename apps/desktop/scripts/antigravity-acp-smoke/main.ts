@@ -12,13 +12,22 @@
  *      - `-32000` authentication required → `AcpAuthRequiredError`
  */
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import type { RuntimeEvent } from "@contracts/runtime";
 import type { ProviderContext } from "@contracts/provider";
 import {
+  discardAgyListingSession,
   parseAntigravityModelListing,
   resolveAntigravityWireModel,
 } from "@main/providers/antigravity-acp/antigravityModels.js";
+import { parseAntigravityUsageStdout } from "@main/providers/antigravity-acp/antigravityUsage.js";
+import {
+  buildAgyHomeSettingsJson,
+  buildAgyIsolatedHomeArgs,
+  buildSanitizedAntigravityEnv,
+} from "@main/providers/antigravity-acp/antigravityEnv.js";
 import { AcpTransport } from "@main/providers/antigravity-acp/acpTransport.js";
 import { AntigravityMessageAdapter } from "@main/providers/antigravity-acp/AntigravityMessageAdapter.js";
 import {
@@ -190,6 +199,136 @@ async function run(): Promise<void> {
     (err: unknown) => err instanceof AcpAuthRequiredError && err.code === -32000,
   );
   authTransport.close();
+
+  // 5. Verify discardAgyListingSession cleans up temp conversation/brain/annotations files
+  const fakeAgyRoot = mkdtempSync(join(tmpdir(), "agy-discard-smoke-"));
+  try {
+    const tempSid = "3d50b981-da12-47b3-a691-a1dd07901fa3";
+    mkdirSync(join(fakeAgyRoot, "conversations"), { recursive: true });
+    mkdirSync(join(fakeAgyRoot, "brain", tempSid), { recursive: true });
+    mkdirSync(join(fakeAgyRoot, "annotations"), { recursive: true });
+    writeFileSync(join(fakeAgyRoot, "conversations", `${tempSid}.db`), "stub");
+    writeFileSync(join(fakeAgyRoot, "conversations", `${tempSid}.db-wal`), "stub");
+    writeFileSync(join(fakeAgyRoot, "brain", tempSid, "meta.json"), "{}");
+    writeFileSync(join(fakeAgyRoot, "annotations", `${tempSid}.pbtxt`), "");
+    await discardAgyListingSession(tempSid, fakeAgyRoot);
+    assert.equal(existsSync(join(fakeAgyRoot, "conversations", `${tempSid}.db`)), false);
+    assert.equal(existsSync(join(fakeAgyRoot, "conversations", `${tempSid}.db-wal`)), false);
+    assert.equal(existsSync(join(fakeAgyRoot, "brain", tempSid)), false);
+    assert.equal(existsSync(join(fakeAgyRoot, "annotations", `${tempSid}.pbtxt`)), false);
+  } finally {
+    rmSync(fakeAgyRoot, { recursive: true, force: true });
+  }
+
+  // 6. Verify /usage JSON parsing, 1970 reset filtering, and billed-turn latch detection
+  const usageSample = JSON.stringify({
+    conversation_id: "",
+    status: "SUCCESS",
+    num_turns: 0,
+    command: {
+      name: "usage",
+      data: {
+        description: "Shared quota info",
+        groups: [
+          {
+            name: "Gemini Models",
+            buckets: [
+              { id: "g-w", name: "Weekly", window: "weekly", remaining_fraction: 0.968, reset_time: "2026-12-01T05:36:11Z" },
+              { id: "g-5h", name: "5h", window: "5h", remaining_fraction: 0.952, reset_time: "2026-11-26T05:05:32Z" },
+              { id: "g-dis", name: "Off", window: "5h", remaining_fraction: 1, disabled: true },
+            ],
+          },
+          {
+            name: "Claude and GPT models",
+            buckets: [
+              { id: "3p-w", name: "Weekly", window: "weekly", remaining_fraction: 1, reset_time: "1970-01-01T00:00:00Z" },
+            ],
+          },
+        ],
+      },
+    },
+  });
+  const usageParsed = parseAntigravityUsageStdout(usageSample);
+  assert.equal(usageParsed.ranModelTurn, false);
+  assert.equal(usageParsed.parsed?.groups.length, 2);
+  assert.equal(usageParsed.parsed?.groups[0]?.buckets.length, 2, "disabled bucket must be skipped");
+  assert.equal(usageParsed.parsed?.groups[0]?.buckets[0]?.remainingPercent, 97);
+  assert.equal(usageParsed.parsed?.groups[1]?.buckets[0]?.resetsAt, null, "1970 epoch reset must be null");
+
+  const billedTurn = parseAntigravityUsageStdout(JSON.stringify({ conversation_id: "abc", status: "SUCCESS", num_turns: 1 }));
+  assert.equal(billedTurn.ranModelTurn, true, "num_turns > 0 or non-empty conversation_id must trigger safety latch");
+
+  // 7. Verify host MCP read-only browser & orch_submit_plan tools are auto-approved in default mode
+  let defaultApprovalCalls = 0;
+  const mcpAdapter = new AntigravityMessageAdapter({
+    sessionId: "s-mcp",
+    acpSessionId: "agy-sess-mcp",
+    cwd: process.cwd(),
+    permissionMode: "default",
+    ctx: {
+      emit: () => {},
+      requestApproval: async () => {
+        defaultApprovalCalls += 1;
+        return { allow: true };
+      },
+      log: { info: () => {}, warn: () => {}, error: () => {} },
+    },
+    snapshot: new FileSnapshot(),
+    abortSignal: new AbortController().signal,
+  });
+  const roBrowserPerm = await mcpAdapter.handlePermissionRequest(
+    {
+      sessionId: "agy-sess-mcp",
+      toolCall: { toolCallId: "tc_1", title: "mcp__mcode-browser__browser_snapshot" },
+      options: [{ optionId: "allow_once", name: "Allow", kind: "allow_once" }],
+    },
+    new AbortController().signal,
+  );
+  assert.deepEqual(roBrowserPerm, { outcome: { outcome: "selected", optionId: "allow_once" } });
+  const orchPerm = await mcpAdapter.handlePermissionRequest(
+    {
+      sessionId: "agy-sess-mcp",
+      toolCall: { toolCallId: "tc_2", title: "orch_submit_plan" },
+      options: [{ optionId: "allow_once", name: "Allow", kind: "allow_once" }],
+    },
+    new AbortController().signal,
+  );
+  assert.deepEqual(orchPerm, { outcome: { outcome: "selected", optionId: "allow_once" } });
+  assert.equal(defaultApprovalCalls, 0, "read-only browser & orch_submit_plan tools must auto-approve");
+
+  // 8. Verify --gemini-dir isolation args, settings.json builder, and env sanitization
+  assert.deepEqual(buildAgyIsolatedHomeArgs(null), []);
+  assert.deepEqual(buildAgyIsolatedHomeArgs("/tmp/agy-home-1"), [
+    "--gemini-dir",
+    "/tmp/agy-home-1",
+    "--app-data-dir",
+    "antigravity-cli",
+  ]);
+  const apiKeySettings = JSON.parse(buildAgyHomeSettingsJson({ method: "gemini-api-key" })) as {
+    auth?: { type?: string };
+  };
+  assert.equal(apiKeySettings.auth?.type, "gemini-api-key");
+  const gcpSettings = JSON.parse(
+    buildAgyHomeSettingsJson({ method: "agent-platform", gcpProject: "demo-proj", gcpLocation: "us-central1" }),
+  ) as { auth?: { type?: string }; gcp?: { project?: string; location?: string } };
+  assert.equal(gcpSettings.auth?.type, "agent-platform");
+  assert.equal(gcpSettings.gcp?.project, "demo-proj");
+  assert.equal(gcpSettings.gcp?.location, "us-central1");
+
+  const sanitized = buildSanitizedAntigravityEnv(
+    {
+      PATH: "/usr/bin",
+      GEMINI_API_KEY: "leaked-host-key",
+      GOOGLE_CLOUD_PROJECT: "leaked-proj",
+      AGY_ACP_FORCE_FILE: "1",
+    },
+    "gemini-api-key",
+    { GEMINI_API_KEY: "account-key" },
+  );
+  assert.equal(sanitized["GEMINI_API_KEY"], "account-key");
+  assert.equal(sanitized["GOOGLE_CLOUD_PROJECT"], undefined, "conflicting GCP var must be stripped");
+  assert.equal(sanitized["AGY_ACP_FORCE_FILE"], undefined, "AGY_ACP_* override must be stripped");
+  assert.equal(sanitized["AGY_CLI_DISABLE_AUTO_UPDATE"], "true");
 
   console.log("antigravity-acp-smoke: ALL ASSERTIONS PASSED");
 }

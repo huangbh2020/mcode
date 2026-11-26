@@ -746,6 +746,10 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
   // Editor event-listener disposables (view-state stash, cursor tracking,
   // reveal re-centering retry) — disposed on unmount.
   const editorDisposablesRef = useRef<{ dispose(): void }[]>([]);
+  // Persistent anchor-highlight decorations (chat file links' #L133-L152
+  // jumps). One collection per editor instance; `set()` replaces wholesale,
+  // so the next range reveal MOVES the highlight instead of stacking another.
+  const revealDecorationsRef = useRef<editor.IEditorDecorationsCollection | null>(null);
   // Reveal nonce consumer - re-runs when the store requests a goto-def reveal.
   const ideRevealNonce = useSessionStore((s) => s.ideRevealNonce);
   const idePendingReveal = useSessionStore((s) => s.idePendingReveal);
@@ -782,8 +786,35 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     // An explicit jump outranks the mount-time scroll restore.
     cancelMountReassertRef.current?.();
     const doReveal = () => {
-      ed.revealLineInCenter(reveal.line);
-      ed.setPosition({ lineNumber: reveal.line, column: reveal.column });
+      if (reveal.endLine != null && reveal.endLine > reveal.line) {
+        // GitHub-style `#L133-L152` anchor: center the whole range in the
+        // viewport, select it (the caret lands at the selection's end, Monaco
+        // native), and paint a persistent whole-line highlight — the selection
+        // alone vanishes on the first click elsewhere, the anchor is meant to
+        // stay visible while the user reads the cited lines.
+        const model = ed.getModel();
+        const range = {
+          startLineNumber: reveal.line,
+          startColumn: 1,
+          endLineNumber: reveal.endLine,
+          endColumn: model ? model.getLineMaxColumn(reveal.endLine) : 1,
+        };
+        ed.setSelection(range);
+        ed.revealRangeInCenter(range);
+        const decorations = revealDecorationsRef.current ?? ed.createDecorationsCollection();
+        revealDecorationsRef.current = decorations;
+        decorations.set([
+          {
+            range,
+            options: { className: "ide-reveal-range", isWholeLine: true },
+          },
+        ]);
+      } else {
+        ed.revealLineInCenter(reveal.line);
+        ed.setPosition({ lineNumber: reveal.line, column: reveal.column });
+        // A non-range reveal supersedes a previous anchor highlight.
+        revealDecorationsRef.current?.clear();
+      }
     };
     ed.layout(); // measure the container NOW so the centering math is real
     doReveal();

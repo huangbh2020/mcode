@@ -105,7 +105,7 @@ export function useIsFirstTabActive(): boolean {
  *  listing every tab, middle-click close. File tabs additionally keep their
  *  right-click context menu and dirty dots; session tabs keep their running
  *  spinners and unread badges. */
-export function UnifiedTabsBar() {
+export function UnifiedTabsBar({ flushLeft = false }: { flushLeft?: boolean } = {}) {
   const { t } = useI18n();
   // ── Session tabs ──
   const tabs = useSessionStore((s) => s.openTabs);
@@ -383,7 +383,10 @@ export function UnifiedTabsBar() {
           ref={scrollRef}
           onScroll={recomputeScrollState}
           onWheel={onWheel}
-          className="no-scrollbar flex flex-1 items-end gap-1.5 overflow-x-auto px-2.5 pt-1.5"
+          className={cn(
+            "no-scrollbar flex flex-1 items-end gap-1.5 overflow-x-auto pt-1.5 pr-2.5",
+            flushLeft && !canScrollLeft ? "pl-0" : "pl-2.5",
+          )}
         >
           <DndContext
             sensors={sensors}
@@ -399,7 +402,7 @@ export function UnifiedTabsBar() {
                     key={id}
                     session={sess}
                     sessionId={id}
-                    isFirst={idx === 0}
+                    isFirst={flushLeft && !canScrollLeft && idx === 0}
                     isActive={isTabActive(id) && !editorFocused}
                     running={!!runningBySession[displayId] || orchAnchors[displayId] != null}
                     unreadCount={unreadBySession[displayId] ?? 0}
@@ -435,7 +438,7 @@ export function UnifiedTabsBar() {
                   key={path}
                   path={path}
                   variant="attached"
-                  isFirst={tabs.length === 0 && idx === 0}
+                  isFirst={flushLeft && !canScrollLeft && tabs.length === 0 && idx === 0}
                   isActive={path === activeFile && editorFocused && !planTabActive}
                   dirty={dirtySet.has(path)}
                   registerNode={(node) => {
@@ -492,7 +495,9 @@ export function UnifiedTabsBar() {
                   : "text-content-muted hover:text-content hover:bg-surface-hover/50 border-t border-x border-transparent",
               )}
             >
-              {planTabActive && editorFocused && <TabInverseCorners />}
+              {planTabActive && editorFocused && (
+                <TabInverseCorners showLeft={!(flushLeft && !canScrollLeft && tabs.length === 0 && openFiles.length === 0)} />
+              )}
               <IconClipboard size={12} className="shrink-0 text-emerald-500" />
               <span className="min-w-0 flex-1 truncate">{t("ide.editor.planTab")}</span>
               {/* Close button leaves the layout on inactive tabs (title fills

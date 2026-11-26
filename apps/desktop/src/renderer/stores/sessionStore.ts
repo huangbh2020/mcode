@@ -139,6 +139,7 @@ import {
   type BrowserOrientation,
   type OpenCodeModelOption,
   type AntigravityModelOption,
+  type AntigravityAccountPublic,
 } from "@contracts/ipc";
 import type { ThemeStyle } from "@contracts/theme";
 
@@ -1409,6 +1410,12 @@ export interface SessionState {
    *  `<family>-<level>` groups). */
   antigravityAvailableModels: AntigravityModelOption[];
   antigravityModelVariants: Record<string, string[]>;
+  /** Saved Antigravity (`agy acp`) account profiles & currently selected id. */
+  antigravityAccounts: AntigravityAccountPublic[];
+  antigravityActiveAccountId: string;
+  /** Monotonic counter bumped whenever the active Antigravity account changes
+   *  (triggers AntigravityUsageBar to re-fetch quota). */
+  antigravityAccountVersion: number;
   /** Whether each composer config list has landed (initDeferred reloads run
    *  concurrently). validateComposerSelection stays hands-off until ALL are
    *  in — validating against a not-yet-loaded list reads "empty" as "the
@@ -1722,8 +1729,10 @@ export interface SessionState {
 
   /** Pending goto-definition reveal target. When non-null, the EditPane for
    *  `filePath` should scroll to (line, column) and place the caret there on
-   *  mount/nonce-bump, then clear this. Driven by `openFileInIde` line/col. */
-  idePendingReveal: { filePath: string; line: number; column: number } | null;
+   *  mount/nonce-bump, then clear this. Driven by `openFileInIde` line/col.
+   *  `endLine` (chat file links' `#L133-L152` anchors) turns the reveal into
+   *  a selected + highlighted range. */
+  idePendingReveal: { filePath: string; line: number; column: number; endLine?: number } | null;
   /** Monotonic counter bumped whenever idePendingReveal is set, so an
    *  already-mounted EditPane re-runs its reveal effect. */
   ideRevealNonce: number;
@@ -2324,8 +2333,14 @@ export interface SessionState {
    *  and `opencodeModelVariants` (per-model effort ladder). Called on init,
    *  after settings-panel login/logout, and on manual refresh. */
   reloadOpencodeAvailableModels: () => Promise<void>;
-  /** Re-fetch Antigravity models via `agy models` and fold effort families. */
+  /** Re-fetch Antigravity models via `agy acp` / `agy models` and fold effort families. */
   reloadAntigravityAvailableModels: (force?: boolean) => Promise<void>;
+  /** Load saved Antigravity account profiles + activeAccountId. */
+  reloadAntigravityAccounts: () => Promise<void>;
+  /** Switch active Antigravity account, refreshing models & usage. */
+  selectAntigravityAccount: (accountId: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Delete a saved Antigravity account and refresh lists. */
+  deleteAntigravityAccount: (accountId: string) => Promise<{ ok: boolean; error?: string }>;
   setModel: (model: string) => void;
   setEffort: (effort: EffortLevel) => void;
   setCustomModel: (id: string | null, model?: string, role?: ClaudeMenuRoleKey | null) => void;
@@ -2650,13 +2665,15 @@ export interface SessionState {
   /** Open a file in the Monaco editor (dedup + append to ideOpenFiles, set
    *  active). `opts.diff` opens it in diff mode (used by the 审查 button when
    *  a before-snapshot exists). `opts.line`/`opts.column` (1-based) request a
-   *  goto-definition reveal once the editor mounts. Plain opens bump
-   *  ideFocusNonce so App opens the right panel if it's collapsed; diff opens
-   *  don't — they render in the center editor and shouldn't drag the right
-   *  panel (files tab + tree reveal) into view. */
+   *  goto-definition reveal once the editor mounts; `opts.endLine` extends
+   *  that reveal into a selected + highlighted range (GitHub's `#L133-L152`
+   *  anchor behavior). Plain opens bump ideFocusNonce so App opens the right
+   *  panel if it's collapsed; diff opens don't — they render in the center
+   *  editor and shouldn't drag the right panel (files tab + tree reveal) into
+   *  view. */
   openFileInIde: (
     filePath: string,
-    opts?: { diff?: boolean; before?: string; line?: number; column?: number },
+    opts?: { diff?: boolean; before?: string; line?: number; column?: number; endLine?: number },
   ) => void;
   /** Clear a consumed pending reveal (called by EditPane after applying it). */
   clearIdePendingReveal: () => void;
@@ -2912,6 +2929,7 @@ const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
 const EMPTY_OPENCODE_MODELS: OpenCodeModelOption[] = [];
 const EMPTY_OPENCODE_VARIANTS: Record<string, string[]> = {};
 const EMPTY_ANTIGRAVITY_MODELS: AntigravityModelOption[] = [];
+const EMPTY_ANTIGRAVITY_ACCOUNTS: AntigravityAccountPublic[] = [];
 const EMPTY_ANTIGRAVITY_VARIANTS: Record<string, string[]> = {};
 const EMPTY_SKILLS: SkillInfo[] = [];
 const EMPTY_SESSIONS: Session[] = [];
@@ -6321,6 +6339,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   opencodeModelVariants: EMPTY_OPENCODE_VARIANTS,
   antigravityAvailableModels: EMPTY_ANTIGRAVITY_MODELS,
   antigravityModelVariants: EMPTY_ANTIGRAVITY_VARIANTS,
+  antigravityAccounts: EMPTY_ANTIGRAVITY_ACCOUNTS,
+  antigravityActiveAccountId: "default",
+  antigravityAccountVersion: 0,
   providersLoaded: false,
   customModelsLoaded: false,
   piModelsLoaded: false,
@@ -6935,6 +6956,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void get().reloadCodexAvailableModels();
     void get().reloadOpencodeAvailableModels();
     void get().reloadAntigravityAvailableModels();
+    void get().reloadAntigravityAccounts();
 
     // Skill list for the composer `/` menu (scans ~/.claude/skills + the
     // active project's .claude/skills).
@@ -12937,6 +12959,49 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  reloadAntigravityAccounts: async () => {
+    try {
+      const { accounts, activeAccountId } = await api.antigravity.listAccounts();
+      set({
+        antigravityAccounts: accounts,
+        antigravityActiveAccountId: activeAccountId,
+      });
+    } catch (err) {
+      console.error("reloadAntigravityAccounts failed:", err);
+    }
+  },
+
+  selectAntigravityAccount: async (accountId: string) => {
+    try {
+      const res = await api.antigravity.selectAccount({ accountId });
+      if (!res.ok) return { ok: false, error: res.error };
+      set((s) => ({
+        antigravityActiveAccountId: res.activeAccountId,
+        antigravityAccountVersion: s.antigravityAccountVersion + 1,
+      }));
+      void get().reloadAntigravityAvailableModels(true);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  deleteAntigravityAccount: async (accountId: string) => {
+    try {
+      const res = await api.antigravity.deleteAccount({ accountId });
+      if (!res.ok) return { ok: false, error: res.error };
+      await get().reloadAntigravityAccounts();
+      set((s) => ({
+        antigravityActiveAccountId: res.activeAccountId,
+        antigravityAccountVersion: s.antigravityAccountVersion + 1,
+      }));
+      void get().reloadAntigravityAvailableModels(true);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
   reloadLspLanguages: async () => {
     try {
       const { languages } = await api.lsp.list();
@@ -14283,6 +14348,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               filePath: canonicalPath,
               line: opts.line,
               column: opts.column ?? 1,
+              ...(opts.endLine != null && opts.endLine > opts.line
+                ? { endLine: opts.endLine }
+                : {}),
             },
             ideRevealNonce: s.ideRevealNonce + 1,
           }

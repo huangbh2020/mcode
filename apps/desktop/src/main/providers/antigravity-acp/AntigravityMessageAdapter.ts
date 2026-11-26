@@ -29,6 +29,7 @@ import { FileSnapshot, normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
 import { guardBashCommand, expandTilde } from "@main/lib/bashWriteGuard.js";
 import { guardReadPath } from "@main/lib/readGuard.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
+import { isOrchPlanToolName, isReadOnlyBrowserTool } from "@main/providers/browserMcpNames.js";
 import {
   AcpElicitationFormSchema,
   AcpMessageChunkSchema,
@@ -530,7 +531,18 @@ export class AntigravityMessageAdapter {
       if (guard) return pickRejectOption(options);
     }
 
-    // 3. Mode-level or session-level auto-approval
+    // 3. Host MCP auto-approval (orchestration submit_plan + read-only browser tools)
+    const rawToolCandidate = toolCall.title ?? norm.toolName;
+    if (
+      isOrchPlanToolName(norm.toolName) ||
+      isOrchPlanToolName(rawToolCandidate) ||
+      isReadOnlyBrowserTool(norm.toolName) ||
+      isReadOnlyBrowserTool(rawToolCandidate)
+    ) {
+      return pickAllowOption(options, false);
+    }
+
+    // 4. Mode-level or session-level auto-approval
     if (
       !strict ||
       ((mode === "acceptEdits" || isolated) && norm.isMutation) ||

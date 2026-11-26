@@ -27,7 +27,23 @@ import {
 } from "@main/lib/antigravityExecutable.js";
 import { getCustomPromptSetting } from "@main/lib/customPrompt.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
+import { getMcpManagement } from "@main/lib/mcpConfig.js";
 import { killProcessTree } from "@main/lib/procTree.js";
+import { joinPromptSections } from "@main/lib/systemPrompt.js";
+import {
+  ORCH_PLAN_MCP_SERVER,
+  buildOrchPlanHostServer,
+  buildOrchPlanNudge,
+} from "@main/orchestrator/planTool.js";
+import {
+  BROWSER_MCP_SERVER,
+  buildBrowserMcpTools,
+} from "@main/providers/browserMcpTools.js";
+import {
+  startHostMcpServer,
+  type HostMcpServer,
+  type HostMcpServerSpec,
+} from "@main/providers/claude-sdk/hostMcpHttp.js";
 import {
   ACP_PROTOCOL_VERSION,
   AcpAbortedError,
@@ -44,8 +60,13 @@ import { AcpTransport } from "./acpTransport.js";
 import { AntigravityMessageAdapter } from "./AntigravityMessageAdapter.js";
 import {
   getCachedAntigravityCatalog,
+  hydrateAntigravityModelCatalog,
   resolveAntigravityWireModel,
 } from "./antigravityModels.js";
+import {
+  resolveActiveAntigravityLaunchContext,
+  type AntigravityLaunchContext,
+} from "./antigravityAccounts.js";
 
 export const ANTIGRAVITY_PROVIDER_ID = "antigravity-acp";
 
@@ -73,6 +94,21 @@ interface LiveAcpHost {
   acpSessionId: string;
   currentModel?: string;
   activeAdapter: AntigravityMessageAdapter | null;
+  turnNumberBox: { n?: number };
+  hostMcpServers: HostMcpServer[];
+}
+
+interface AcpHttpMcpServerEntry {
+  type: "http";
+  name: string;
+  url: string;
+  headers: Array<{ name: string; value: string }>;
+}
+
+function closeHostMcpServers(servers: HostMcpServer[]): void {
+  for (const s of servers) {
+    void s.close().catch(() => {});
+  }
 }
 
 function buildErrorTurn(
@@ -136,7 +172,7 @@ export class AntigravityAcpProvider implements AgentProvider {
     supportsApproval: true,
     supportsResume: true,
     supportsStreaming: true,
-    supportsMcp: false,
+    supportsMcp: true,
     supportsAskUserQuestion: true,
     thinkingLevels: ANTIGRAVITY_EFFORT_LEVELS,
     permissionModes: ANTIGRAVITY_PERMISSION_MODES,
@@ -153,6 +189,7 @@ export class AntigravityAcpProvider implements AgentProvider {
     this.hosts.delete(sessionId);
     host.activeAdapter = null;
     host.transport.close();
+    closeHostMcpServers(host.hostMcpServers);
   }
 
   async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
@@ -169,8 +206,17 @@ export class AntigravityAcpProvider implements AgentProvider {
     }
 
     const bypass = req.permissionMode === "bypassPermissions";
-    const customPrompt = (await getCustomPromptSetting())?.trim() || "";
-    const fingerprint = `${req.cwd}\0${bypass ? "1" : "0"}\0${customPrompt}`;
+    const [customPromptRaw, mcpState, launchCtx] = await Promise.all([
+      getCustomPromptSetting(),
+      getMcpManagement(),
+      resolveActiveAntigravityLaunchContext(),
+    ]);
+    const customPrompt = customPromptRaw?.trim() || "";
+    const browserMcpEnabled = !mcpState.browserDisabled;
+    const orchEnabled = Boolean(req.orchestration);
+    const orchNudge = orchEnabled ? await buildOrchPlanNudge(req.sessionId) : "";
+    const combinedPrompt = joinPromptSections(customPrompt, orchNudge);
+    const fingerprint = `${req.cwd}\0${bypass ? "1" : "0"}\0${browserMcpEnabled ? "1" : "0"}\0${orchEnabled ? "1" : "0"}\0${launchCtx.accountId}:${launchCtx.revision}\0${combinedPrompt}`;
 
     const ac = new AbortController();
     let finished = false;
@@ -186,8 +232,22 @@ export class AntigravityAcpProvider implements AgentProvider {
       let reason: TurnDoneReason = "end_turn";
 
       try {
-        const liveHost = host ?? (await this.openHost(exePath, req, ctx, bypass, customPrompt, fingerprint, ac.signal));
+        const liveHost =
+          host ??
+          (await this.openHost(
+            exePath,
+            req,
+            ctx,
+            bypass,
+            combinedPrompt,
+            browserMcpEnabled,
+            orchEnabled,
+            launchCtx,
+            fingerprint,
+            ac.signal,
+          ));
         host = liveHost;
+        liveHost.turnNumberBox.n = req.turnNumber;
 
         // Sync model + effort if the user selected one in the composer.
         const catalog = await getCachedAntigravityCatalog();
@@ -304,17 +364,60 @@ export class AntigravityAcpProvider implements AgentProvider {
     ctx: ProviderContext,
     bypass: boolean,
     customPrompt: string,
+    browserMcpEnabled: boolean,
+    orchEnabled: boolean,
+    launchCtx: AntigravityLaunchContext,
     fingerprint: string,
     signal: AbortSignal,
   ): Promise<LiveAcpHost> {
-    const args = ["acp", ...(bypass ? ["--dangerously-skip-permissions"] : [])];
+    const args = ["acp", ...launchCtx.cliHomeArgs, ...(bypass ? ["--dangerously-skip-permissions"] : [])];
     const hostRef: { current?: LiveAcpHost } = {};
+    const turnNumberBox: { n?: number } = { n: req.turnNumber };
+
+    const hostMcpSpecs: Array<{ name: string; spec: HostMcpServerSpec }> = [];
+    if (browserMcpEnabled) {
+      hostMcpSpecs.push({
+        name: BROWSER_MCP_SERVER,
+        spec: buildBrowserMcpTools(req.cwd, req.sessionId, () => turnNumberBox.n),
+      });
+    }
+    if (orchEnabled) {
+      hostMcpSpecs.push({
+        name: ORCH_PLAN_MCP_SERVER,
+        spec: buildOrchPlanHostServer(req.sessionId),
+      });
+    }
+
+    const startedMcp: HostMcpServer[] = [];
+    const mcpServers: AcpHttpMcpServerEntry[] = [];
+    try {
+      for (const entry of hostMcpSpecs) {
+        const srv = await startHostMcpServer({
+          name: entry.name,
+          version: entry.spec.version,
+          instructions: entry.spec.instructions,
+          tools: entry.spec.tools,
+          alwaysLoad: entry.spec.alwaysLoad,
+          log: ctx.log,
+        });
+        startedMcp.push(srv);
+        mcpServers.push({
+          type: "http",
+          name: entry.name,
+          url: srv.config.url,
+          headers: [],
+        });
+      }
+    } catch (err) {
+      closeHostMcpServers(startedMcp);
+      throw err;
+    }
 
     const transport = new AcpTransport({
       command: exePath,
       args,
       cwd: req.cwd,
-      env: { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: "true" },
+      env: launchCtx.env,
       hardKill: (child) => {
         if (child.pid) void killProcessTree(child.pid);
       },
@@ -337,6 +440,7 @@ export class AntigravityAcpProvider implements AgentProvider {
         throw new AcpRpcError(-32601, `Unsupported ACP client method: ${method}`);
       },
       onClose: () => {
+        closeHostMcpServers(startedMcp);
         const current = this.hosts.get(req.sessionId);
         if (current && current.transport === transport) {
           this.hosts.delete(req.sessionId);
@@ -383,7 +487,7 @@ export class AntigravityAcpProvider implements AgentProvider {
           try {
             const raw = await transport.request(
               "session/resume",
-              { sessionId: resumeId, cwd: req.cwd, mcpServers: [], ...(meta ? { _meta: meta } : {}) },
+              { sessionId: resumeId, cwd: req.cwd, mcpServers, ...(meta ? { _meta: meta } : {}) },
               { timeoutMs: 20_000, signal },
             );
             sessionRes = AcpSessionResponseSchema.parse(raw);
@@ -396,7 +500,7 @@ export class AntigravityAcpProvider implements AgentProvider {
           try {
             const raw = await transport.request(
               "session/load",
-              { sessionId: resumeId, cwd: req.cwd, mcpServers: [], ...(meta ? { _meta: meta } : {}) },
+              { sessionId: resumeId, cwd: req.cwd, mcpServers, ...(meta ? { _meta: meta } : {}) },
               { timeoutMs: 25_000, signal },
             );
             sessionRes = AcpSessionResponseSchema.parse(raw);
@@ -410,12 +514,13 @@ export class AntigravityAcpProvider implements AgentProvider {
       if (!sessionRes) {
         const raw = await transport.request(
           "session/new",
-          { cwd: req.cwd, mcpServers: [], ...(meta ? { _meta: meta } : {}) },
+          { cwd: req.cwd, mcpServers, ...(meta ? { _meta: meta } : {}) },
           { timeoutMs: 25_000, signal },
         );
         sessionRes = AcpSessionResponseSchema.parse(raw);
       }
 
+      hydrateAntigravityModelCatalog(sessionRes.models?.availableModels);
       ctx.onProviderSessionId?.(sessionRes.sessionId);
 
       const liveHost: LiveAcpHost = {
@@ -425,12 +530,15 @@ export class AntigravityAcpProvider implements AgentProvider {
         acpSessionId: sessionRes.sessionId,
         currentModel: sessionRes.models?.currentModelId,
         activeAdapter: null,
+        turnNumberBox,
+        hostMcpServers: startedMcp,
       };
       hostRef.current = liveHost;
       this.hosts.set(req.sessionId, liveHost);
       return liveHost;
     } catch (err) {
       transport.close();
+      closeHostMcpServers(startedMcp);
       throw err;
     }
   }

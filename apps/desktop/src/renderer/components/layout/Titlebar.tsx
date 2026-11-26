@@ -110,9 +110,11 @@ export function Titlebar({
     return a ? ` (${acceleratorToDisplayString(a)})` : "";
   };
 
+  const flushLeft = leftOpen && !isBrowserMode && !isOverlayPage;
+
   return (
     <div
-      className="flex h-10 shrink-0 items-stretch bg-surface-muted"
+      className="relative z-20 flex h-10 shrink-0 items-stretch bg-surface-muted"
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       <div
@@ -123,10 +125,8 @@ export function Titlebar({
           // own shrink-0 chrome (chevrons/⋯) must never spill over the right
           // cluster; clipping beats overlapping. Portaled popups (⋯ menu,
           // git pill popover, dialogs) render at <body> and are unaffected.
-          "relative flex flex-1 items-center overflow-hidden pr-2",
-          !isOverlayPage && !isBrowserOverlay
-            ? "rounded-tl-2xl border-l border-edge bg-surface-muted/45 pl-1"
-            : "bg-surface-muted pl-2",
+          "relative flex flex-1 items-center overflow-hidden bg-surface-muted pr-2",
+          flushLeft ? "pl-0" : "pl-2",
           !isMac && "pr-[138px]",
           // macOS traffic lights sit at the window's top-left. They overlay
           // the full-height sidebar while it's visible (LeftBar's header
@@ -136,9 +136,14 @@ export function Titlebar({
           isMac && !(leftOpen && !isOverlayPage) && "pl-[78px]",
         )}
       >
-        {/* Bottom hairline separating inactive tabs / empty track from the main
-            panel; active tabs sit above it (z-10) to merge into the surface. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-px bg-edge" />
+        {/* Overlay pages (settings / sched / fullscreen browser) have no
+            attached tabs, so keep a hairline divider along the bottom edge.
+            In workspace mode the main pane's own top border (pulled up 1px
+            under this z-20 titlebar) forms the seam so its top-left arc stays
+            clean and the active tab cleanly masks the segment beneath it. */}
+        {(isOverlayPage || isBrowserOverlay) && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-px bg-edge" />
+        )}
         {isOverlayPage ? (
           <>
             <button
@@ -215,7 +220,7 @@ export function Titlebar({
                 (sessions remain the visible surface there). */}
             {!isOverlayPage && !isBrowserOverlay && (
               <div className="flex min-w-0 flex-1 items-stretch self-stretch">
-                <UnifiedTabsBar />
+                <UnifiedTabsBar flushLeft={flushLeft} />
               </div>
             )}
             {isBrowserOverlay && <div className="flex-1" />}

@@ -25,14 +25,14 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconCheck, IconChevronDown, IconChevronUp, IconCopy, IconLoader2 } from "@renderer/lib/icons.js";
 import type { Components } from "react-markdown";
 import { codeCacheKey, getCodeHtml, setCodeHtml } from "@renderer/lib/markdownCache.js";
-import { fileHrefToPath, isAbsolutePath, isLocalFileHref, splitTextByPathTokens } from "@renderer/lib/fileLink.js";
+import { fileHrefToPath, isAbsolutePath, isLocalFileHref, splitLocalHrefFragment, splitTextByPathTokens } from "@renderer/lib/fileLink.js";
 import { FILE_PATH_LINK_CLASS, rehypePathInline } from "@renderer/lib/markdownPathLinks.js";
 import { FILE_CITATION_CLASS, rehypeFileCitations } from "@renderer/lib/markdownFileCitations.js";
 import { fileCitationLocation, preprocessFileCitations, type FileCitation } from "@renderer/lib/fileCitation.js";
 import { basename, resolveRelativePath } from "@renderer/lib/path.js";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { api } from "@renderer/lib/api.js";
-import { FileLink } from "./FileLink.js";
+import { FileLink, FILE_LINK_FACE_CLASS } from "./FileLink.js";
 import { ScheduledTaskApprovalCard } from "./ScheduledTaskApprovalCard.js";
 import { MermaidBlock } from "./MermaidBlock.js";
 import { ImageWithPreview } from "@renderer/components/ui/image-preview.js";
@@ -494,15 +494,15 @@ function MarkdownLocalImage({
     );
   }
   if (!dataUrl) {
-    return (
-      <span className="my-[var(--chat-md-gap-xs)] inline-flex max-w-full items-center gap-1 rounded border border-edge/60 bg-surface-muted/60 px-1.5 py-0.5 align-middle text-content-muted [font-size:var(--chat-fs-xs)]">
-        <FileLink
-          token={filePath}
-          projectPath={projectPath}
-          display={alt ? <span className="text-info underline">{alt}</span> : undefined}
-        />
-      </span>
-    );
+      return (
+        <span className="my-[var(--chat-md-gap-xs)] inline-flex max-w-full items-center gap-1 rounded border border-edge/60 bg-surface-muted/60 px-1.5 py-0.5 align-middle text-content-muted [font-size:var(--chat-fs-xs)]">
+          <FileLink
+            token={filePath}
+            projectPath={projectPath}
+            display={alt || undefined}
+          />
+        </span>
+      );
   }
   return (
     <span className="my-[var(--chat-md-gap-xs)] inline-block align-middle">
@@ -705,7 +705,14 @@ function buildComponents(): Components {
             s.kind === "text" ? (
               s.text
             ) : (
-              <FileLink key={i} token={s.token} line={s.line} column={s.column} projectPath={projectPath} />
+              <FileLink
+                key={i}
+                token={s.token}
+                line={s.line}
+                endLine={s.endLine}
+                column={s.column}
+                projectPath={projectPath}
+              />
             ),
           );
         }
@@ -739,12 +746,14 @@ function buildComponents(): Components {
       if (typeof token === "string" && token) {
         const line = Number(props["data-line"]);
         const column = Number(props["data-column"]);
+        const endLine = Number(props["data-end-line"]);
         return (
           <FileLink
             token={token}
             projectPath={projectPath}
             line={Number.isFinite(line) && line > 0 ? line : undefined}
             column={Number.isFinite(column) && column > 0 ? column : undefined}
+            endLine={Number.isFinite(endLine) && endLine > 0 ? endLine : undefined}
           />
         );
       }
@@ -778,16 +787,27 @@ function buildComponents(): Components {
     const baseDir = useContext(MarkdownBaseDirContext);
     const raw = (href ?? "").trim();
     // Sanitized-away href (e.g. `javascript:`): an `<a href="">` would navigate
-    // the app's own origin on click — render a non-navigating span instead.
+    // the app's own origin on click — render a non-navigating span instead,
+    // with the same accent link face as every other clickable file path (the
+    // model meant a link; it renders as one affordance, not the info color).
     if (!raw) {
-      return <span className="text-info underline">{children}</span>;
+      return <span className={FILE_LINK_FACE_CLASS}>{children}</span>;
     }
     // Local file path (drive-letter / file:// / scheme-less): resolve and open
     // in the IDE instead of navigating — see fileLink.ts. In a base-dir
     // context (md preview) relative refs resolve against the previewed file's
     // directory so the exact sibling file opens instead of a search match.
+    // No display override: FileLink's anchor face carries the accent link
+    // styling itself, so a model-emitted `[label](path)` is indistinguishable
+    // from an auto-linkified bare path (was: violet `text-info` — a second,
+    // clashing clickable-file color).
     if (isLocalFileHref(raw)) {
-      const path = fileHrefToPath(raw);
+      // `#` fragments are GitHub-style line anchors (`#L133`, `#L133-L152`),
+      // never part of the filesystem path — leaving them in the token would
+      // poison resolution (no file named `File.java#L133-L152` exists) and the
+      // click degrades to "no match" while the editor never opens. Split them
+      // off here and carry the position/range to FileLink.
+      const { path, line, endLine } = splitLocalHrefFragment(fileHrefToPath(raw));
       const token =
         baseDir && !isAbsolutePath(path) ? resolveRelativePath(baseDir, path) : path;
       return (
@@ -795,7 +815,9 @@ function buildComponents(): Components {
           token={token}
           projectPath={projectPath}
           asLink
-          display={<span className="text-info underline hover:opacity-80">{children}</span>}
+          line={line}
+          endLine={endLine}
+          display={children}
         />
       );
     }
@@ -828,7 +850,7 @@ function buildComponents(): Components {
           <FileLink
             token={absolute}
             projectPath={projectPath}
-            display={alt ? <span className="text-info underline">{alt}</span> : undefined}
+            display={alt || undefined}
           />
         </span>
       );

@@ -71,6 +71,7 @@ import { ComposerToolbar } from "./ComposerToolbar.js";
 import { WorktreeModeChip } from "./WorktreeModeChip.js";
 import { SessionDirectoryChip } from "./SessionDirectoryChip.js";
 import { ComposerToolbarToggle } from "./ComposerToolbarToggle.js";
+import { AntigravityUsageBar } from "./AntigravityUsageBar.js";
 import { ProviderDropdown } from "./ProviderDropdown.js";
 import { QuestionPrompt } from "./QuestionPrompt.js";
 import { ApprovalPrompt } from "./ApprovalPrompt.js";
@@ -5199,6 +5200,9 @@ function ChatPaneForSession({
               </div>
             </div>
           </div>
+          {sessionProviderId === "antigravity-acp" && (
+            <AntigravityUsageBar busy={sessionBusy} />
+          )}
           {/* Content-tag preview popover. Fixed-positioned to the clicked
               chip's top-right; rendered outside the composer container so
               it isn't clipped by overflow/border-radius. Anchored only while

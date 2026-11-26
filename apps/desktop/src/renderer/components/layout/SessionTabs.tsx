@@ -153,7 +153,7 @@ export function SortableSessionTab({
         isDragging && "shadow-lg opacity-80 z-20",
       )}
     >
-      {isActive && <TabInverseCorners />}
+      {isActive && <TabInverseCorners showLeft={!isFirst} />}
       {/* Project identity leads the tab: the owning project's colored
           initial, so tabs from different projects read apart at a glance
           (same mark as the sidebars' project rows). */}
