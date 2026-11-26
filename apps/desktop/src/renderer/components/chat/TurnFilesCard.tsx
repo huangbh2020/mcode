@@ -58,10 +58,9 @@ export function TurnFilesCard({
    *  hidden. */
   rewound?: boolean;
 }) {
-  // Default expand state by lifecycle: the latest turn expands so the user
-  // sees the fresh changes + rewind affordance; historical cards collapse to
-  // a one-line summary (keeps the scroll-back history calm).
-  const [open, setOpen] = useState(!!isLatestTurn);
+  // Default collapsed so the card renders as a compact one-line summary
+  // unless the user explicitly expands it to inspect individual files.
+  const [open, setOpen] = useState(false);
   // rewindTurn comes from the store - invoked for both the latest turn
   // (clears the card) and historical turns (marks the card in place).
   const rewindTurn = useSessionStore((s) => s.rewindTurn);
@@ -113,7 +112,7 @@ export function TurnFilesCard({
   );
 
   return (
-    <div className={cn("mb-[5px] rounded-lg border border-edge bg-surface-muted/90 shadow-sm text-xs text-content-muted", rewound && "opacity-60")}>
+    <div className={cn("mb-[5px] overflow-hidden rounded-lg border border-edge bg-surface-card shadow-[var(--shadow-card)] text-xs text-content-muted", rewound && "opacity-60")}>
       <div
         role="button"
         tabIndex={0}
@@ -125,7 +124,7 @@ export function TurnFilesCard({
             setOpen((v) => !v);
           }
         }}
-        className="flex w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover/50"
+        className="flex w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover/40"
       >
         <IconFile size={14} className="shrink-0 text-content-subtle" />
         <span className="whitespace-nowrap font-semibold text-content">
@@ -138,7 +137,7 @@ export function TurnFilesCard({
           {modified > 0 ? t("chatStream.turnFiles.modified", { n: modified }) : ""})
         </span>
         {/* Aggregate change tallies - the headline number reviewers care about. */}
-        <span className="ml-2 inline-flex items-center gap-1 rounded-md bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] tabular-nums">
+        <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-edge/60 bg-surface-card-well px-1.5 py-0.5 font-mono text-[10px] tabular-nums">
           <span className="text-success">+{totals.adds}</span>
           <span className="text-danger">-{totals.dels}</span>
         </span>
@@ -179,7 +178,7 @@ export function TurnFilesCard({
         </div>
       </div>
       {open && (
-        <div className="space-y-1 border-t border-edge px-2 py-2">
+        <div className="space-y-1 border-t border-edge/80 bg-surface-card-well/60 px-2 py-2">
           {files.map((f) => (
             <FileRow key={f.filePath} entry={f} />
           ))}
@@ -304,7 +303,7 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
           void handleOpen();
         }
       }}
-      className="flex w-full cursor-pointer items-center gap-2 rounded-md bg-surface/70 dark:bg-surface-muted/40 px-2 py-1.5 text-left transition-colors hover:bg-surface-hover"
+      className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-edge/50 bg-surface-card-item px-2 py-1.5 text-left transition-colors hover:border-edge hover:bg-surface-hover/70"
       title={t("chatStream.turnFiles.reviewDiff")}
     >
       <span aria-hidden title={isCreated ? t("chatStream.turnFiles.createdThisTurn") : t("chatStream.turnFiles.modifiedThisTurn")} className="shrink-0 text-content-subtle">

@@ -128,7 +128,7 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
 
   if (!proposal) {
     return (
-      <div className={cn("my-2 rounded-xl border border-edge/60 bg-surface-muted/60 p-3.5 text-xs text-content-muted", className)}>
+      <div className={cn("my-2 rounded-xl border border-edge/80 bg-surface-card shadow-[var(--shadow-card)] p-3.5 text-xs text-content-muted", className)}>
         <div className="flex items-center gap-2 text-warning font-medium mb-1">
           <IconAlertCircle size={15} />
           <span>{t("automation.card.parseError")}</span>
@@ -216,7 +216,7 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
   return (
     <div
       className={cn(
-        "my-2.5 w-full max-w-2xl rounded-2xl border border-edge-panel bg-surface shadow-xs transition-all",
+        "my-2.5 w-full max-w-2xl rounded-2xl border border-edge-panel bg-surface-card shadow-[var(--shadow-card)] transition-all",
         !confirmed && "hover:border-accent/35",
         className,
       )}
@@ -284,7 +284,7 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
       {/* 核心配置信息 */}
       <div className="p-3.5 space-y-2.5">
         {/* 定时调度条 */}
-        <div className="flex items-center justify-between gap-2 rounded-xl bg-surface-muted/40 border border-edge/40 px-3 py-2 text-xs">
+        <div className="flex items-center justify-between gap-2 rounded-xl bg-surface-card-well border border-edge/50 px-3 py-2 text-xs">
           <div className="flex items-center gap-2 min-w-0">
             <IconCalendar size={14} className="shrink-0 text-content-subtle" />
             <span className="font-semibold text-content truncate">
@@ -305,8 +305,8 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
 
         {/* 执行提示词独立卡片 */}
         {proposal.prompt && (
-          <div className="rounded-xl border border-edge/40 bg-surface-muted/30 overflow-hidden">
-            <div className="flex items-center justify-between border-b border-edge/30 bg-surface-muted/50 px-3 py-1.5">
+          <div className="rounded-xl border border-edge/50 bg-surface-card-well/80 overflow-hidden">
+            <div className="flex items-center justify-between border-b border-edge/50 bg-surface-card-header px-3 py-1.5">
               <span className="text-[10.5px] font-medium text-content-subtle uppercase tracking-wider font-mono">
                 {t("automation.card.taskPrompt")}
               </span>

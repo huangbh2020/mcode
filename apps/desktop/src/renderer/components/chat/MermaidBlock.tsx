@@ -159,9 +159,9 @@ export const MermaidBlock = memo(function MermaidBlock({
   const showCode = viewMode === "code" || (hasError && viewMode === "chart");
 
   return (
-    <div className="my-[var(--chat-md-gap-md)] overflow-hidden rounded-lg border border-edge/60 bg-surface-muted/60">
+    <div className="my-[var(--chat-md-gap-md)] overflow-hidden rounded-lg border border-edge/80 bg-surface-card shadow-[var(--shadow-card)]">
       {/* Header bar */}
-      <div className="flex items-center justify-between gap-2 border-b border-edge/60 bg-surface-muted/40 px-2 py-1 text-content-subtle [font-size:var(--chat-fs-xxs)]">
+      <div className="flex items-center justify-between gap-2 border-b border-edge/70 bg-surface-card-header px-2 py-1 text-content-subtle [font-size:var(--chat-fs-xxs)]">
         <div className="flex items-center gap-2">
           <span className="font-mono font-medium text-content-muted">mermaid</span>
           <div className="flex items-center rounded border border-edge/40 bg-surface/50 p-0.5 text-[11px]">

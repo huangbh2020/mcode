@@ -195,7 +195,7 @@ export function ProjectBranchIndicator({
   );
 
   return (
-    <div className="flex items-center gap-1.5 text-[12px] text-content-muted">
+    <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-content-muted">
       {!compact && (
         <>
           <IconFolder size={13} className="shrink-0 opacity-70" />
@@ -214,17 +214,17 @@ export function ProjectBranchIndicator({
         >
           <Menu.Trigger
             className={cn(
-              "flex shrink-0 items-center gap-1.5 rounded font-mono text-[11px] text-content-muted transition-all select-none cursor-pointer",
+              "flex min-w-0 max-w-full items-center gap-1.5 rounded font-mono text-[11px] text-content-muted transition-all select-none cursor-pointer",
               triggerClassName
                 ? triggerClassName
                 : "bg-surface-muted px-2 py-1 hover:bg-surface-hover hover:text-content",
             )}
-            title={t("chat.branch.switchTitle")}
+            title={status?.branch ? `${status.branch} — ${t("chat.branch.switchTitle")}` : t("chat.branch.switchTitle")}
           >
             {/* Neutral icon: green is reserved for attention signals in the
                 chrome — the branch name itself is identity, not a warning. */}
             <IconGitBranch size={12} className="shrink-0 text-content-muted" />
-            <span className="max-w-[140px] truncate font-medium text-content">
+            <span className="min-w-0 max-w-[140px] truncate font-medium text-content">
               {status?.branch || "HEAD"}
             </span>
             <IconChevronDown size={11} className="shrink-0 opacity-60" />

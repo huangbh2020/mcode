@@ -634,8 +634,8 @@ function ShikiCodeBlock({
   }, [rawCode, lang, html, expanded]);
 
   return (
-    <pre className="my-[var(--chat-md-gap-md)] overflow-hidden rounded-lg border border-edge/60 bg-surface-muted/60">
-      <div className="flex items-center justify-between gap-2 border-b border-edge/60 bg-surface-muted/40 px-2 py-0.5 text-content-subtle [font-size:var(--chat-fs-xxs)]">
+    <pre className="my-[var(--chat-md-gap-md)] overflow-hidden rounded-lg border border-edge/80 bg-surface-card shadow-[var(--shadow-card)]">
+      <div className="flex items-center justify-between gap-2 border-b border-edge/70 bg-surface-card-header px-2 py-0.5 text-content-subtle [font-size:var(--chat-fs-xxs)]">
         <span className="truncate font-mono">{lang}</span>
         <span className="flex shrink-0 items-center gap-1">
           {clippable && expanded && (
@@ -666,7 +666,7 @@ function ShikiCodeBlock({
         </div>
         {clippable && !expanded && (
           <>
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-surface-muted/90 to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-surface-card/95 to-transparent" />
             <button
               onClick={() => setExpanded(true)}
               className="absolute bottom-1.5 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-edge bg-surface px-2.5 py-0.5 text-content-muted shadow-sm transition-colors hover:bg-surface-hover hover:text-content"

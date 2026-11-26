@@ -120,12 +120,12 @@ export const en = {
   "chat.planApproval.execNewSession": "New thread",
   "chat.planApproval.execNewSessionTitle": "Hand off to a new thread; context rebuilds from the plan",
   "chat.planApproval.pickModel": "Select a model",
-  "chat.planApproval.pickProvider": "Select an SDK",
+  "chat.planApproval.pickProvider": "Select an Agent",
   "chat.planApproval.builtinModelLabel": "Built-in · {label}",
   "chat.planApproval.handoffRemodel": "Run with new model",
   "chat.planApproval.handoffRemodelTitle": "End this turn and execute the plan with the picked model in this thread",
   "chat.planApproval.handoffNewSession": "Hand off to a new thread",
-  "chat.planApproval.handoffNewSessionTitle": "End this turn and execute the plan in a new thread with the picked SDK and model",
+  "chat.planApproval.handoffNewSessionTitle": "End this turn and execute the plan in a new thread with the picked Agent and model",
   "chat.planApproval.rejectFeedbackTitle": "Reject and send your feedback to the model as the reason",
   "chat.planApproval.rejectTitle": "Reject the plan",
   "chat.planApproval.reject": "Reject",
@@ -174,7 +174,7 @@ export const en = {
 
   // ── model config guard dialog ──
   "chat.modelConfig.title": "No model configured",
-  "chat.modelConfig.desc": "The current SDK has no model available. Configure a model before sending.",
+  "chat.modelConfig.desc": "The current Agent has no model available. Configure a model before sending.",
   "chat.modelConfig.configure": "Configure",
 
   // ── effort (thinking level) dropdown ──
@@ -237,10 +237,10 @@ export const en = {
   "chat.permission.tileCodexDefault": "Workspace write",
   "chat.permission.tileCodexFullAccess": "No approval",
 
-  // ── provider (SDK) dropdown ──
-  "chat.provider.locked": "This session's SDK is fixed and cannot be changed",
-  "chat.provider.selectTitle": "Choose the SDK for the session",
-  "chat.provider.section": "Choose SDK",
+  // ── provider (Agent) dropdown ──
+  "chat.provider.locked": "This session's Agent is fixed and cannot be changed",
+  "chat.provider.selectTitle": "Choose the Agent for the session",
+  "chat.provider.section": "Choose Agent",
   "chat.provider.notInstalled": "Runtime not installed",
   "chat.provider.cliTooOld": "CLI too old — update it",
   "chat.provider.manage": "Manage agents…",

@@ -126,12 +126,12 @@ export const zh = {
   "chat.planApproval.execNewSession": "新会话",
   "chat.planApproval.execNewSessionTitle": "转交新会话执行，按计划文档重建上下文",
   "chat.planApproval.pickModel": "选择模型",
-  "chat.planApproval.pickProvider": "选择 SDK",
+  "chat.planApproval.pickProvider": "选择 Agent",
   "chat.planApproval.builtinModelLabel": "内置 · {label}",
   "chat.planApproval.handoffRemodel": "换模型执行",
   "chat.planApproval.handoffRemodelTitle": "结束当前回合，用所选模型在当前会话执行该计划",
   "chat.planApproval.handoffNewSession": "转交新会话执行",
-  "chat.planApproval.handoffNewSessionTitle": "结束当前回合，在所选 SDK 和模型的新会话中执行该计划",
+  "chat.planApproval.handoffNewSessionTitle": "结束当前回合，在所选 Agent 和模型的新会话中执行该计划",
   "chat.planApproval.rejectFeedbackTitle": "拒绝并把你的意见作为理由反馈给模型",
   "chat.planApproval.rejectTitle": "拒绝计划",
   "chat.planApproval.reject": "拒绝",
@@ -180,7 +180,7 @@ export const zh = {
 
   // ── model config guard dialog ──
   "chat.modelConfig.title": "尚未配置模型",
-  "chat.modelConfig.desc": "当前 SDK 没有可用的模型,请先配置模型后再发送。",
+  "chat.modelConfig.desc": "当前 Agent 没有可用的模型,请先配置模型后再发送。",
   "chat.modelConfig.configure": "去配置",
 
   // ── effort (thinking level) dropdown ──
@@ -243,10 +243,10 @@ export const zh = {
   "chat.permission.tileCodexDefault": "工作区可写",
   "chat.permission.tileCodexFullAccess": "无需审批",
 
-  // ── provider (SDK) dropdown ──
-  "chat.provider.locked": "该会话的 SDK 已固定,不可更改",
-  "chat.provider.selectTitle": "选择会话使用的 SDK",
-  "chat.provider.section": "选择 SDK",
+  // ── provider (Agent) dropdown ──
+  "chat.provider.locked": "该会话的 Agent 已固定,不可更改",
+  "chat.provider.selectTitle": "选择会话使用的 Agent",
+  "chat.provider.section": "选择 Agent",
   "chat.provider.notInstalled": "运行时未安装",
   "chat.provider.cliTooOld": "CLI 版本过低，请更新",
   "chat.provider.manage": "管理 Agent…",

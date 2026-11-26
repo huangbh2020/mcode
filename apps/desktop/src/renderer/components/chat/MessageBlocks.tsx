@@ -49,7 +49,7 @@ import { MediaGallery, type MediaBlock, type ToolMeta } from "./mediaGallery.js"
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
 import { flattenFileCitations } from "@renderer/lib/fileCitation.js";
-import { formatPathWithMaxDirsText, sameEditPath } from "@renderer/lib/path.js";
+import { basename, formatPathWithMaxDirsText, sameEditPath } from "@renderer/lib/path.js";
 import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import { BUILT_IN_COMMANDS } from "@renderer/lib/slashCommands.js";
 
@@ -107,13 +107,8 @@ function useKnownSkillNames(): ReadonlyArray<string> {
  *  and goes quiet once the header has settled. */
 const FOLD_STABILIZE_MS = 360;
 
-function toggleHoldPosition(
-  e: React.MouseEvent<HTMLButtonElement>,
-  setOpen: (updater: (v: boolean) => boolean) => void,
-) {
-  const btn = e.currentTarget;
+function holdPositionOnToggle(btn: HTMLButtonElement) {
   const beforeTop = btn.getBoundingClientRect().top;
-  setOpen((v) => !v);
   const startedAt = performance.now();
   const settle = () => {
     // The card can unmount mid-window (turn-end regroup discards expanded
@@ -135,6 +130,15 @@ function toggleHoldPosition(
     if (performance.now() - startedAt < FOLD_STABILIZE_MS) requestAnimationFrame(settle);
   };
   requestAnimationFrame(settle);
+}
+
+function toggleHoldPosition(
+  e: React.MouseEvent<HTMLButtonElement>,
+  setOpen: (updater: (v: boolean) => boolean) => void,
+) {
+  const btn = e.currentTarget;
+  setOpen((v) => !v);
+  holdPositionOnToggle(btn);
 }
 
 /** Render the content blocks of a message.
@@ -327,21 +331,30 @@ const WRITE_EDIT_TOOL_NAMES = new Set([
  *  turn streams. Returned as a payload object (not a type predicate) because
  *  the grouping loops need the path alongside the narrowed block, and a
  *  predicate can't carry both. */
-export function fileEditRowInfo(block: Block): { block: ToolUseBlock; path: string } | null {
-  if (block.kind !== "tool_use") return null;
-  let path: string | null = null;
-  if (block.toolName === "Edit" || block.toolName === "edit") {
-    path = getNormalizedEditInput(block.input)?.filePath ?? null;
-  } else if (block.toolName === "Write" || block.toolName === "write") {
-    path = getNormalizedWriteInput(block.input)?.filePath ?? null;
-  }
-  return path === null ? null : { block, path };
-}
+export type FileEditOpKind = "edit" | "write";
 
-/** Path-only view of {@link fileEditRowInfo} for render-side lookups on
- *  already-typed tool_use blocks (the group header's ToolPathDisplay). */
-export function fileEditRowPath(block: Block): string | null {
-  return fileEditRowInfo(block)?.path ?? null;
+/** Classify a block as an Edit/Write diff row — the two card kinds that carry
+ *  the +/- line-count badges — returning the block narrowed to `tool_use`,
+ *  its file path, and normalized operation kind (`"edit"` or `"write"`);
+ *  null for everything else. Grouping and rendering MUST both go through this
+ *  classifier: a block that joins an edit-run is guaranteed to have valid
+ *  Edit/Write input, while one with malformed input (null here) falls to
+ *  GenericToolCard and breaks the run. MultiEdit/NotebookEdit stay out on
+ *  purpose. Exported for ChatPane's live partition, which merges consecutive
+ *  same-operation rows across assistant messages while the turn streams. */
+export function fileEditRowInfo(
+  block: Block,
+): { block: ToolUseBlock; path: string; opKind: FileEditOpKind } | null {
+  if (block.kind !== "tool_use") return null;
+  if (block.toolName === "Edit" || block.toolName === "edit") {
+    const path = getNormalizedEditInput(block.input)?.filePath ?? null;
+    return path === null ? null : { block, path, opKind: "edit" };
+  }
+  if (block.toolName === "Write" || block.toolName === "write") {
+    const path = getNormalizedWriteInput(block.input)?.filePath ?? null;
+    return path === null ? null : { block, path, opKind: "write" };
+  }
+  return null;
 }
 
 /** Interactive/meta/planning tools that require standalone visibility and user focus. */
@@ -378,18 +391,18 @@ export function isFoldableBlock(b: Block): b is ProceduralBlock {
  *     (a narration line splits the surrounding calls into two groups).
  *   - Read and the file-mutation tools (Write/Edit/MultiEdit) remain standalone:
  *     their cards carry the file path and diff which are high-value signals.
- *   - EXCEPTION to the standalone rule: ADJACENT same-file Edit/Write rows
- *     (per fileEditRowPath) accumulate into an `editRun` and render as ONE
- *     collapsible group with summed +/- counts (2026-11-18, user request) —
- *     a burst of edits to one file takes a single row, not N. Any other block
- *     (narration, thinking, a different file's edit, a generic tool card)
+ *   - EXCEPTION to the standalone rule: ADJACENT same-operation Edit or Write
+ *     rows (per fileEditRowInfo.opKind) accumulate into an `editRun` and render
+ *     as ONE single-line row listing the operated filenames (without paths;
+ *     clicking a filename expands its diff/content). Any other block
+ *     (narration, thinking, a different operation, a generic tool card)
  *     breaks the run: adjacent-only grouping. A length-1 run stays a plain
  *     `single` so the common case is unchanged. */
 function groupBlocks(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   let run: ProceduralBlock[] = [];
   let editRun: ToolUseBlock[] = [];
-  let editRunPath: string | null = null;
+  let editRunOp: FileEditOpKind | null = null;
   let media: MediaBlock[] = [];
   let atts: Extract<Block, { kind: "attachment" }>[] = [];
   const flushTools = () => {
@@ -410,7 +423,7 @@ function groupBlocks(blocks: Block[]): Segment[] {
         out.push({ kind: "editRun", blocks: editRun });
       }
       editRun = [];
-      editRunPath = null;
+      editRunOp = null;
     }
   };
   const flushMedia = () => {
@@ -444,19 +457,19 @@ function groupBlocks(blocks: Block[]): Segment[] {
       flushMedia();
       atts.push(b);
     } else if (editRow !== null) {
-      // Edit/Write diff row: extend the open same-file run, or start a new
+      // Edit/Write diff row: extend the open same-operation run, or start a new
       // one. Ops runs and edit runs are mutually exclusive at any point in
       // the stream (a block lands in one or the other), so the flush order
       // between them never matters.
       flushTools();
       flushMedia();
       flushAttachments();
-      if (editRun.length > 0 && editRunPath !== null && sameEditPath(editRunPath, editRow.path)) {
+      if (editRun.length > 0 && editRunOp === editRow.opKind) {
         editRun.push(editRow.block);
       } else {
         flushEditRun();
         editRun.push(editRow.block);
-        editRunPath = editRow.path;
+        editRunOp = editRow.opKind;
       }
     } else if (isFoldableBlock(b)) {
       flushEditRun();
@@ -1689,7 +1702,7 @@ function AttachmentCard({
           "inline-flex items-center gap-1.5 rounded-lg border px-2 py-0.5 text-[11px] transition-all",
           open
             ? "border-accent/60 bg-accent/10 text-content ring-1 ring-accent/30 shadow-xs"
-            : "border-edge/70 bg-surface-muted/70 text-content hover:bg-surface-hover/80 hover:border-edge shadow-2xs",
+            : "border-edge/70 bg-surface-card text-content hover:bg-surface-hover/80 hover:border-edge shadow-2xs",
         )}
       >
         {isFile ? (
@@ -1887,17 +1900,17 @@ function AttachmentStackDeck({ blocks }: { blocks: Extract<Block, { kind: "attac
           {/* Layer 2: bottom deck layer (shown when 3+ cards) */}
           {count >= 3 && (
             <div
-              className="pointer-events-none absolute inset-0 rounded-lg border border-edge/50 bg-surface-muted/80 shadow-2xs transition-transform duration-200 translate-y-[6px] scale-[0.93] opacity-40 group-hover:translate-y-[7px] group-hover:scale-[0.94] group-hover:opacity-60"
+              className="pointer-events-none absolute inset-0 rounded-lg border border-edge/50 bg-surface-card-well shadow-2xs transition-transform duration-200 translate-y-[6px] scale-[0.93] opacity-60 group-hover:translate-y-[7px] group-hover:scale-[0.94] group-hover:opacity-80"
             />
           )}
 
           {/* Layer 1: middle deck layer (shown when 2+ cards) */}
           <div
-            className="pointer-events-none absolute inset-0 rounded-lg border border-edge/60 bg-surface-muted/90 shadow-2xs transition-transform duration-200 translate-y-[3px] scale-[0.96] opacity-70 group-hover:translate-y-[3.5px] group-hover:scale-[0.97] group-hover:opacity-85"
+            className="pointer-events-none absolute inset-0 rounded-lg border border-edge/60 bg-surface-card shadow-2xs transition-transform duration-200 translate-y-[3px] scale-[0.96] opacity-85 group-hover:translate-y-[3.5px] group-hover:scale-[0.97] group-hover:opacity-95"
           />
 
           {/* Top card: interactive header */}
-          <div className="relative z-10 inline-flex items-center gap-1.5 rounded-lg border border-edge/80 bg-surface px-2.5 py-1 text-[11px] shadow-2xs transition-all group-hover:border-edge group-hover:bg-surface-hover/60">
+          <div className="relative z-10 inline-flex items-center gap-1.5 rounded-lg border border-edge/80 bg-surface-card-item px-2.5 py-1 text-[11px] shadow-2xs transition-all group-hover:border-edge group-hover:bg-surface-hover/60">
             {isFirstFile ? (
               isFirstImage ? (
                 <IconPhoto size={12} className="shrink-0 text-violet-500 opacity-90" />
@@ -1922,7 +1935,7 @@ function AttachmentStackDeck({ blocks }: { blocks: Extract<Block, { kind: "attac
 
   // Expanded macOS Sheet List (方案 B)
   return (
-    <div className="w-full max-w-lg rounded-xl border border-edge/80 bg-surface/95 backdrop-blur-md p-2 shadow-sm space-y-1 my-1 transition-all">
+    <div className="w-full max-w-lg rounded-xl border border-edge/80 bg-surface-card p-2 shadow-[var(--shadow-card)] space-y-1 my-1 transition-all">
       {/* Header bar */}
       <div className="flex items-center justify-between px-1.5 py-1 border-b border-edge/50 text-[11px]">
         <div className="flex items-center gap-1.5 font-medium text-content">
@@ -2282,15 +2295,45 @@ function WriteToolCard({
   );
 }
 
-/** A run of ≥2 consecutive same-file Edit/Write rows merged into ONE
- *  collapsible group (2026-11-18, user request): the header shows the file
- *  path once with the members' +/- line counts SUMMED on the right, collapsed
- *  by default — a burst of edits to one file takes a single row instead of N.
- *  Expanding reveals the member cards, each still individually collapsible to
- *  its diff. A single-block run renders as the plain card via ToolCard so the
- *  common case stays byte-identical to before. Fed by both surfaces that
- *  derive runs: groupBlocks (TurnPanel / message fallback) and ChatPane's
- *  live partition (exported for the running turn's cross-message rows). */
+/** Compute structured diff/preview and +/- line counts for a single Edit or
+ *  Write tool_use block. Shared by EditRunGroup's per-file tally and its
+ *  expanded per-op detail view so counts and diffs never drift. */
+function computeFileOpStats(
+  block: ToolUseBlock,
+  beforeMap: BeforeContentMap | undefined,
+): {
+  filePath: string;
+  adds: number;
+  dels: number;
+  diff: ReturnType<typeof lineDiff> | null;
+  writeContent?: string;
+  writeBefore?: string;
+} | null {
+  const edit = block.toolName === "Edit" || block.toolName === "edit" ? getNormalizedEditInput(block.input) : null;
+  if (edit) {
+    const diff = lineDiff(edit.oldString, edit.newString);
+    const { adds, dels } = diffSummary(diff);
+    return { filePath: edit.filePath, adds, dels, diff };
+  }
+  const write = block.toolName === "Write" || block.toolName === "write" ? getNormalizedWriteInput(block.input) : null;
+  if (write) {
+    const before = lookupBefore(beforeMap, write.filePath);
+    if (before !== undefined) {
+      const diff = lineDiff(before, write.content);
+      const { adds, dels } = diffSummary(diff);
+      return { filePath: write.filePath, adds, dels, diff, writeContent: write.content, writeBefore: before };
+    }
+    const lineCount = write.content ? write.content.split("\n").length : 0;
+    return { filePath: write.filePath, adds: lineCount, dels: 0, diff: null, writeContent: write.content };
+  }
+  return null;
+}
+
+/** A run of ≥2 consecutive same-operation Edit or Write rows merged into ONE
+ *  single-line file-chip bar: only filenames are shown (no directory paths;
+ *  full path on hover), repeated ops on the same file aggregate with ×N, and
+ *  clicking any filename expands that file's diff/content drawer below. A
+ *  single-block run delegates to ToolCard so the length-1 path is unchanged. */
 export function EditRunRow({
   blocks,
   beforeMap,
@@ -2310,10 +2353,27 @@ export function EditRunRow({
   return <EditRunGroup blocks={blocks} beforeMap={beforeMap} live={live} projectPath={projectPath} />;
 }
 
+interface AggregatedEditFile {
+  fullPath: string;
+  fileName: string;
+  ops: Array<{
+    block: ToolUseBlock;
+    adds: number;
+    dels: number;
+    diff: ReturnType<typeof lineDiff> | null;
+    writeContent?: string;
+    writeBefore?: string;
+  }>;
+  adds: number;
+  dels: number;
+  anyRunning: boolean;
+  anyError: boolean;
+}
+
 /** The ≥2-member group body (split from EditRunRow so the length-1 fast path
- *  stays hook-free). Header identity comes from the FIRST member: the row the
- *  group grew from keeps its icon/label/path while later edits only grow the
- *  counters — no relabel flash as the run extends mid-stream. */
+ *  stays hook-free). Displays the operation icon/label once, followed by
+ *  clickable filename-only chips; clicking a filename expands its detail
+ *  drawer directly below the row. */
 function EditRunGroup({
   blocks,
   beforeMap,
@@ -2325,70 +2385,210 @@ function EditRunGroup({
   live?: boolean;
   projectPath?: string | null;
 }) {
-  const [open, setOpen] = useState(false);
+  const [expandedPath, setExpandedPath] = useState<string | null>(null);
   const holdFold = useFoldHold();
   const { t } = useI18n();
   const head = blocks[0];
-  // Summed +/- across members: Edit diffs its old/new strings; Write diffs
-  // against the pre-turn disk content when turn.files has it, falling back
-  // to counting the new content as additions (a fresh file is all adds).
-  // Recomputed when a member lands or its result/status patch flips the
-  // blocks array identity — the same cadence WriteToolCard already pays.
-  const { adds, dels } = useMemo(() => {
-    let adds = 0;
-    let dels = 0;
+
+  const { files, totalAdds, totalDels } = useMemo(() => {
+    const grouped: AggregatedEditFile[] = [];
+    let totalAdds = 0;
+    let totalDels = 0;
     for (const b of blocks) {
-      const edit = b.toolName === "Edit" || b.toolName === "edit" ? getNormalizedEditInput(b.input) : null;
-      if (edit) {
-        const s = diffSummary(lineDiff(edit.oldString, edit.newString));
-        adds += s.adds;
-        dels += s.dels;
-        continue;
+      const stats = computeFileOpStats(b, beforeMap);
+      if (!stats) continue;
+      let entry = grouped.find((g) => sameEditPath(g.fullPath, stats.filePath));
+      if (!entry) {
+        entry = {
+          fullPath: stats.filePath,
+          fileName: basename(stats.filePath),
+          ops: [],
+          adds: 0,
+          dels: 0,
+          anyRunning: false,
+          anyError: false,
+        };
+        grouped.push(entry);
       }
-      const write = b.toolName === "Write" || b.toolName === "write" ? getNormalizedWriteInput(b.input) : null;
-      if (write) {
-        const before = lookupBefore(beforeMap, write.filePath);
-        if (before !== undefined) {
-          const s = diffSummary(lineDiff(before, write.content));
-          adds += s.adds;
-          dels += s.dels;
-        } else {
-          adds += write.content ? write.content.split("\n").length : 0;
-        }
-      }
+      entry.ops.push({
+        block: b,
+        adds: stats.adds,
+        dels: stats.dels,
+        diff: stats.diff,
+        writeContent: stats.writeContent,
+        writeBefore: stats.writeBefore,
+      });
+      entry.adds += stats.adds;
+      entry.dels += stats.dels;
+      if (b.status === "running") entry.anyRunning = true;
+      if (b.status === "error") entry.anyError = true;
+      totalAdds += stats.adds;
+      totalDels += stats.dels;
     }
-    return { adds, dels };
+    return { files: grouped, totalAdds, totalDels };
   }, [blocks, beforeMap]);
+
   const anyRunning = blocks.some((b) => b.status === "running");
   const anyError = blocks.some((b) => b.status === "error");
+  const activeFile = expandedPath
+    ? files.find((f) => sameEditPath(f.fullPath, expandedPath)) ?? null
+    : null;
+
+  const toggleFile = (e: React.MouseEvent<HTMLButtonElement>, fullPath: string) => {
+    const next = expandedPath && sameEditPath(expandedPath, fullPath) ? null : fullPath;
+    holdFold(next !== null);
+    setExpandedPath(next);
+    holdPositionOnToggle(e.currentTarget);
+  };
 
   return (
     <div className={TOOL_CARD_SHELL_CLASS}>
-      <button
-        onClick={(e) => {
-          holdFold(!open);
-          toggleHoldPosition(e, setOpen);
-        }}
-        className={TOOL_CARD_BTN_CLASS}
-      >
-        <ToolIcon name={head.toolName} className="shrink-0 text-content-subtle" />
-        <span className={cn("shrink-0 font-medium text-content-muted", anyRunning && !!live && "shimmer-text")}>
-          {toolDisplayName(t, head.toolName)}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-1.5 py-1">
+        <span className="inline-flex shrink-0 items-center gap-1.5">
+          <ToolIcon name={head.toolName} className="shrink-0 text-content-subtle" />
+          <span className={cn("font-medium text-content-muted", anyRunning && !!live && "shimmer-text")}>
+            {toolDisplayName(t, head.toolName)}
+          </span>
         </span>
-        <ToolPathDisplay filePath={fileEditRowPath(head) ?? ""} className="min-w-0 flex-1" />
-        {anyError && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
-          <span className="tabular-nums text-content-subtle">{t("chatStream.editGroup.count", { n: blocks.length })}</span>
-          {adds > 0 && <span className="text-success">+{adds}</span>}
-          {dels > 0 && <span className="text-danger">−{dels}</span>}
-          <Chevron open={open} />
-        </span>
-      </button>
-      {open && (
-        <div className="mt-1 ml-1.5 space-y-1 border-l border-edge/60 py-1.5 pl-2.5">
-          {blocks.map((b) => (
-            <ToolCard key={b.toolCallId} block={b} defaultOpen={false} beforeMap={beforeMap} liveTurn={live} projectPath={projectPath} />
-          ))}
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5 font-mono">
+          {files.map((f, idx) => {
+            const isActive = activeFile !== null && sameEditPath(activeFile.fullPath, f.fullPath);
+            return (
+              <span key={f.fullPath} className="inline-flex max-w-full items-center gap-1">
+                {idx > 0 && <span className="text-content-subtle/50 select-none">·</span>}
+                <button
+                  type="button"
+                  title={f.fullPath}
+                  onClick={(e) => toggleFile(e, f.fullPath)}
+                  className={cn(
+                    "group/chip inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-left transition-colors border",
+                    isActive
+                      ? "border-accent/40 bg-accent/15 text-accent-strong"
+                      : "border-transparent text-accent-strong hover:border-accent/25 hover:bg-accent/10",
+                    f.anyError && !isActive && "text-danger",
+                  )}
+                >
+                  <span className={cn("truncate font-medium", f.anyRunning && !!live && "shimmer-text")}>
+                    {f.fileName}
+                  </span>
+                  {f.ops.length > 1 && (
+                    <span
+                      className={cn(
+                        "shrink-0 rounded px-1 tabular-nums leading-[15px] [font-size:var(--chat-fs-xxs)]",
+                        isActive
+                          ? "bg-accent/20 text-accent-strong"
+                          : "bg-surface-muted/80 text-content-subtle",
+                      )}
+                    >
+                      {t("chatStream.editGroup.count", { n: f.ops.length })}
+                    </span>
+                  )}
+                  <IconChevronDown
+                    size={11}
+                    className={cn(
+                      "shrink-0 transition-transform",
+                      isActive
+                        ? "rotate-180 opacity-100"
+                        : "opacity-55 group-hover/chip:opacity-100",
+                    )}
+                  />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+        {(anyError || totalAdds > 0 || totalDels > 0) && (
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono [font-size:var(--chat-fs-xxs)]">
+            {anyError && <span className="text-danger">{t("chatStream.opFailed")}</span>}
+            {totalAdds > 0 && <span className="text-success">+{totalAdds}</span>}
+            {totalDels > 0 && <span className="text-danger">−{totalDels}</span>}
+          </span>
+        )}
+      </div>
+
+      {activeFile && (
+        <div className="mt-1 ml-2.5 space-y-2 rounded-r-lg border-l-2 border-accent/40 bg-surface-card/70 py-2 pl-3 pr-2.5">
+          <div className="flex items-center justify-between gap-2 border-b border-edge/60 pb-1.5">
+            <div className="flex min-w-0 items-center gap-1.5 font-mono">
+              <ToolIcon name={head.toolName} className="shrink-0 text-content-subtle" />
+              <FileLink
+                token={activeFile.fullPath}
+                projectPath={projectPath}
+                title={activeFile.fullPath}
+                display={
+                  <span className="truncate font-semibold text-content hover:text-accent-strong transition-colors">
+                    {activeFile.fileName}
+                  </span>
+                }
+              />
+              {activeFile.fullPath !== activeFile.fileName && (
+                <span className="min-w-0 truncate text-content-subtle [font-size:var(--chat-fs-xxs)]" title={activeFile.fullPath}>
+                  {activeFile.fullPath}
+                </span>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2 [font-size:var(--chat-fs-xxs)]">
+              {(activeFile.adds > 0 || activeFile.dels > 0) && (
+                <span className="flex items-center gap-1 font-mono">
+                  {activeFile.adds > 0 && <span className="text-success">+{activeFile.adds}</span>}
+                  {activeFile.dels > 0 && <span className="text-danger">−{activeFile.dels}</span>}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={(e) => toggleFile(e, activeFile.fullPath)}
+                className="rounded border border-edge/70 bg-surface-card-item px-1.5 py-0.5 text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+              >
+                {t("chatStream.attachment.collapse")}
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {activeFile.ops.map((op, idx) => (
+              <div key={op.block.toolCallId} className="space-y-1">
+                {activeFile.ops.length > 1 && (
+                  <div className="flex items-center justify-between font-mono text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                    <span>{t("chatStream.editGroup.changeIndex", { n: idx + 1 })}</span>
+                    <span className="flex items-center gap-1.5">
+                      {op.block.status === "error" && <span className="text-danger">{t("chatStream.opFailed")}</span>}
+                      {op.adds > 0 && <span className="text-success">+{op.adds}</span>}
+                      {op.dels > 0 && <span className="text-danger">−{op.dels}</span>}
+                    </span>
+                  </div>
+                )}
+                {op.diff !== null ? (
+                  <div>
+                    {op.writeBefore !== undefined && (
+                      <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                        {op.writeBefore === "" ? t("chatStream.diff.newFile") : t("chatStream.diff.vsPreTurn")}
+                      </div>
+                    )}
+                    <DiffView diff={op.diff} />
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                      {t("chatStream.diff.newFileContent")}
+                    </div>
+                    <pre className="max-h-80 overflow-auto rounded border border-edge/50 bg-surface-card p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+                      {op.writeContent || t("chatStream.emptyPlaceholder")}
+                    </pre>
+                  </div>
+                )}
+                {op.block.result !== undefined && (
+                  <div>
+                    <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                      {t("chatStream.tool.result")}
+                    </div>
+                    <pre className="max-h-40 overflow-auto rounded border border-edge/50 bg-surface-card p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+                      {truncateResult(op.block.result)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

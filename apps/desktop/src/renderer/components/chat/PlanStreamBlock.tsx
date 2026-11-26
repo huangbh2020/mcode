@@ -62,7 +62,7 @@ export function PlanStreamBlock({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border bg-surface-muted/40 backdrop-blur transition-colors",
+        "overflow-hidden rounded-xl border bg-surface-card shadow-[var(--shadow-card)] transition-colors",
         // Accent-tinted border so the plan card is visually distinct from
         // ordinary tool/text cards in the stream.
         hasApproval

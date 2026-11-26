@@ -9,6 +9,16 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
 import { api } from "@renderer/lib/api.js";
 import type { AntigravityCliStatus, ClaudeCliStatus, RuntimeAgentId } from "@contracts/ipc";
 
+/** Actual transport / runtime backing each provider, shown in the agent
+ *  picker menu so users can tell CLI, SDK, and ACP providers apart. */
+const PROVIDER_TRANSPORT_TAG: Record<string, string> = {
+  "claude-sdk": "CLI",
+  "pi-sdk": "SDK",
+  "codex-sdk": "App-Server",
+  "opencode-sdk": "SDK",
+  "antigravity-acp": "ACP",
+};
+
 /** Provider id → runtime agent ("claude-sdk" → "claude", …). Providers
  *  outside the runtime-backed trio (future ones) map to null and are never
  *  gated. */
@@ -211,7 +221,7 @@ export function ProviderDropdown({
           <Menu.Popup
             ref={popupRef}
             className={cn(
-              "z-50 min-w-[220px] origin-bottom-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
+              "z-50 min-w-[232px] origin-bottom-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
               "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
               "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
               "transition-[transform,opacity] duration-100",
@@ -225,6 +235,7 @@ export function ProviderDropdown({
               const meta = getProviderIcon(p.id);
               const ItemIcon = meta.Icon;
               const available = isAvailable(p.id);
+              const transportTag = PROVIDER_TRANSPORT_TAG[p.id];
               return (
                 <Menu.Item
                   key={p.id}
@@ -240,6 +251,18 @@ export function ProviderDropdown({
                   <span className="flex min-w-0 items-center gap-2">
                     <ItemIcon size={14} className={cn("shrink-0", meta.color)} />
                     <span className="truncate font-medium">{p.displayName}</span>
+                    {transportTag && (
+                      <span
+                        className={cn(
+                          "shrink-0 rounded px-1 py-0.5 font-mono text-[10px] leading-none",
+                          activeItem
+                            ? "bg-accent/15 text-accent"
+                            : "bg-surface-muted text-content-subtle",
+                        )}
+                      >
+                        {transportTag}
+                      </span>
+                    )}
                   </span>
                   {!available ? (
                     <span className="shrink-0 text-[11px] text-content-subtle">

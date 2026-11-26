@@ -78,6 +78,7 @@ export const zh = {
   "chatStream.tool.result": "结果",
   "chatStream.lineCount": "{n} 行",
   "chatStream.editGroup.count": "×{n}",
+  "chatStream.editGroup.changeIndex": "修改 #{n}",
   "chatStream.emptyPlaceholder": "(空)",
   "chatStream.truncatedSuffix": "(已截断)",
 

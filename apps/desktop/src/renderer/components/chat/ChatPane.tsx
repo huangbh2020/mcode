@@ -56,9 +56,8 @@ import {
   FILE_DRAG_MIME,
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
-import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, fileEditRowInfo, EditRunRow, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
+import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, fileEditRowInfo, EditRunRow, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock, type FileEditOpKind } from "./MessageBlocks.js";
 import { flattenFileCitations } from "@renderer/lib/fileCitation.js";
-import { sameEditPath } from "@renderer/lib/path.js";
 import { MediaLightbox, MediaThumbImage, type MediaBlock, type MediaItem } from "./mediaGallery.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
@@ -515,12 +514,12 @@ type RenderItem =
       tightTop?: boolean;
     }
   | {
-      // Live-turn cross-message edit run: consecutive same-file Edit/Write
-      // rows (fileEditRowInfo — isFoldableBlock=false, so they never join the
-      // ops capsule) merged ACROSS assistant messages into ONE collapsible
-      // group while the turn streams. The agent loop emits one message per
-      // think→act cycle, and models often fire several edits to one file
-      // back-to-back — per-message rows would repeat the file path N times.
+      // Live-turn cross-message edit run: consecutive same-operation Edit or
+      // Write rows (fileEditRowInfo — isFoldableBlock=false, so they never join
+      // the ops capsule) merged ACROSS assistant messages into ONE single-line
+      // file-chip row while the turn streams. The agent loop emits one message
+      // per think→act cycle, and models often fire several edits across files
+      // back-to-back — per-message rows would stretch the stream vertically.
       // Exists only in the live layout — the completed turn folds everything
       // into a turnGroup/TurnPanel, where groupBlocks re-derives the same
       // runs over the flat list.
@@ -751,10 +750,10 @@ function groupMessagesForRender(
             leading?: Block[];
           }
         | {
-            // Consecutive same-file Edit/Write rows merged into ONE
-            // collapsible group (EditRunRow). No leading absorption: buffered
-            // narration flushes as its own row first, so the group header
-            // always mirrors the first edit row it grew from.
+            // Consecutive same-operation Edit/Write rows merged into ONE
+            // single-line file-chip group (EditRunRow). No leading absorption:
+            // buffered narration flushes as its own row first, so arrival
+            // order stays intact.
             kind: "editRun";
             blocks: ToolUseBlock[];
             anchorId: string;
@@ -763,11 +762,12 @@ function groupMessagesForRender(
         | { kind: "msg"; msg: ChatMessage; blocks: Block[]; key: string };
       const rows: LiveRow[] = [];
       let openOps: { blocks: ProceduralBlock[]; anchorId: string; leading: Block[] } | null = null;
-      // Open same-file edit run — mirror of openOps for Edit/Write diff rows
+      // Open same-operation edit run — mirror of openOps for Edit/Write diff rows
       // (fileEditRowInfo: isFoldableBlock=false, so they never join a
-      // capsule). Runs only extend with the SAME file (sameEditPath); a
-      // different file or any display block breaks them.
-      let openEdit: { blocks: ToolUseBlock[]; anchorId: string; path: string } | null = null;
+      // capsule). Runs extend across consecutive calls of the SAME operation
+      // (`"edit"` or `"write"`); a different operation or any display block
+      // breaks them.
+      let openEdit: { blocks: ToolUseBlock[]; anchorId: string; opKind: FileEditOpKind } | null = null;
       let curMsg: ChatMessage | null = null;
       let curBlocks: Block[] = [];
       // Occurrence counters for unique row keys. One message CAN split into
@@ -830,13 +830,13 @@ function groupMessagesForRender(
         // are never foldable, so checking first is semantically identical.
         const editRow = fileEditRowInfo(block);
         if (editRow !== null) {
-          // Same-file Edit/Write row: extend the open run, or start a new one.
-          // Runs only merge when ADJACENT — a different file path, a capsule
+          // Same-operation Edit/Write row: extend the open run, or start a new one.
+          // Runs only merge when ADJACENT — a different operation, a capsule
           // row, or a display block all break the run. While a run is open
           // no display blocks can be buffered (they flush it), so curMsg is
           // provably null here; the flushMsg guards are cheap invariants.
           flushOps();
-          if (openEdit && sameEditPath(openEdit.path, editRow.path)) {
+          if (openEdit && openEdit.opKind === editRow.opKind) {
             if (curMsg && curMsg !== msg) flushMsg();
             openEdit.blocks.push(editRow.block);
           } else {
@@ -845,7 +845,7 @@ function groupMessagesForRender(
             // emits as its own row BEFORE the run opens, keeping arrival
             // order: narration row, then the group row beneath it.
             flushMsg();
-            openEdit = { blocks: [editRow.block], anchorId: msg.id, path: editRow.path };
+            openEdit = { blocks: [editRow.block], anchorId: msg.id, opKind: editRow.opKind };
           }
         } else if (isFoldableBlock(block)) {
           // A capsule row between two edit rows breaks the edit run: only
@@ -6038,7 +6038,7 @@ function UserMessageEditor({
             return (
               <span
                 key={att.id}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-edge/70 bg-surface-muted/70 py-0.5 pl-2 pr-1 text-[11px] text-content shadow-2xs transition-all hover:bg-surface-hover/80 hover:border-edge"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-edge/70 bg-surface-card py-0.5 pl-2 pr-1 text-[11px] text-content shadow-2xs transition-all hover:bg-surface-hover/80 hover:border-edge"
                 title={att.block.filePath ?? att.block.preview}
               >
                 {isFile ? (

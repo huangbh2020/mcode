@@ -34,6 +34,10 @@ export default {
           DEFAULT: "rgb(var(--surface) / <alpha-value>)",
           muted: "rgb(var(--surface-muted) / <alpha-value>)",
           hover: "rgb(var(--surface-hover) / <alpha-value>)",
+          card: "rgb(var(--surface-card) / <alpha-value>)",
+          "card-header": "rgb(var(--surface-card-header) / <alpha-value>)",
+          "card-well": "rgb(var(--surface-card-well) / <alpha-value>)",
+          "card-item": "rgb(var(--surface-card-item) / <alpha-value>)",
         },
         content: {
           DEFAULT: "rgb(var(--content) / <alpha-value>)",

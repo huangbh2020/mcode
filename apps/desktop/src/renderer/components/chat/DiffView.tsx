@@ -33,7 +33,7 @@ export function DiffView({
 
   if (diff.length === 0) {
     return (
-      <div className="rounded bg-surface-muted/60 p-2 text-content-subtle [font-size:var(--chat-fs-xs)]">
+      <div className="rounded border border-edge/60 bg-surface-card p-2 text-content-subtle [font-size:var(--chat-fs-xs)]">
         {t("chatStream.diff.noChanges")}
       </div>
     );
@@ -45,7 +45,7 @@ export function DiffView({
   const rows = annotateDiffWithLineNumbers(diff);
 
   return (
-    <div className={cn("overflow-auto rounded bg-surface-muted/60 font-mono leading-relaxed [font-size:var(--chat-fs-xs)]", scrollClassName)}>
+    <div className={cn("overflow-auto rounded border border-edge/60 bg-surface-card font-mono leading-relaxed [font-size:var(--chat-fs-xs)]", scrollClassName)}>
       {rows.map((d, i) => {
         // Fixed red/green diff colors that don't shift with the theme - the
         // accent/danger tokens change between light/dark (and track the

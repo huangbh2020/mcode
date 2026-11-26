@@ -73,6 +73,7 @@ export const en = {
   "chatStream.tool.result": "Result",
   "chatStream.lineCount": "{n} lines",
   "chatStream.editGroup.count": "×{n}",
+  "chatStream.editGroup.changeIndex": "Change #{n}",
   "chatStream.emptyPlaceholder": "(empty)",
   "chatStream.truncatedSuffix": "(truncated)",
 

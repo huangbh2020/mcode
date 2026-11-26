@@ -399,7 +399,7 @@ export function ToolbarGitCommit() {
           >
             <Popover.Popup
               className={cn(
-                "flex w-[380px] flex-col gap-2.5 overflow-hidden rounded-xl border border-edge/80 bg-surface/95 backdrop-blur-md p-3 shadow-2xl ring-1 ring-black/5 dark:ring-white/10",
+                "flex w-[400px] max-w-[calc(100vw-24px)] flex-col gap-2.5 overflow-hidden rounded-xl border border-edge/80 bg-surface/95 backdrop-blur-md p-3 shadow-2xl ring-1 ring-black/5 dark:ring-white/10",
                 "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
                 "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
                 "transition-[transform,opacity] duration-100",
@@ -409,14 +409,14 @@ export function ToolbarGitCommit() {
                   pill, moved here 2026-11-10) + repo switcher + actions.
                   While this menu is open, `branchMenuOpen` pins the popover
                   open — see the Popover.Root gate above. */}
-              <div className="flex items-center gap-1.5">
-                <div className="flex items-center gap-1.5">
-                  <div className="flex h-5 w-5 items-center justify-center rounded-md bg-accent/10 text-accent">
-                    <IconGitCommit size={13} />
-                  </div>
-                  <span className="text-xs font-semibold text-content">
-                    {t("layout.gitCommit.title")}
-                  </span>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent">
+                  <IconGitCommit size={13} />
+                </div>
+                <span className="shrink-0 whitespace-nowrap text-xs font-semibold text-content">
+                  {t("layout.gitCommit.title")}
+                </span>
+                <div className="min-w-0 flex-1">
                   <ProjectBranchIndicator
                     projectPath={projectPath}
                     projectName=""
@@ -424,21 +424,19 @@ export function ToolbarGitCommit() {
                     repos={repos}
                     repoOverride={selectedRepo}
                     onSwitcherMenuOpenChange={setBranchMenuOpen}
-                    triggerClassName="flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-content-muted hover:bg-surface-hover hover:text-content transition-colors cursor-pointer"
+                    triggerClassName="flex min-w-0 max-w-full items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-content-muted hover:bg-surface-hover hover:text-content transition-colors cursor-pointer"
                   />
                 </div>
 
-                <div className="flex-1" />
-
                 {/* Multi-repo switcher */}
                 {repos.length > 1 && (
-                  <div className="relative flex items-center">
+                  <div className="relative flex min-w-0 max-w-[104px] shrink items-center">
                     <select
                       value={selectedPath ?? ""}
                       onChange={(e) => handleRepoSwitch(e.target.value)}
-                      title={t("layout.gitCommit.repoSelectTitle")}
+                      title={selectedRepo.name ? `${selectedRepo.name} — ${t("layout.gitCommit.repoSelectTitle")}` : t("layout.gitCommit.repoSelectTitle")}
                       className={cn(
-                        "max-w-[140px] truncate rounded-md border border-edge/60 bg-surface-muted/60 py-0.5 pl-1.5 pr-5 font-mono text-[10px] text-content-muted",
+                        "max-w-full min-w-0 truncate rounded-md border border-edge/60 bg-surface-muted/60 py-0.5 pl-1.5 pr-5 font-mono text-[10px] text-content-muted",
                         "outline-none appearance-none cursor-pointer hover:bg-surface-hover/80 hover:text-content focus:border-accent/80 transition-colors",
                       )}
                     >
@@ -460,7 +458,7 @@ export function ToolbarGitCommit() {
                   onClick={() => void refreshStatus()}
                   disabled={isRefreshing}
                   title={t("layout.gitCommit.refresh")}
-                  className="flex h-6 w-6 items-center justify-center rounded-md text-content-subtle hover:bg-surface-hover hover:text-content transition-colors"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-content-subtle hover:bg-surface-hover hover:text-content transition-colors"
                 >
                   <IconRefresh
                     size={12}
@@ -471,7 +469,7 @@ export function ToolbarGitCommit() {
                 {/* Close button */}
                 <button
                   onClick={() => setOpen(false)}
-                  className="flex h-6 w-6 items-center justify-center rounded-md text-content-subtle hover:bg-surface-hover hover:text-content transition-colors"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-content-subtle hover:bg-surface-hover hover:text-content transition-colors"
                 >
                   <IconX size={12} />
                 </button>

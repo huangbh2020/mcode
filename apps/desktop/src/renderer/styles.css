@@ -103,8 +103,13 @@ div:has(> [role="menu"]) {
    * the deeper step (~1.16:1) plus the darker --edge below restores the
    * track/recess layering without touching the white "paper" work area. */
   --surface: 255 255 255; /* white — center pane, right panel, popups */
-  --surface-muted: 240 242 246; /* cool zinc-100/150 — sidebar track, inset wells */
+  --surface-muted: 240 242 246; /* cool zinc-100/150 — sidebar track, toolbar */
   --surface-hover: 226 229 235; /* cool zinc-200 — hover/active fills */
+  --surface-card: 249 250 252; /* #f9fafc — chat cards, distinct from toolbar & white canvas */
+  --surface-card-header: 243 245 249; /* #f3f5f9 — card/code-block header strip */
+  --surface-card-well: 244 246 250; /* #f4f6fa — inset well inside cards */
+  --surface-card-item: 255 255 255; /* #ffffff — elevated rows inside cards */
+  --shadow-card: 0 1px 3px rgb(15 23 42 / 0.06), 0 1px 2px rgb(15 23 42 / 0.04);
   /* content (text) — deepened one stop for stronger contrast on white.
    * Body stays at near-black zinc-950; muted/subtle drop one shade each
    * (zinc-700 / zinc-500) so secondary text doesn't wash out. */
@@ -233,6 +238,11 @@ div:has(> [role="menu"]) {
                               * and keeping the same slate tint so the three
                               * layers (surface → muted → hover) stay on one
                               * cool ramp. */
+  --surface-card: 33 37 46; /* #21252e — chat cards, sits between canvas (#1a1d24) and toolbar (#2c313c) */
+  --surface-card-header: 38 43 54; /* #262b36 — card/code-block header strip */
+  --surface-card-well: 28 32 40; /* #1c2028 — inset well inside cards */
+  --surface-card-item: 39 44 55; /* #272c37 — elevated rows inside cards */
+  --shadow-card: 0 2px 8px rgb(0 0 0 / 0.28), 0 1px 2px rgb(0 0 0 / 0.18);
   --content: 231 232 236; /* soft off-white (#e7e8ec) — ~14.5:1 on the new
                            * surface, still well above WCAG AAA (7:1) */
   /* Secondary/tertiary text — brightened one step from the old
@@ -2234,6 +2244,10 @@ html.sketch:not(.dark) {
   --surface: 252 250 243; /* #fcfaf3 暖纸 — 主面 */
   --surface-muted: 246 242 231; /* #f6f2e7 内衬/侧栏轨道/代码井 */
   --surface-hover: 238 233 219; /* #eee9db hover 填充 */
+  --surface-card: 254 252 247; /* #fefcf7 卡片底 */
+  --surface-card-header: 249 246 237; /* #f9f6ed 卡片顶栏 */
+  --surface-card-well: 248 244 234; /* #f8f4ea 卡片内凹槽 */
+  --surface-card-item: 255 254 250; /* #fffefa 卡片内行 */
   --content: 58 52 44; /* #3a342c 墨色 */
   --content-muted: 109 100 86; /* #6d6456 */
   --content-subtle: 141 131 113; /* #8d8371 */
@@ -2261,6 +2275,10 @@ html.sketch.dark {
   --surface: 59 49 38; /* #3b3126 暖深底 — 主面 */
   --surface-muted: 51 42 32; /* #332a20 内衬/侧栏轨道/代码井 */
   --surface-hover: 70 59 46; /* #463b2e hover 填充 */
+  --surface-card: 66 55 43; /* #42372b 卡片底 */
+  --surface-card-header: 73 61 48; /* #493d30 卡片顶栏 */
+  --surface-card-well: 55 46 35; /* #372e23 卡片内凹槽 */
+  --surface-card-item: 75 63 50; /* #4b3f32 卡片内行 */
   --content: 240 231 213; /* #f0e7d5 粉笔白 */
   --content-muted: 205 194 172; /* #cdc2ac */
   --content-subtle: 172 160 137; /* #aca089 */

@@ -40,7 +40,7 @@ export const ContentTagChip = forwardRef<
         "composer-tag-in inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors",
         open
           ? "border-accent/60 bg-accent/10 text-content ring-1 ring-accent/30 shadow-xs"
-          : "border-edge/70 bg-surface-muted/70 text-content hover:bg-surface-hover/80 hover:border-edge shadow-2xs",
+          : "border-edge/70 bg-surface-card text-content hover:bg-surface-hover/80 hover:border-edge shadow-2xs",
       )}
     >
       <button
