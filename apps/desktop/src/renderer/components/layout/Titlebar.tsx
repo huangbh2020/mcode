@@ -11,6 +11,8 @@ import {
   IconSearch,
 } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { findSession } from "@renderer/components/layout/SessionTabs.js";
+import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { ToolbarGitCommit } from "@renderer/components/layout/ToolbarGitCommit.js";
 import { WorktreeMergeToolbarButton } from "@renderer/components/chat/WorktreeMergeBack.js";
@@ -206,7 +208,7 @@ export function Titlebar({
             {!isBrowserOverlay && (
               <>
                 <span className="mx-0.5 h-3.5 w-px shrink-0 bg-edge" aria-hidden />
-                <ActiveProjectBadge />
+                <ActiveContextBadge />
                 <div
                   className={cn(
                     "flex h-7 shrink-0 items-stretch rounded-lg border transition-colors",
@@ -255,7 +257,7 @@ export function Titlebar({
               </>
             )}
             {/* 方案 4：标签栏已移入中间面板顶部，顶栏中间留作简洁的全局命令搜索条（两侧空白仍可拖拽窗口）。 */}
-            <div className="flex min-w-0 flex-1 items-center justify-center px-2">
+            <div className="flex min-w-[100px] flex-1 items-center justify-center px-2">
               {!isBrowserOverlay && (
                 <button
                   type="button"
@@ -347,46 +349,65 @@ export function Titlebar({
   );
 }
 
-/** Active-session project badge: resolves the active session's owning project
- *  (falling back to activeProjectId when no session is open) so switching
- *  sessions/tabs immediately reflects which project the current thread belongs to. */
-function ActiveProjectBadge() {
-  const project = useSessionStore((s) => {
-    let pid: string | null = null;
-    if (s.activeSessionId) {
-      const sess =
-        s.sessions.find((x) => x.id === s.activeSessionId) ??
-        s.pinnedSessions.find((x) => x.id === s.activeSessionId) ??
-        s.streamSessions.find((x) => x.id === s.activeSessionId);
-      if (sess) {
-        pid = sess.projectId;
-      } else {
-        for (const list of Object.values(s.sessionsByProject)) {
-          const hit = list?.find((x) => x.id === s.activeSessionId);
-          if (hit) {
-            pid = hit.projectId;
-            break;
-          }
-        }
-      }
-    }
-    const targetId = pid ?? s.activeProjectId;
-    if (!targetId) return null;
-    return s.projects.find((p) => p.id === targetId) ?? null;
+/** Active-context breadcrumb badge: combines the owning project and active
+ *  session title in a single chip (`project / session`), falling back to the
+ *  project alone when no session is open. */
+function ActiveContextBadge() {
+  const { t } = useI18n();
+  const session = useSessionStore((s) => {
+    if (!s.activeSessionId) return null;
+    return (
+      s.sessions.find((x) => x.id === s.activeSessionId) ??
+      findSession(
+        s.sessionsByProject,
+        s.pinnedSessions,
+        s.streamSessions,
+        s.activeSessionId,
+        s.orchWorkersById,
+      ) ??
+      null
+    );
   });
+  const activeProjectId = useSessionStore((s) => s.activeProjectId);
+  const targetProjectId = session?.projectId ?? activeProjectId;
+  const project = useSessionStore((s) =>
+    targetProjectId ? s.projects.find((p) => p.id === targetProjectId) ?? null : null,
+  );
   const projectColors = useSessionStore((s) => s.projectColors);
-  if (!project) return null;
+  if (!project && !session) return null;
+
+  const sessionTitle = session ? session.title?.trim() || t("lib.untitledSession") : null;
+  const providerMeta = session ? getProviderIcon(session.providerId) : null;
+  const ProviderIcon = providerMeta?.Icon;
+
   return (
     <div
-      className="flex h-7 max-w-[180px] shrink-0 items-center gap-1.5 rounded-lg border border-edge bg-surface-muted/60 px-2 text-xs font-medium text-content"
+      className="flex h-7 min-w-0 max-w-[340px] shrink items-center gap-1.5 rounded-lg border border-edge bg-surface-muted/60 px-2 text-xs font-medium text-content"
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-      title={project.path}
     >
-      <ProjectAvatar
-        name={project.name}
-        color={projectDisplayColor(project, projectColors)}
-      />
-      <span className="truncate">{project.name}</span>
+      {project && (
+        <span
+          className="flex min-w-0 max-w-[140px] shrink-0 items-center gap-1.5"
+          title={project.path}
+        >
+          <ProjectAvatar
+            name={project.name}
+            color={projectDisplayColor(project, projectColors)}
+          />
+          <span className="truncate">{project.name}</span>
+        </span>
+      )}
+      {project && sessionTitle && (
+        <span className="shrink-0 text-content-subtle" aria-hidden>
+          /
+        </span>
+      )}
+      {sessionTitle && ProviderIcon && providerMeta && (
+        <span className="flex min-w-0 items-center gap-1.5" title={sessionTitle}>
+          <ProviderIcon size={13} className={cn("shrink-0", providerMeta.color)} />
+          <span className="min-w-0 truncate">{sessionTitle}</span>
+        </span>
+      )}
     </div>
   );
 }

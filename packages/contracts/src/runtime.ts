@@ -116,6 +116,17 @@ export interface ToolUseEvent {
   messageId?: string;
 }
 
+/** Incremental input/name refinement for an already-emitted `tool.use`
+ *  (e.g. Antigravity ACP emits `tool_call` before `rawInput`/`diff` arrives in
+ *  subsequent `tool_call_update` frames). */
+export interface ToolUseUpdateEvent {
+  type: "tool.use.update";
+  sessionId: string;
+  toolCallId: string;
+  toolName?: string;
+  input: unknown;
+}
+
 /** A tool finished and returned a result. */
 export interface ToolResultEvent {
   type: "tool.result";
@@ -906,12 +917,23 @@ export interface UpstreamIssueEvent {
   attempts: number;
 }
 
+/** Live pre-modification file baseline emitted as soon as `FileSnapshot.recordPre`
+ *  reads a file during a running turn, so Write cards can render a before/after
+ *  diff immediately without waiting for turn-end `turn.files`. */
+export interface TurnFilePreEvent {
+  type: "turn.filePre";
+  sessionId: string;
+  filePath: string;
+  before: string;
+}
+
 /** The union of all runtime events. */
 export type RuntimeEvent =
   | TextDeltaEvent
   | MessageCompleteEvent
   | ThinkingEvent
   | ToolUseEvent
+  | ToolUseUpdateEvent
   | ToolResultEvent
   | ApprovalRequestEvent
   | TodoUpdateEvent
@@ -927,6 +949,7 @@ export type RuntimeEvent =
   | ErrorEvent
   | TurnDoneEvent
   | TurnIncompleteEvent
+  | TurnFilePreEvent
   | TurnFilesEvent
   | TurnRewoundEvent
   | CompactResultEvent

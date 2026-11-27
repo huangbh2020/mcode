@@ -330,6 +330,173 @@ async function run(): Promise<void> {
   assert.equal(sanitized["AGY_ACP_FORCE_FILE"], undefined, "AGY_ACP_* override must be stripped");
   assert.equal(sanitized["AGY_CLI_DISABLE_AUTO_UPDATE"], "true");
 
+  // 9. Verify elicitation/create folds companion *_other fields and splits answers back
+  let observedQuestionsCount = 0;
+  const elicitAdapter = new AntigravityMessageAdapter({
+    sessionId: "s-elicit",
+    acpSessionId: "agy-sess-elicit",
+    cwd: process.cwd(),
+    permissionMode: "default",
+    ctx: {
+      emit: () => {},
+      requestUserInput: async (req) => {
+        observedQuestionsCount = req.questions.length;
+        return {
+          answers: {
+            [req.questions[0]!.question]: "custom free-form text",
+            [req.questions[1]!.question]: ["Option A", "extra note"],
+            [req.questions[2]!.question]: "opt_2",
+          },
+        };
+      },
+      log: { info: () => {}, warn: () => {}, error: () => {} },
+    },
+    snapshot: new FileSnapshot(),
+    abortSignal: new AbortController().signal,
+  });
+  const elicitRes = await elicitAdapter.handleElicitationRequest(
+    {
+      sessionId: "agy-sess-elicit",
+      mode: "form",
+      message: "Questions",
+      requestedSchema: {
+        properties: {
+          q0: {
+            type: "string",
+            title: "Scope",
+            description: "Pick scope",
+            oneOf: [{ const: "a", title: "Alpha" }, { const: "b", title: "Beta" }],
+          },
+          q0_other: {
+            type: "string",
+            title: "Other",
+            description: "Optional free-form answer to: Pick scope",
+          },
+          q1: {
+            type: "array",
+            title: "Tags",
+            description: "Pick tags",
+            items: {
+              anyOf: [{ const: "opt_a", title: "Option A" }, { const: "opt_b", title: "Option B" }],
+            },
+          },
+          q1_other: {
+            type: "string",
+            title: "Other",
+            description: "Optional free-form answer to: Pick tags",
+          },
+          q2: {
+            type: "string",
+            title: "Mode",
+            enum: ["opt_1", "opt_2"],
+          },
+          q2_other: {
+            type: "string",
+            title: "Other",
+            description: "Optional free-form answer to: Mode",
+          },
+        },
+        required: ["q0", "q1", "q2"],
+      },
+    },
+    new AbortController().signal,
+  );
+  assert.equal(observedQuestionsCount, 3, "companion *_other fields must be folded into parent questions");
+  assert.deepEqual(elicitRes, {
+    action: "accept",
+    content: {
+      q0_other: "custom free-form text",
+      q1: ["opt_a"],
+      q1_other: "extra note",
+      q2: "opt_2",
+    },
+  });
+
+  // 10. Verify update_steps normalizes to TodoWrite and emits deduplicated todo.update events
+  const stepEvents: RuntimeEvent[] = [];
+  const stepAdapter = new AntigravityMessageAdapter({
+    sessionId: "s-steps",
+    acpSessionId: "agy-sess-steps",
+    cwd: process.cwd(),
+    permissionMode: "default",
+    ctx: {
+      emit: (e) => stepEvents.push(e),
+      log: { info: () => {}, warn: () => {}, error: () => {} },
+    },
+    snapshot: new FileSnapshot(),
+    abortSignal: new AbortController().signal,
+  });
+  stepAdapter.handleSessionNotification({
+    sessionId: "agy-sess-steps",
+    update: {
+      sessionUpdate: "tool_call",
+      toolCallId: "tc_steps_1",
+      name: "update_steps",
+      title: "update_steps",
+      status: "in_progress",
+      rawInput: {},
+    },
+  });
+  stepAdapter.handleSessionNotification({
+    sessionId: "agy-sess-steps",
+    update: {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "tc_steps_1",
+      name: "update_steps",
+      status: "in_progress",
+      rawInput: {
+        steps: [
+          { title: "Inspect files", status: "in_progress" },
+          { title: "Apply patch", status: "pending" },
+        ],
+      },
+    },
+  });
+  // Duplicate payload must not emit another todo.update
+  stepAdapter.handleSessionNotification({
+    sessionId: "agy-sess-steps",
+    update: {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "tc_steps_1",
+      name: "update_steps",
+      status: "completed",
+      rawInput: {
+        steps: [
+          { title: "Inspect files", status: "in_progress" },
+          { title: "Apply patch", status: "pending" },
+        ],
+      },
+    },
+  });
+  stepAdapter.handleSessionNotification({
+    sessionId: "agy-sess-steps",
+    update: {
+      sessionUpdate: "tool_call",
+      toolCallId: "tc_steps_2",
+      name: "update_steps",
+      status: "completed",
+      rawInput: {
+        steps: [
+          { title: "Inspect files", status: "done" },
+          { title: "Apply patch", status: "skipped" },
+        ],
+      },
+    },
+  });
+  const stepToolUses = stepEvents.filter((e) => e.type === "tool.use");
+  assert.equal(stepToolUses.length, 2);
+  assert.ok(stepToolUses.every((e) => e.type === "tool.use" && e.toolName === "TodoWrite"));
+  const todoUpdates = stepEvents.filter((e) => e.type === "todo.update");
+  assert.equal(todoUpdates.length, 2, "initial empty call and duplicate payload must not emit todo.update");
+  assert.deepEqual(todoUpdates[0]?.type === "todo.update" ? todoUpdates[0].todos : null, [
+    { content: "Inspect files", status: "in_progress", priority: "medium" },
+    { content: "Apply patch", status: "pending", priority: "medium" },
+  ]);
+  assert.deepEqual(todoUpdates[1]?.type === "todo.update" ? todoUpdates[1].todos : null, [
+    { content: "Inspect files", status: "completed", priority: "medium" },
+    { content: "Apply patch", status: "completed", priority: "medium" },
+  ]);
+
   console.log("antigravity-acp-smoke: ALL ASSERTIONS PASSED");
 }
 

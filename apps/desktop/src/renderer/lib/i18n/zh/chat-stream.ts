@@ -79,6 +79,8 @@ export const zh = {
   "chatStream.lineCount": "{n} 行",
   "chatStream.editGroup.count": "×{n}",
   "chatStream.editGroup.changeIndex": "修改 #{n}",
+  "chatStream.readGroup.readIndex": "读取 #{n}",
+  "chatStream.bashGroup.runIndex": "运行 #{n}",
   "chatStream.emptyPlaceholder": "(空)",
   "chatStream.truncatedSuffix": "(已截断)",
 
@@ -132,6 +134,9 @@ export const zh = {
   "chatStream.diff.noChanges": "(无变化)",
   "chatStream.diff.newFile": "新文件",
   "chatStream.diff.vsPreTurn": "与本轮开始前的差异",
+  "chatStream.diff.vsCurrentDisk": "本轮修改前 vs 当前文件（{n} 次编辑）",
+  "chatStream.diff.loadingFile": "正在读取文件差异…",
+  "chatStream.diff.changesOnly": "仅看改动",
   "chatStream.diff.newFileContent": "新文件内容",
 
   // ── TurnFilesCard ──

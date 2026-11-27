@@ -724,99 +724,101 @@ function LeftBarBase() {
   );
 
   return (
-    <div className="flex h-full flex-col px-2 py-2 [font-size:var(--right-panel-font-size)]">
-      {/* 品牌 Logo 与系统名称已移至顶部通栏 Titlebar；左侧栏顶部直接以快捷入口与视图切换开篇。 */}
-      <div className="mb-1.5 flex items-center justify-between px-1">
-        <span className="text-[11px] font-medium text-content-subtle">{t("layout.projects")}</span>
+    <div className="flex h-full flex-col [font-size:var(--right-panel-font-size)]">
+      {/* 顶部工具条：h-10 与中间面板标签栏及右侧栏顶栏齐平，承载全部项目切换器与视图切换。 */}
+      <div className="flex h-10 shrink-0 items-center justify-between gap-1.5 border-b border-edge bg-surface px-2">
+        {activeProjects.length > 0 ? (() => {
+          const focusedProject =
+            activeProjects.find((p) => p.id === (activeProjectId ?? activeSessionProjectId)) ??
+            activeProjects[0] ??
+            null;
+          return (
+            <div className="min-w-0 flex-1">
+              <Menu.Root>
+                <Menu.Trigger
+                  className="flex h-7 w-full items-center justify-between gap-1.5 rounded-lg border border-edge bg-surface-muted/65 px-2 text-left text-xs font-medium text-content transition-colors hover:bg-surface-hover/70"
+                  title={t("layout.switchProject")}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {projectScope === "active" && focusedProject ? (
+                      <>
+                        <ProjectAvatar
+                          name={focusedProject.name}
+                          color={projectDisplayColor(focusedProject, projectColors)}
+                        />
+                        <span className="truncate">{focusedProject.name}</span>
+                      </>
+                    ) : (
+                      <>
+                        <IconFolder size={14} className="shrink-0 text-content-subtle" />
+                        <span className="truncate">{t("layout.allProjects")}</span>
+                      </>
+                    )}
+                  </span>
+                  <IconChevronDown size={13} className="shrink-0 text-content-subtle" />
+                </Menu.Trigger>
+                <Menu.Portal>
+                  <Menu.Positioner side="bottom" align="start" sideOffset={4}>
+                    <Menu.Popup className="z-50 max-h-80 min-w-[210px] max-w-[260px] overflow-y-auto rounded-xl border border-edge bg-surface p-1 shadow-xl">
+                      <Menu.Item
+                        onClick={() => updateProjectScope("all")}
+                        className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                      >
+                        <span className="flex items-center gap-2 truncate">
+                          <IconFolder size={13} className="shrink-0 opacity-75" />
+                          <span className="truncate">{t("layout.allProjects")}</span>
+                        </span>
+                        {projectScope === "all" && <IconCheck size={13} className="shrink-0 text-accent" />}
+                      </Menu.Item>
+                      <div className="my-1 border-t border-edge/70" />
+                      {activeProjects.map((p) => {
+                        const isSelected = projectScope === "active" && focusedProject?.id === p.id;
+                        return (
+                          <Menu.Item
+                            key={p.id}
+                            onClick={() => {
+                              updateProjectScope("active");
+                              void selectProject(p.id);
+                              if (!expandedProjects[p.id]) {
+                                void toggleProjectExpanded(p.id);
+                              }
+                            }}
+                            className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                          >
+                            <span className="flex min-w-0 items-center gap-2">
+                              <ProjectAvatar
+                                name={p.name}
+                                color={projectDisplayColor(p, projectColors)}
+                              />
+                              <span className="truncate">{p.name}</span>
+                            </span>
+                            {isSelected && <IconCheck size={13} className="shrink-0 text-accent" />}
+                          </Menu.Item>
+                        );
+                      })}
+                      <div className="my-1 border-t border-edge/70" />
+                      <Menu.Item
+                        onClick={() => void addProject()}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                      >
+                        <IconPlus size={13} className="shrink-0 opacity-75" />
+                        <span className="truncate">{t("layout.addProject")}</span>
+                      </Menu.Item>
+                    </Menu.Popup>
+                  </Menu.Positioner>
+                </Menu.Portal>
+              </Menu.Root>
+            </div>
+          );
+        })() : (
+          <span className="truncate px-1 text-xs font-medium text-content-subtle">
+            {t("layout.projects")}
+          </span>
+        )}
         <LeftBarModeSwitch />
       </div>
 
-      {/* 方案 4 项目切换器：一键切换聚焦单个项目（纯净会话列表）或展开全部项目树。 */}
-      {activeProjects.length > 0 && (() => {
-        const focusedProject =
-          activeProjects.find((p) => p.id === (activeProjectId ?? activeSessionProjectId)) ??
-          activeProjects[0] ??
-          null;
-        return (
-          <div className="mb-2">
-            <Menu.Root>
-              <Menu.Trigger
-                className="flex w-full items-center justify-between gap-2 rounded-lg border border-edge bg-surface-muted/65 px-2.5 py-1.5 text-left text-xs font-medium text-content transition-colors hover:bg-surface-hover/70"
-                title={t("layout.switchProject")}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  {projectScope === "active" && focusedProject ? (
-                    <>
-                      <ProjectAvatar
-                        name={focusedProject.name}
-                        color={projectDisplayColor(focusedProject, projectColors)}
-                      />
-                      <span className="truncate">{focusedProject.name}</span>
-                    </>
-                  ) : (
-                    <>
-                      <IconFolder size={14} className="shrink-0 text-content-subtle" />
-                      <span className="truncate">{t("layout.allProjects")}</span>
-                    </>
-                  )}
-                </span>
-                <IconChevronDown size={13} className="shrink-0 text-content-subtle" />
-              </Menu.Trigger>
-              <Menu.Portal>
-                <Menu.Positioner side="bottom" align="start" sideOffset={4}>
-                  <Menu.Popup className="z-50 max-h-80 min-w-[210px] max-w-[260px] overflow-y-auto rounded-xl border border-edge bg-surface p-1 shadow-xl">
-                    <Menu.Item
-                      onClick={() => updateProjectScope("all")}
-                      className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
-                    >
-                      <span className="flex items-center gap-2 truncate">
-                        <IconFolder size={13} className="shrink-0 opacity-75" />
-                        <span className="truncate">{t("layout.allProjects")}</span>
-                      </span>
-                      {projectScope === "all" && <IconCheck size={13} className="shrink-0 text-accent" />}
-                    </Menu.Item>
-                    <div className="my-1 border-t border-edge/70" />
-                    {activeProjects.map((p) => {
-                      const isSelected = projectScope === "active" && focusedProject?.id === p.id;
-                      return (
-                        <Menu.Item
-                          key={p.id}
-                          onClick={() => {
-                            updateProjectScope("active");
-                            void selectProject(p.id);
-                            if (!expandedProjects[p.id]) {
-                              void toggleProjectExpanded(p.id);
-                            }
-                          }}
-                          className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
-                        >
-                          <span className="flex min-w-0 items-center gap-2">
-                            <ProjectAvatar
-                              name={p.name}
-                              color={projectDisplayColor(p, projectColors)}
-                            />
-                            <span className="truncate">{p.name}</span>
-                          </span>
-                          {isSelected && <IconCheck size={13} className="shrink-0 text-accent" />}
-                        </Menu.Item>
-                      );
-                    })}
-                    <div className="my-1 border-t border-edge/70" />
-                    <Menu.Item
-                      onClick={() => void addProject()}
-                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
-                    >
-                      <IconPlus size={13} className="shrink-0 opacity-75" />
-                      <span className="truncate">{t("layout.addProject")}</span>
-                    </Menu.Item>
-                  </Menu.Popup>
-                </Menu.Positioner>
-              </Menu.Portal>
-            </Menu.Root>
-          </div>
-        );
-      })()}
-
+      <div className="flex min-h-0 flex-1 flex-col px-2 py-2">
       {/* Header */}
       <div className="group mb-1 flex items-center justify-between px-1">
         <h3 className="font-semibold uppercase tracking-wide text-content-subtle [font-size:var(--rp-fs-md)]">
@@ -1119,6 +1121,7 @@ function LeftBarBase() {
         <MobileConnectButton />
       </div>
       )}
+      </div>
 
       {/* Right-click context menu for session rows. Rendered once at the bar
           level and positioned at the cursor via a virtual anchor. */}

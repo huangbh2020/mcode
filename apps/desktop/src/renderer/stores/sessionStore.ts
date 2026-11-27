@@ -1528,6 +1528,12 @@ export interface SessionState {
    *  `turn.rewound` for the same session. */
   turnFilesBySession: Record<string, TurnFileEntry[]>;
 
+  /** Ephemeral pre-modification file contents captured live via `turn.filePre`
+   *  before a turn finishes, so Write cards can render a before/after diff
+   *  mid-turn instead of waiting for `turn.files`. Cleared when `turn.files`
+   *  freezes the snapshot into messages. */
+  liveBeforeBySession: Record<string, Record<string, string>>;
+
   /** Per-session user-placed message bookmarks (selection → "添加书签").
    *  Persisted on the session row; hydrated on select/open so the capsule
    *  segment + timeline markers survive a reopen. Per-session for the same
@@ -3858,6 +3864,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete pendingQuestionBySession[id];
   const turnFilesBySession = { ...s.turnFilesBySession };
   delete turnFilesBySession[id];
+  const liveBeforeBySession = { ...s.liveBeforeBySession };
+  delete liveBeforeBySession[id];
   const bookmarksBySession = { ...s.bookmarksBySession };
   delete bookmarksBySession[id];
   const chatFileQueueBySession = { ...s.chatFileQueueBySession };
@@ -3917,6 +3925,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     servicesBySession,
     pendingQuestionBySession,
     turnFilesBySession,
+    liveBeforeBySession,
     bookmarksBySession,
     chatFileQueueBySession,
     chatElementQueueBySession,
@@ -6221,6 +6230,7 @@ const CONTENT_FROZEN_EVENTS = new Set<RuntimeEvent["type"]>([
   "text.delta",
   "thinking",
   "tool.use",
+  "tool.use.update",
   "tool.result",
   "browser.image",
   "tool.media",
@@ -6534,6 +6544,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   pendingApprovals: [],
   pendingPlanApprovalBySession: {},
   turnFilesBySession: {},
+  liveBeforeBySession: {},
   bookmarksBySession: {},
   chatFileQueueBySession: {},
   chatElementQueueBySession: {},
@@ -6574,7 +6585,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   ideFileViewModeByProject: {},
   ideEditorMode: "tabs",
   gitDiffOpenMode: "center",
-  diffShowLineNumbers: false,
+  diffShowLineNumbers: true,
   gitDiffDialogTabs: [],
   gitDiffDialogActiveId: null,
   gitDiffDialogOpen: false,
@@ -8660,6 +8671,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       delete historyLoadedBySession[sessionId];
       const turnFilesBySession = { ...s.turnFilesBySession };
       delete turnFilesBySession[sessionId];
+      const liveBeforeBySession = { ...s.liveBeforeBySession };
+      delete liveBeforeBySession[sessionId];
       const usageHistoryBySession = { ...s.usageHistoryBySession };
       delete usageHistoryBySession[sessionId];
       const subagentTranscriptsBySession = { ...s.subagentTranscriptsBySession };
@@ -8671,6 +8684,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         loadingOlderBySession,
         historyLoadedBySession,
         turnFilesBySession,
+    liveBeforeBySession,
         usageHistoryBySession,
         subagentTranscriptsBySession,
       };
@@ -10657,6 +10671,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
       return;
     }
+    if (e.type === "turn.filePre") {
+      set((s) => {
+        const cur = s.liveBeforeBySession[sid] ?? {};
+        if (cur[e.filePath] === e.before) return s;
+        return {
+          liveBeforeBySession: {
+            ...s.liveBeforeBySession,
+            [sid]: { ...cur, [e.filePath]: e.before },
+          },
+        };
+      });
+      return;
+    }
     if (e.type === "turn.files") {
       // Drives TWO things:
       //  1. turnFilesBySession[sid] — the in-memory mirror of the LATEST
@@ -10684,8 +10711,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             if (next[i] !== list[i]) changedMessages.push(next[i]);
           }
         }
+        const nextLiveBefore =
+          sid in s.liveBeforeBySession
+            ? (() => {
+                const copy = { ...s.liveBeforeBySession };
+                delete copy[sid];
+                return copy;
+              })()
+            : s.liveBeforeBySession;
         return {
           turnFilesBySession: { ...s.turnFilesBySession, [sid]: e.files },
+          liveBeforeBySession: nextLiveBefore,
           messagesBySession: next === list
             ? s.messagesBySession
             : { ...s.messagesBySession, [sid]: next },
@@ -10912,6 +10948,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           const block: Block = { kind: "tool_use", toolCallId: e.toolCallId, toolName: e.toolName, input: e.input, status: "running" };
           const updated = { ...lastAssistant, blocks: [...lastAssistant.blocks, block] };
           next = next.map((m) => (m.id === lastAssistant!.id ? updated : m));
+          break;
+        }
+        case "tool.use.update": {
+          next = next.map((m) => {
+            if (!m.blocks.some((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId)) return m;
+            return {
+              ...m,
+              blocks: m.blocks.map((b) =>
+                b.kind === "tool_use" && b.toolCallId === e.toolCallId
+                  ? { ...b, ...(e.toolName ? { toolName: e.toolName } : {}), input: e.input }
+                  : b,
+              ),
+            };
+          });
           break;
         }
         case "tool.result": {

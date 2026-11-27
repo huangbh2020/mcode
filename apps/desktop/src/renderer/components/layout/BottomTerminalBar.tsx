@@ -19,7 +19,7 @@ export function BottomTerminalBar({ active }: { active: boolean }) {
   return (
     <div
       className={cn(
-        "flex h-full min-h-0 flex-col border-t border-edge bg-surface",
+        "flex h-full min-h-0 flex-col bg-surface",
         // Keep the DOM mounted even when collapsed so PTYs survive, but hide
         // visually so nothing bleeds into the chat area above while hidden.
         !active && "invisible",

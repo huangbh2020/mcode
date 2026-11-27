@@ -50,6 +50,8 @@ interface FileRecord {
  *  imports keep compiling during the payload expansion. */
 export type FrozenFile = TurnFileEntry;
 
+export type FilePreListener = (absPath: string, before: string) => void;
+
 export class FileSnapshot {
   /** protected (not private) so CodexFileSnapshot can subclass: codex has no
    *  pre-write hook for auto-approved edits and rebuilds `before` from the
@@ -59,6 +61,22 @@ export class FileSnapshot {
    *  freeze() at turn end and have any straggling tool_use events
    *  (rare, but possible) be ignored. */
   protected frozen = false;
+  private onRecordPre?: FilePreListener;
+
+  setPreListener(listener: FilePreListener | undefined): void {
+    this.onRecordPre = listener;
+  }
+
+  /** Read the cached pre-turn snapshot for `filePath` if still available
+   *  (before freeze() releases contents). Used by adapters whose tool calls
+   *  omit inline diff text (e.g. Antigravity ACP edit without oldText/newText). */
+  getPreContent(cwd: string, filePath: string): { absPath: string; exists: boolean; content: string } | null {
+    if (this.frozen) return null;
+    const abs = safeResolve(cwd, filePath);
+    if (abs === null) return null;
+    const rec = this.originals.get(abs);
+    return rec ? { absPath: rec.absPath, exists: rec.exists, content: rec.content } : null;
+  }
 
   /** Number of files currently snapshotted (used by tests and the
    *  empty-after-freeze check). */
@@ -77,13 +95,19 @@ export class FileSnapshot {
     if (this.originals.has(abs)) return; // already snapshotted
     try {
       const content = await readFile(abs, "utf-8");
-      this.originals.set(abs, { absPath: abs, exists: true, content });
+      if (!this.originals.has(abs) && !this.frozen) {
+        this.originals.set(abs, { absPath: abs, exists: true, content });
+        this.onRecordPre?.(abs, content);
+      }
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
         // File didn't exist before — claude will create it. Record
         // exists:false so restore can unlink.
-        this.originals.set(abs, { absPath: abs, exists: false, content: "" });
+        if (!this.originals.has(abs) && !this.frozen) {
+          this.originals.set(abs, { absPath: abs, exists: false, content: "" });
+          this.onRecordPre?.(abs, "");
+        }
       } else {
         // EACCES, EISDIR, etc. — not safe to restore later, so skip.
         // Logged so devs can see it without crashing the stream.

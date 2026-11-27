@@ -145,16 +145,22 @@ export function ThreePaneLayout({
          behind the arc. Non-scrolling overflow-hidden is xterm-safe (see the
          note on the right sidebar).
          Stacks the center content above an optional bottom terminal bar. */}
-      <main
+      {/* Center column — stacks the main chat/editor card and (when open) the
+          independent bottom-terminal card, separated by the same 3px frame gap
+          as the sidebars. Both cards keep their own rounded-xl border so the
+          center area never visually merges with the terminal. */}
+      <div
         className={cn(
-          "relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden rounded-xl border border-edge bg-surface",
+          "relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col",
+          bottomTerminal && bottomTerminalOpen && "gap-[3px]",
           attachToTitlebar && "-mt-px",
           rightMaximized && "hidden",
         )}
       >
-
-        <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
-        {/* Bottom terminal bar — keep-alive: always rendered, height collapses
+        <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-edge bg-surface">
+          <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
+        </main>
+        {/* Bottom terminal card — keep-alive: always rendered, height collapses
             to 0 when closed so PTYs/scrollback survive. overflow-hidden clips
             the xterm host at height 0 (xterm FitAddon breaks under a scrolling
             ancestor, but a fixed-height non-scrolling box is fine). */}
@@ -163,14 +169,18 @@ export function ThreePaneLayout({
             {bottomTerminalOpen && onResizeBottomTerminal && (
               <Divider
                 orientation="horizontal"
+                hideLine
+                className="z-20 -my-[1.5px]"
                 onResize={onResizeBottomTerminal}
                 onDoubleClick={onResetBottomTerminal}
               />
             )}
             <div
               className={cn(
-                "shrink-0 overflow-hidden border-edge-panel transition-[height] duration-150 ease-out",
-                bottomTerminalOpen ? "border-t" : "h-0",
+                "shrink-0 overflow-hidden transition-[height] duration-150 ease-out",
+                bottomTerminalOpen
+                  ? "rounded-xl border border-edge bg-surface"
+                  : "h-0",
               )}
               style={bottomTerminalOpen ? { height: bottomTerminalHeight } : undefined}
             >
@@ -178,7 +188,7 @@ export function ThreePaneLayout({
             </div>
           </>
         )}
-      </main>
+      </div>
 
       {rightOpen && !rightMaximized && onResizeRight && (
         <Divider

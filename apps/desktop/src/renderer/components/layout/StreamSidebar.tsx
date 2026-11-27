@@ -589,31 +589,24 @@ function StreamSidebarBase() {
   };
 
   return (
-    <div className="flex h-full flex-col px-2 py-2 [font-size:var(--right-panel-font-size)]">
-      {/* 品牌 Logo 与系统名称已移至顶部通栏 Titlebar；流视图顶部仅保留视图切换。 */}
-      <div className="mb-1.5 flex items-center justify-between px-1">
-        <span className="text-[11px] font-medium text-content-subtle">{t("layout.nav.chat")}</span>
-        <LeftBarModeSwitch />
-      </div>
-
-      {/* Scope filter: 全部项目 / per-project (+ its worktrees) / group +
-          add project. Box metrics mirror SidebarQuickActions' rows (full
-          width, rounded-lg, px-1 py-2, 16px icon) so the control reads as
-          part of the same dock. */}
-      <div className="mb-1">
-        <Menu.Root open={scopeOpen} onOpenChange={setScopeOpen}>
-          <Menu.Trigger
-            className={cn(
-              "flex w-full min-w-0 items-center gap-2 rounded-lg px-1 py-2 text-left transition-colors",
-              "[font-size:var(--right-panel-font-size)]",
-              "text-content-muted hover:bg-surface-hover/60",
-            )}
-          >
-            {/* Fixed all-projects glyph — the label carries the current scope. */}
-            <IconFolder size={16} className="shrink-0 text-content-subtle" />
-            <span className="min-w-0 flex-1 truncate font-medium">{scopeLabel}</span>
-            <IconChevronRight size={12} className="shrink-0 rotate-90 text-content-subtle" />
-          </Menu.Trigger>
+    <div className="flex h-full flex-col [font-size:var(--right-panel-font-size)]">
+      {/* 顶部工具条：h-10 与中间面板标签栏及树视图顶栏齐平，承载项目范围筛选与视图切换。 */}
+      <div className="flex h-10 shrink-0 items-center justify-between gap-1.5 border-b border-edge bg-surface px-2">
+        <div className="min-w-0 flex-1">
+          <Menu.Root open={scopeOpen} onOpenChange={setScopeOpen}>
+            <Menu.Trigger
+              className={cn(
+                "flex h-7 w-full min-w-0 items-center justify-between gap-1.5 rounded-lg border border-edge bg-surface-muted/65 px-2 text-left text-xs font-medium transition-colors",
+                "text-content hover:bg-surface-hover/70",
+              )}
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                {/* Fixed all-projects glyph — the label carries the current scope. */}
+                <IconFolder size={14} className="shrink-0 text-content-subtle" />
+                <span className="min-w-0 flex-1 truncate">{scopeLabel}</span>
+              </span>
+              <IconChevronRight size={12} className="shrink-0 rotate-90 text-content-subtle" />
+            </Menu.Trigger>
           <Menu.Portal>
             <Menu.Positioner align="start">
               <Menu.Popup
@@ -693,9 +686,12 @@ function StreamSidebarBase() {
               </Menu.Popup>
             </Menu.Positioner>
           </Menu.Portal>
-        </Menu.Root>
+          </Menu.Root>
+        </div>
+        <LeftBarModeSwitch />
       </div>
 
+      <div className="flex min-h-0 flex-1 flex-col px-2 py-2">
       {/* Flat list: open tabs only — pinned cards ─ hairline ─ live cards. */}
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
         {liveSessions.length === 0 && pinnedList.length === 0 ? (
@@ -751,6 +747,7 @@ function StreamSidebarBase() {
             icon trigger (self-contained dialog; count badge / accent tint
             signal from the button itself). */}
         <MobileConnectButton />
+      </div>
       </div>
 
       {/* Session context menu — with the worktree action group wired to the

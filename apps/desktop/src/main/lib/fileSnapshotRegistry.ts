@@ -8,9 +8,18 @@
  * snapshots lazily as sessions bind. A shared Map both can reach solves
  * it without restructuring the AgentProvider interface.
  */
-import { FileSnapshot } from "./fileSnapshot.js";
+import { FileSnapshot, type FilePreListener } from "./fileSnapshot.js";
 
 const snapshots = new Map<string, FileSnapshot>();
+const preListeners = new Map<string, FilePreListener>();
+
+/** Register a live pre-modification file listener for a session's snapshot
+ *  (attaches immediately if a snapshot already exists, and carries over to
+ *  snapshots created later via getFileSnapshot / getOrSetFileSnapshot). */
+export function setFilePreListener(sessionId: string, listener: FilePreListener): void {
+  preListeners.set(sessionId, listener);
+  snapshots.get(sessionId)?.setPreListener(listener);
+}
 
 /** Get (or create) the snapshot for a session. The runtime REPLACES the
  *  entry at each sendTurn (dropFileSnapshot — an in-place clear() would
@@ -23,6 +32,8 @@ export function getFileSnapshot(sessionId: string): FileSnapshot {
   let snap = snapshots.get(sessionId);
   if (!snap) {
     snap = new FileSnapshot();
+    const listener = preListeners.get(sessionId);
+    if (listener) snap.setPreListener(listener);
     snapshots.set(sessionId, snap);
   }
   return snap;
@@ -39,6 +50,8 @@ export function getOrSetFileSnapshot(
   let snap = snapshots.get(sessionId);
   if (!snap) {
     snap = create();
+    const listener = preListeners.get(sessionId);
+    if (listener) snap.setPreListener(listener);
     snapshots.set(sessionId, snap);
   }
   return snap;
@@ -47,4 +60,5 @@ export function getOrSetFileSnapshot(
 /** Drop the snapshot for a session entirely (e.g. session deleted). */
 export function dropFileSnapshot(sessionId: string): void {
   snapshots.delete(sessionId);
+  preListeners.delete(sessionId);
 }

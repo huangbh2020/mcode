@@ -16,6 +16,7 @@
  *     `Failed to rebuild agent`, etc.): surfaced as `error` events.
  */
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import type { ProviderContext } from "@contracts/provider";
 import type {
   AskUserQuestionItem,
@@ -23,6 +24,7 @@ import type {
   ContextWarning,
   ContextWarningKind,
   PermissionMode,
+  TodoUpdateEvent,
   TurnDoneReason,
 } from "@contracts/runtime";
 import { FileSnapshot, normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
@@ -89,6 +91,31 @@ function firstInt(rec: Record<string, unknown> | null, keys: readonly string[]):
   return undefined;
 }
 
+/** Parse `update_steps` (`{ steps: [{ title, status }] }`) or `{ todos }` into
+ *  Mcode's canonical `TodoUpdateEvent["todos"]`. Returns null when no array is
+ *  present yet (e.g., an initial `tool_call` before `rawInput` streams in). */
+export function parseUpdateStepsTodos(rawInput: unknown): TodoUpdateEvent["todos"] | null {
+  const rec = asRecord(rawInput);
+  const rawSteps = rec?.steps ?? rec?.todos;
+  if (!Array.isArray(rawSteps)) return null;
+  const todos: TodoUpdateEvent["todos"] = [];
+  for (const item of rawSteps) {
+    const stepRec = asRecord(item);
+    if (!stepRec) continue;
+    const content = firstString(stepRec, ["title", "content", "step"])?.trim();
+    if (!content) continue;
+    const rawStatus = firstString(stepRec, ["status"])?.toLowerCase();
+    const status: TodoUpdateEvent["todos"][number]["status"] =
+      rawStatus === "completed" || rawStatus === "done" || rawStatus === "skipped"
+        ? "completed"
+        : rawStatus === "in_progress" || rawStatus === "inprogress"
+          ? "in_progress"
+          : "pending";
+    todos.push({ content, status, priority: "medium" });
+  }
+  return todos;
+}
+
 /** Map ACP tool metadata + rawInput into Mcode's canonical toolName and input
  *  shape so MessageBlocks renders Bash/Read/Edit/Write/Search cards natively. */
 export function normalizeAgyToolCall(update: {
@@ -99,6 +126,21 @@ export function normalizeAgyToolCall(update: {
   locations?: Array<{ path?: string }>;
 }): { toolName: string; input: unknown; filePath?: string; isMutation: boolean; isRead: boolean } {
   const raw = asRecord(update.rawInput);
+  const kind = update.kind?.toLowerCase();
+  const rawName = (update.name ?? update.title ?? "").toLowerCase();
+  const isUpdateSteps =
+    /\bupdate_steps\b/.test(rawName) ||
+    (raw !== null && Array.isArray(raw.steps) && kind !== "execute" && kind !== "edit" && kind !== "create" && kind !== "write");
+  if (isUpdateSteps) {
+    const todos = parseUpdateStepsTodos(update.rawInput);
+    return {
+      toolName: "TodoWrite",
+      input: todos !== null ? { todos } : update.rawInput ?? {},
+      isMutation: false,
+      isRead: false,
+    };
+  }
+
   const command = firstString(raw, ["CommandLine", "command_line", "commandLine", "command", "cmd"]);
   const cwd = firstString(raw, ["Cwd", "WorkingDirectory", "working_dir", "workingDir", "cwd"]);
   const filePath =
@@ -106,11 +148,28 @@ export function normalizeAgyToolCall(update: {
     update.locations?.find((l) => typeof l.path === "string" && l.path.length > 0)?.path;
   const oldText = firstString(raw, ["old_string", "oldText", "TargetContent", "old_str"]);
   const newText = firstString(raw, ["new_string", "newText", "ReplacementContent", "new_str"]);
+  const rawChunks = raw
+    ? Array.isArray(raw.edits)
+      ? raw.edits
+      : Array.isArray(raw.ReplacementChunks)
+        ? raw.ReplacementChunks
+        : Array.isArray(raw.chunks)
+          ? raw.chunks
+          : null
+    : null;
+  const editChunks = rawChunks
+    ? rawChunks
+        .map((c) => {
+          const rec = asRecord(c);
+          if (!rec) return null;
+          const o = firstString(rec, ["old_string", "oldText", "TargetContent", "old_str"]);
+          const n = firstString(rec, ["new_string", "newText", "ReplacementContent", "new_str"]);
+          return o !== undefined && n !== undefined ? { old_string: o, new_string: n } : null;
+        })
+        .filter((x): x is { old_string: string; new_string: string } => x !== null)
+    : [];
   const writeContent = firstString(raw, ["content", "CodeContent", "text"]);
   const pattern = firstString(raw, ["pattern", "Query", "query", "regex"]);
-
-  const kind = update.kind?.toLowerCase();
-  const rawName = (update.name ?? update.title ?? "").toLowerCase();
 
   if (kind === "execute" || command !== undefined || /\bbash\b|\bshell\b|\bcommand\b/.test(rawName)) {
     return {
@@ -121,16 +180,18 @@ export function normalizeAgyToolCall(update: {
     };
   }
 
-  if (kind === "edit" || (filePath && oldText !== undefined && newText !== undefined)) {
+  if (kind === "edit" || (filePath && ((oldText !== undefined && newText !== undefined) || editChunks.length > 0))) {
     return {
       toolName: "Edit",
       input:
         filePath !== undefined
-          ? {
-              file_path: filePath,
-              ...(oldText !== undefined ? { old_string: oldText } : {}),
-              ...(newText !== undefined ? { new_string: newText } : {}),
-            }
+          ? editChunks.length > 0
+            ? { file_path: filePath, edits: editChunks }
+            : {
+                file_path: filePath,
+                ...(oldText !== undefined ? { old_string: oldText } : {}),
+                ...(newText !== undefined ? { new_string: newText } : {}),
+              }
           : update.rawInput ?? {},
       filePath,
       isMutation: true,
@@ -209,8 +270,14 @@ export function extractAgyToolOutput(update: AcpToolCallUpdate): unknown {
   const diffItems = (update.content ?? []).filter(
     (item) => item.type === "diff" && typeof item.path === "string",
   );
-  if (diffItems.length > 0 && update.rawOutput === undefined) {
-    return diffItems.map((d) => `Updated ${d.path}`).join("\n");
+  if (diffItems.length > 0) {
+    const rec = asRecord(update.rawOutput);
+    const isEmptyRawOutput =
+      update.rawOutput === undefined ||
+      (rec !== null && Object.keys(rec).length === 0);
+    if (isEmptyRawOutput) {
+      return diffItems.map((d) => `Updated ${d.path}`).join("\n");
+    }
   }
 
   if (update.rawOutput === undefined) return "";
@@ -242,6 +309,7 @@ export class AntigravityMessageAdapter {
   private failureMessage: string | null = null;
   private sessionLostNoticeSeen = false;
   private finalized = false;
+  private lastEmittedTodosJson: string | null = null;
 
   constructor(private readonly deps: AntigravityAdapterDeps) {}
 
@@ -413,16 +481,50 @@ export class AntigravityMessageAdapter {
     });
 
     const toolName = existing ? existing.toolName : norm.toolName;
-    const input = update.rawInput !== undefined ? norm.input : existing?.input ?? norm.input;
-    const filePath = norm.filePath ?? existing?.filePath;
+    const diffItems = (update.content ?? []).filter(
+      (item): item is typeof item & { oldText: string; newText: string } =>
+        item.type === "diff" &&
+        typeof item.oldText === "string" &&
+        typeof item.newText === "string",
+    );
+    const filePath = diffItems[0]?.path ?? norm.filePath ?? existing?.filePath;
+    const diffInput =
+      diffItems.length > 0 && filePath
+        ? diffItems.length === 1
+          ? {
+              file_path: filePath,
+              old_string: diffItems[0].oldText,
+              new_string: diffItems[0].newText,
+            }
+          : {
+              file_path: filePath,
+              edits: diffItems.map((d) => ({ old_string: d.oldText, new_string: d.newText })),
+            }
+        : undefined;
+    const nextToolName = diffInput ? "Edit" : toolName;
+    const hasRichMutationInput = (v: unknown): boolean => {
+      const r = asRecord(v);
+      if (!r) return false;
+      return (
+        typeof r.old_string === "string" ||
+        typeof r.new_string === "string" ||
+        Array.isArray(r.edits) ||
+        typeof r.content === "string"
+      );
+    };
+    const input =
+      diffInput ??
+      (update.rawInput !== undefined && (hasRichMutationInput(norm.input) || !hasRichMutationInput(existing?.input))
+        ? norm.input
+        : existing?.input ?? norm.input);
 
     if (!existing) {
-      if (norm.isMutation && filePath) {
+      if ((norm.isMutation || !!diffInput) && filePath) {
         void this.deps.snapshot.recordPre(this.deps.cwd, filePath);
       }
       const requiresApproval = update.status === "pending";
       this.tools.set(update.toolCallId, {
-        toolName,
+        toolName: nextToolName,
         input,
         filePath,
         completed: false,
@@ -431,10 +533,43 @@ export class AntigravityMessageAdapter {
         type: "tool.use",
         sessionId: this.deps.sessionId,
         toolCallId: update.toolCallId,
-        toolName,
+        toolName: nextToolName,
         input,
         requiresApproval,
       });
+    } else if (
+      (update.rawInput !== undefined || diffInput !== undefined) &&
+      (nextToolName !== existing.toolName || JSON.stringify(input) !== JSON.stringify(existing.input))
+    ) {
+      if ((norm.isMutation || !!diffInput) && filePath && filePath !== existing.filePath) {
+        void this.deps.snapshot.recordPre(this.deps.cwd, filePath);
+      }
+      existing.toolName = nextToolName;
+      existing.input = input;
+      if (filePath) existing.filePath = filePath;
+      this.deps.ctx.emit({
+        type: "tool.use.update",
+        sessionId: this.deps.sessionId,
+        toolCallId: update.toolCallId,
+        toolName: nextToolName,
+        input,
+      });
+    }
+
+    // Sync `update_steps` / `TodoWrite` task lists into the composer-top task capsule.
+    if (nextToolName === "TodoWrite") {
+      const todos = parseUpdateStepsTodos(input) ?? parseUpdateStepsTodos(update.rawInput);
+      if (todos !== null) {
+        const serialized = JSON.stringify(todos);
+        if (serialized !== this.lastEmittedTodosJson) {
+          this.lastEmittedTodosJson = serialized;
+          this.deps.ctx.emit({
+            type: "todo.update",
+            sessionId: this.deps.sessionId,
+            todos,
+          });
+        }
+      }
     }
 
     // Forward inline images from tool content if any.
@@ -466,6 +601,38 @@ export class AntigravityMessageAdapter {
         for (const item of update.content ?? []) {
           if (item.type === "diff" && item.path) {
             void this.deps.snapshot.recordPre(this.deps.cwd, item.path);
+          }
+        }
+        // If ACP never provided old_string/new_string/content for a successful
+        // Edit/Write, backfill from the pre-turn snapshot + on-disk file so
+        // persisted tool cards also retain a real diff.
+        if (
+          update.status === "completed" &&
+          (tracked.toolName === "Edit" || tracked.toolName === "Write") &&
+          tracked.filePath &&
+          !hasRichMutationInput(tracked.input)
+        ) {
+          const pre = this.deps.snapshot.getPreContent(this.deps.cwd, tracked.filePath);
+          if (pre) {
+            void readFile(pre.absPath, "utf-8")
+              .then((after) => {
+                if (this.finalized) return;
+                const patchedInput =
+                  tracked.toolName === "Write"
+                    ? { file_path: tracked.filePath, content: after }
+                    : { file_path: tracked.filePath, old_string: pre.content, new_string: after };
+                tracked.input = patchedInput;
+                this.deps.ctx.emit({
+                  type: "tool.use.update",
+                  sessionId: this.deps.sessionId,
+                  toolCallId: update.toolCallId,
+                  toolName: tracked.toolName,
+                  input: patchedInput,
+                });
+              })
+              .catch(() => {
+                /* best-effort backfill */
+              });
           }
         }
         const output = extractAgyToolOutput(update);
@@ -619,15 +786,39 @@ export class AntigravityMessageAdapter {
     const { message, requestedSchema } = parsed.data;
     const entries = Object.entries(requestedSchema.properties);
     if (entries.length === 0) return { action: "decline" };
+    const requiredSet = new Set(requestedSchema.required ?? []);
 
-    const fieldMeta: Array<{
+    type FieldMeta = {
       key: string;
+      otherKey?: string;
       propType: "string" | "boolean" | "array";
       question: AskUserQuestionItem;
       labelToValue: Map<string, string>;
-    }> = [];
+    };
+    const fieldMeta: FieldMeta[] = [];
+    const baseByKey = new Map<string, FieldMeta>();
 
     for (const [key, prop] of entries) {
+      // `agy acp` appends an optional `*_other` string field right after each
+      // choice field for free-form input. QuestionPrompt already renders a
+      // built-in custom-answer input per question, so fold the companion field
+      // into its parent question and split the answer back on submit.
+      if (key.endsWith("_other")) {
+        const base = baseByKey.get(key.slice(0, -"_other".length));
+        if (
+          base &&
+          base.question.options.length > 0 &&
+          prop.type === "string" &&
+          !prop.enum &&
+          !prop.oneOf &&
+          !requiredSet.has(key) &&
+          (prop.title === "Other" || prop.description?.startsWith("Optional free-form answer"))
+        ) {
+          base.otherKey = key;
+          continue;
+        }
+      }
+
       const labelToValue = new Map<string, string>();
       const opts: Array<{ label: string; description?: string }> = [];
 
@@ -659,7 +850,7 @@ export class AntigravityMessageAdapter {
           ? ownText.join("\n\n")
           : message || key;
 
-      fieldMeta.push({
+      const meta: FieldMeta = {
         key,
         propType: prop.type,
         question: {
@@ -669,7 +860,9 @@ export class AntigravityMessageAdapter {
           options: opts,
         },
         labelToValue,
-      });
+      };
+      fieldMeta.push(meta);
+      baseByKey.set(key, meta);
     }
 
     const decision = await this.deps.ctx.requestUserInput({
@@ -686,14 +879,60 @@ export class AntigravityMessageAdapter {
       if (rawAns == null) continue;
       if (meta.propType === "boolean") {
         const s = Array.isArray(rawAns) ? rawAns[0] : rawAns;
-        content[meta.key] = s === "Yes" || s === "true";
+        if (s !== undefined) {
+          if (meta.otherKey && s !== "Yes" && s !== "No" && s !== "true" && s !== "false") {
+            const matchedBool = ["Yes", "No"].find((b) => s.startsWith(`${b}, `));
+            if (matchedBool) {
+              content[meta.key] = matchedBool === "Yes";
+              const freeText = s.slice(matchedBool.length + 2).trim();
+              if (freeText) content[meta.otherKey] = freeText;
+            } else if (s.trim()) {
+              content[meta.otherKey] = s;
+            }
+          } else {
+            content[meta.key] = s === "Yes" || s === "true";
+          }
+        }
       } else if (meta.propType === "array") {
         const arr = Array.isArray(rawAns) ? rawAns : [rawAns];
-        content[meta.key] = arr.map((lbl) => meta.labelToValue.get(lbl) ?? lbl);
+        if (meta.otherKey) {
+          const selected: string[] = [];
+          const otherTexts: string[] = [];
+          for (const lbl of arr) {
+            const mapped = meta.labelToValue.get(lbl);
+            if (mapped !== undefined) selected.push(mapped);
+            else if (lbl.trim()) otherTexts.push(lbl.trim());
+          }
+          if (selected.length > 0) content[meta.key] = selected;
+          if (otherTexts.length > 0) content[meta.otherKey] = otherTexts.join(", ");
+        } else {
+          content[meta.key] = arr.map((lbl) => meta.labelToValue.get(lbl) ?? lbl);
+        }
       } else {
         const s = Array.isArray(rawAns) ? rawAns[0] : rawAns;
         if (s !== undefined) {
-          content[meta.key] = meta.labelToValue.get(s) ?? s;
+          if (meta.otherKey) {
+            const mapped = meta.labelToValue.get(s);
+            if (mapped !== undefined) {
+              content[meta.key] = mapped;
+            } else {
+              let matchedLabel: string | undefined;
+              for (const label of meta.labelToValue.keys()) {
+                if (s.startsWith(`${label}, `) && (!matchedLabel || label.length > matchedLabel.length)) {
+                  matchedLabel = label;
+                }
+              }
+              if (matchedLabel !== undefined) {
+                content[meta.key] = meta.labelToValue.get(matchedLabel)!;
+                const freeText = s.slice(matchedLabel.length + 2).trim();
+                if (freeText) content[meta.otherKey] = freeText;
+              } else if (s.trim()) {
+                content[meta.otherKey] = s;
+              }
+            }
+          } else {
+            content[meta.key] = meta.labelToValue.get(s) ?? s;
+          }
         }
       }
     }

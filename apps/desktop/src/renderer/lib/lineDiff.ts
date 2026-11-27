@@ -132,3 +132,78 @@ function splitLines(s: string): string[] {
   }
   return parts;
 }
+
+/** Fast prefix/suffix-trimmed diff summary for large files: strips identical
+ *  head/tail lines before running LCS, keeping only `contextLines` of context
+ *  around changes. Also estimates visible collapsed line count. */
+export function analyzeCompactDiff(
+  original: string,
+  modified: string,
+  contextLines = 3,
+): {
+  diff: DiffLine[];
+  adds: number;
+  dels: number;
+  visibleLines: number;
+  hasCollapsibleContext: boolean;
+} {
+  const oldLines = splitLines(original);
+  const newLines = splitLines(modified);
+  let prefix = 0;
+  const minLen = Math.min(oldLines.length, newLines.length);
+  while (prefix < minLen && oldLines[prefix] === newLines[prefix]) {
+    prefix++;
+  }
+  let suffix = 0;
+  while (
+    suffix < minLen - prefix &&
+    oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+
+  const midOld = oldLines.slice(prefix, oldLines.length - suffix);
+  const midNew = newLines.slice(prefix, newLines.length - suffix);
+  const midDiff: DiffLine[] =
+    midOld.length * midNew.length <= 250_000
+      ? lineDiff(midOld.join("\n"), midNew.join("\n"))
+      : [
+          ...midOld.map((text): DiffLine => ({ op: "delete", text })),
+          ...midNew.map((text): DiffLine => ({ op: "insert", text })),
+        ];
+
+  const { adds, dels } = diffSummary(midDiff);
+
+  const leadCtx = oldLines
+    .slice(Math.max(0, prefix - contextLines), prefix)
+    .map((text): DiffLine => ({ op: "equal", text }));
+  const tailCtx = oldLines
+    .slice(oldLines.length - suffix, Math.min(oldLines.length, oldLines.length - suffix + contextLines))
+    .map((text): DiffLine => ({ op: "equal", text }));
+  const diff = [...leadCtx, ...midDiff, ...tailCtx];
+
+  let visibleLines = 0;
+  let equalRun = 0;
+  let hasInnerCollapse = false;
+  for (const d of midDiff) {
+    if (d.op === "equal") {
+      equalRun++;
+    } else {
+      if (equalRun > 0) {
+        if (equalRun > contextLines * 2 + 3) hasInnerCollapse = true;
+        visibleLines += equalRun > contextLines * 2 + 1 ? contextLines * 2 + 1 : equalRun;
+        equalRun = 0;
+      }
+      visibleLines++;
+    }
+  }
+  if (equalRun > 0) {
+    if (equalRun > contextLines * 2 + 3) hasInnerCollapse = true;
+    visibleLines += equalRun > contextLines * 2 + 1 ? contextLines * 2 + 1 : equalRun;
+  }
+  visibleLines += leadCtx.length + tailCtx.length;
+  const hasCollapsibleContext =
+    prefix > contextLines + 3 || suffix > contextLines + 3 || hasInnerCollapse;
+
+  return { diff, adds, dels, visibleLines, hasCollapsibleContext };
+}

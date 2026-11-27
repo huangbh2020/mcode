@@ -56,7 +56,7 @@ import {
   FILE_DRAG_MIME,
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
-import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, fileEditRowInfo, EditRunRow, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock, type FileEditOpKind } from "./MessageBlocks.js";
+import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, fileEditRowInfo, fileReadRowInfo, fileCommandRowInfo, EditRunRow, ReadRunRow, BashRunRow, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock, type FileEditOpKind } from "./MessageBlocks.js";
 import { flattenFileCitations } from "@renderer/lib/fileCitation.js";
 import { MediaLightbox, MediaThumbImage, type MediaBlock, type MediaItem } from "./mediaGallery.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
@@ -151,6 +151,8 @@ interface PendingImage {
 
 /** Ceiling for staged images (matches the SendTurn contract's max 20). */
 const MAX_PENDING_IMAGES = 20;
+
+const EMPTY_LIVE_BEFORE: Record<string, string> = {};
 
 /** Stable empty reference for the timeline's bookmark items (memo stability —
  *  never return a fresh [] from the derivation when there's nothing to show). */
@@ -534,6 +536,26 @@ type RenderItem =
       tightTop?: boolean;
     }
   | {
+      // Live-turn cross-message read run: consecutive Read rows merged ACROSS
+      // assistant messages into ONE single-line file-chip row while the turn
+      // streams, mirroring editRun.
+      kind: "readRun";
+      blocks: ToolUseBlock[];
+      anchorId: string;
+      liveKey?: string;
+      tightTop?: boolean;
+    }
+  | {
+      // Live-turn cross-message command run: consecutive Bash/PowerShell rows
+      // merged ACROSS assistant messages into ONE single-line chip row while
+      // the turn streams.
+      kind: "bashRun";
+      blocks: ToolUseBlock[];
+      anchorId: string;
+      liveKey?: string;
+      tightTop?: boolean;
+    }
+  | {
       kind: "turnGroup";
       /** The turn's process surface, in order: thinking, tool calls, AND any
        *  text the model emitted between tools (e.g. "let me read this first").
@@ -758,6 +780,22 @@ function groupMessagesForRender(
             anchorId: string;
             key: string;
           }
+        | {
+            // Consecutive Read rows merged into ONE single-line file-chip
+            // group (ReadRunRow), mirroring editRun.
+            kind: "readRun";
+            blocks: ToolUseBlock[];
+            anchorId: string;
+            key: string;
+          }
+        | {
+            // Consecutive command rows merged into ONE single-line chip group
+            // (BashRunRow), mirroring editRun/readRun.
+            kind: "bashRun";
+            blocks: ToolUseBlock[];
+            anchorId: string;
+            key: string;
+          }
         | { kind: "msg"; msg: ChatMessage; blocks: Block[]; key: string };
       const rows: LiveRow[] = [];
       let openOps: { blocks: ProceduralBlock[]; anchorId: string; leading: Block[] } | null = null;
@@ -767,6 +805,8 @@ function groupMessagesForRender(
       // (`"edit"` or `"write"`); a different operation or any display block
       // breaks them.
       let openEdit: { blocks: ToolUseBlock[]; anchorId: string; opKind: FileEditOpKind } | null = null;
+      let openRead: { blocks: ToolUseBlock[]; anchorId: string } | null = null;
+      let openBash: { blocks: ToolUseBlock[]; anchorId: string } | null = null;
       let curMsg: ChatMessage | null = null;
       let curBlocks: Block[] = [];
       // Occurrence counters for unique row keys. One message CAN split into
@@ -778,6 +818,8 @@ function groupMessagesForRender(
       // black screen.
       const opsSeq = new Map<string, number>();
       const editSeq = new Map<string, number>();
+      const readSeq = new Map<string, number>();
+      const bashSeq = new Map<string, number>();
       const msgSeq = new Map<string, number>();
       const flushOps = () => {
         if (openOps && (openOps.blocks.length > 0 || openOps.leading.length > 0)) {
@@ -806,6 +848,32 @@ function groupMessagesForRender(
         }
         openEdit = null;
       };
+      const flushReadRun = () => {
+        if (openRead && openRead.blocks.length > 0) {
+          const n = readSeq.get(openRead.anchorId) ?? 0;
+          readSeq.set(openRead.anchorId, n + 1);
+          rows.push({
+            kind: "readRun",
+            blocks: openRead.blocks,
+            anchorId: openRead.anchorId,
+            key: n === 0 ? `read:${openRead.anchorId}` : `read:${openRead.anchorId}#${n}`,
+          });
+        }
+        openRead = null;
+      };
+      const flushBashRun = () => {
+        if (openBash && openBash.blocks.length > 0) {
+          const n = bashSeq.get(openBash.anchorId) ?? 0;
+          bashSeq.set(openBash.anchorId, n + 1);
+          rows.push({
+            kind: "bashRun",
+            blocks: openBash.blocks,
+            anchorId: openBash.anchorId,
+            key: n === 0 ? `bash:${openBash.anchorId}` : `bash:${openBash.anchorId}#${n}`,
+          });
+        }
+        openBash = null;
+      };
       const flushMsg = (force = false) => {
         // `force` (end of turn): always emit the buffered display-only message
         // so a trailing segment isn't swallowed as an ops run's leading row.
@@ -825,9 +893,10 @@ function groupMessagesForRender(
       for (const { block, msg } of turnBlocks) {
         // Classified BEFORE the foldable check on the un-narrowed Block —
         // isFoldableBlock's predicate excludes tool_use from its negative
-        // branch, so an edit-row test after it can't type-check. Edit/Write
-        // are never foldable, so checking first is semantically identical.
+        // branch, so an edit/read/command test after it can't type-check.
         const editRow = fileEditRowInfo(block);
+        const readRow = editRow === null ? fileReadRowInfo(block) : null;
+        const cmdRow = editRow === null && readRow === null ? fileCommandRowInfo(block) : null;
         if (editRow !== null) {
           // Same-operation Edit/Write row: extend the open run, or start a new one.
           // Runs only merge when ADJACENT — a different operation, a capsule
@@ -835,6 +904,8 @@ function groupMessagesForRender(
           // no display blocks can be buffered (they flush it), so curMsg is
           // provably null here; the flushMsg guards are cheap invariants.
           flushOps();
+          flushReadRun();
+          flushBashRun();
           if (openEdit && openEdit.opKind === editRow.opKind) {
             if (curMsg && curMsg !== msg) flushMsg();
             openEdit.blocks.push(editRow.block);
@@ -846,10 +917,38 @@ function groupMessagesForRender(
             flushMsg();
             openEdit = { blocks: [editRow.block], anchorId: msg.id, opKind: editRow.opKind };
           }
+        } else if (readRow !== null) {
+          // Read row: extend the open read run, or flush prior buffered
+          // narration and start a new read run.
+          flushOps();
+          flushEditRun();
+          flushBashRun();
+          if (openRead) {
+            if (curMsg && curMsg !== msg) flushMsg();
+            openRead.blocks.push(readRow.block);
+          } else {
+            flushMsg();
+            openRead = { blocks: [readRow.block], anchorId: msg.id };
+          }
+        } else if (cmdRow !== null) {
+          // Command row: extend the open bash run, or flush prior buffered
+          // narration and start a new bash run.
+          flushOps();
+          flushEditRun();
+          flushReadRun();
+          if (openBash) {
+            if (curMsg && curMsg !== msg) flushMsg();
+            openBash.blocks.push(cmdRow.block);
+          } else {
+            flushMsg();
+            openBash = { blocks: [cmdRow.block], anchorId: msg.id };
+          }
         } else if (isFoldableBlock(block)) {
-          // A capsule row between two edit rows breaks the edit run: only
+          // A capsule row between two edit/read/bash rows breaks the run: only
           // truly adjacent rows merge (2026-11-18, user call).
           flushEditRun();
+          flushReadRun();
+          flushBashRun();
           // Foldable blocks merge ACROSS assistant messages: the agent loop
           // emits one message per think→act cycle, so per-message grouping
           // would spawn a tiny card per cycle. They also absorb any display
@@ -876,6 +975,8 @@ function groupMessagesForRender(
           // Display block: flush the open runs, then buffer under its message.
           flushOps();
           flushEditRun();
+          flushReadRun();
+          flushBashRun();
           if (curMsg !== msg) {
             flushMsg();
             curMsg = msg;
@@ -885,6 +986,8 @@ function groupMessagesForRender(
       }
       flushOps();
       flushEditRun();
+      flushReadRun();
+      flushBashRun();
       flushMsg(true);
 
       // A turn whose opener is foldable-only (e.g. it starts with a glob or
@@ -923,6 +1026,22 @@ function groupMessagesForRender(
         } else if (row.kind === "editRun") {
           items.push({
             kind: "editRun",
+            blocks: row.blocks,
+            anchorId: row.anchorId,
+            liveKey: row.key,
+            tightTop: true,
+          });
+        } else if (row.kind === "readRun") {
+          items.push({
+            kind: "readRun",
+            blocks: row.blocks,
+            anchorId: row.anchorId,
+            liveKey: row.key,
+            tightTop: true,
+          });
+        } else if (row.kind === "bashRun") {
+          items.push({
+            kind: "bashRun",
             blocks: row.blocks,
             anchorId: row.anchorId,
             liveKey: row.key,
@@ -1780,6 +1899,7 @@ function ChatPaneForSession({
   // overwrite earlier ones per filePath) yields the most recent pre-turn
   // content for each path. This is exactly what the Write card's before/after
   // diff wants. Empty until the first turn.files block arrives.
+  const liveBefore = useSessionStore((s) => s.liveBeforeBySession[sessionId] ?? EMPTY_LIVE_BEFORE);
   const beforeMap = useMemo<BeforeContentMap>(() => {
     const m: BeforeContentMap = new Map();
     for (const msg of messages) {
@@ -1789,8 +1909,11 @@ function ChatPaneForSession({
         }
       }
     }
+    for (const [fp, before] of Object.entries(liveBefore)) {
+      m.set(fp, before);
+    }
     return m;
-  }, [messages]);
+  }, [messages, liveBefore]);
   // All plan blocks across this session's message history. Used by the
   // activity rail (node badge + count) and the console (plan index). Frozen
   // plan blocks survive turn.done, so this includes every approved plan in the
@@ -3822,7 +3945,7 @@ function ChatPaneForSession({
     let lastRenderableIdx = -1;
     for (let i = items.length - 1; i >= 0; i--) {
       const k = items[i].kind;
-      if (k === "single" || k === "opsGroup" || k === "editRun") {
+      if (k === "single" || k === "opsGroup" || k === "editRun" || k === "readRun" || k === "bashRun") {
         lastRenderableIdx = i;
         break;
       }
@@ -3868,7 +3991,7 @@ function ChatPaneForSession({
         let laterRowExists = false;
         for (let j = i + 1; j < end; j++) {
           const nextItem = items[j];
-          if (nextItem.kind === "single" || nextItem.kind === "opsGroup" || nextItem.kind === "editRun") {
+          if (nextItem.kind === "single" || nextItem.kind === "opsGroup" || nextItem.kind === "editRun" || nextItem.kind === "readRun" || nextItem.kind === "bashRun") {
             laterRowExists = true;
           }
           if (
@@ -3940,18 +4063,24 @@ function ChatPaneForSession({
             ),
           });
         }
-      } else if (it.kind === "editRun") {
-        // 同文件编辑组行（EditRunRow）：与 ops 卡同档的上边距；块照常喂给
-        // 台头（实时操作 ticker / N 步依赖 liveLedgerBlocks，漏喂会丢运行中
-        // Edit 的可见性）。收拢态整行隐藏——与单张 Edit/Write 卡的
-        // isProcessCollapsibleBlock 行为一致，台头展开后全量流可见。
+      } else if (it.kind === "editRun" || it.kind === "readRun" || it.kind === "bashRun") {
+        // 同文件编辑/读取/命令组行：与 ops 卡同档的上边距；块照常喂给台头
+        // （实时操作 ticker / N 步依赖 liveLedgerBlocks）。收拢态整行隐藏——
+        // 与单张 Edit/Write/Read/Bash 卡的 isProcessCollapsibleBlock 行为一致。
         liveLedgerBlocks.push(...it.blocks);
+        const keyPrefix = it.kind === "editRun" ? "edit" : it.kind === "readRun" ? "read" : "bash";
         rows.push({
-          key: `edit:${it.liveKey ?? it.anchorId}`,
+          key: it.liveKey ?? `${keyPrefix}:${it.anchorId}`,
           node: (
             <div className="mt-[var(--chat-block-gap)]">
               <RenderErrorBoundary>
-                <EditRunRow blocks={it.blocks} beforeMap={beforeMap} live projectPath={projectPath} />
+                {it.kind === "editRun" ? (
+                  <EditRunRow blocks={it.blocks} beforeMap={beforeMap} live projectPath={projectPath} />
+                ) : it.kind === "readRun" ? (
+                  <ReadRunRow blocks={it.blocks} live projectPath={projectPath} />
+                ) : (
+                  <BashRunRow blocks={it.blocks} live />
+                )}
               </RenderErrorBoundary>
             </div>
           ),
@@ -4158,9 +4287,9 @@ function ChatPaneForSession({
           </div>
         );
       }
-      if (item.kind === "editRun") {
-        // Defensive fallback mirroring the opsGroup branch: live edit runs
-        // are consumed by wrapLiveSpine and never reach a standalone list
+      if (item.kind === "editRun" || item.kind === "readRun" || item.kind === "bashRun") {
+        // Defensive fallback mirroring the opsGroup branch: live edit/read/bash
+        // runs are consumed by wrapLiveSpine and never reach a standalone list
         // cell — this only renders if the spine extraction ever skips.
         return (
           <div className="px-[var(--chat-gutter)]">
@@ -4173,7 +4302,13 @@ function ChatPaneForSession({
               )}
             >
               <RenderErrorBoundary>
-                <EditRunRow blocks={item.blocks} beforeMap={beforeMap} live projectPath={projectPath} />
+                {item.kind === "editRun" ? (
+                  <EditRunRow blocks={item.blocks} beforeMap={beforeMap} live projectPath={projectPath} />
+                ) : item.kind === "readRun" ? (
+                  <ReadRunRow blocks={item.blocks} live projectPath={projectPath} />
+                ) : (
+                  <BashRunRow blocks={item.blocks} live />
+                )}
               </RenderErrorBoundary>
             </div>
           </div>
@@ -4502,6 +4637,8 @@ function ChatPaneForSession({
                 // stable while the group grows and its expand state survives
                 // LegendList recycling during streaming.
                 if (item.kind === "editRun") return item.liveKey ?? `edit:${item.anchorId}`;
+                if (item.kind === "readRun") return item.liveKey ?? `read:${item.anchorId}`;
+                if (item.kind === "bashRun") return item.liveKey ?? `bash:${item.anchorId}`;
                 // Use turnMeta.startedAt as stable key — it's set once when the turn
                 // begins and never changes, so the TurnPanel (and expanded Edit cards
                 // inside it) survive LegendList recycling during streaming.
@@ -4710,7 +4847,7 @@ function ChatPaneForSession({
       {/* Input box — always docked at the bottom (both on empty threads and
           active streams) so sending the first message causes zero layout jump. */}
       <ComposerPortal target={composerPortalTarget}>
-      <div className="relative shrink-0 px-[var(--chat-gutter)] pb-3">
+      <div className={cn("relative shrink-0 px-[var(--chat-gutter)] pb-3", hideComposer && "hidden")}>
         <div
           className={cn(
             "relative mx-auto w-full max-w-5xl",
@@ -5193,9 +5330,11 @@ function ChatPaneForSession({
               </div>
             </div>
           </div>
-          {sessionProviderId === "antigravity-acp" && (
-            <AntigravityUsageBar busy={sessionBusy} />
-          )}
+          {sessionProviderId === "antigravity-acp" &&
+            !hideComposer &&
+            !(hasPendingPrompt && !composerPortalTarget) && (
+              <AntigravityUsageBar busy={sessionBusy} />
+            )}
           {/* Content-tag preview popover. Fixed-positioned to the clicked
               chip's top-right; rendered outside the composer container so
               it isn't clipped by overflow/border-radius. Anchored only while

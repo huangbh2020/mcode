@@ -74,6 +74,8 @@ export const en = {
   "chatStream.lineCount": "{n} lines",
   "chatStream.editGroup.count": "×{n}",
   "chatStream.editGroup.changeIndex": "Change #{n}",
+  "chatStream.readGroup.readIndex": "Read #{n}",
+  "chatStream.bashGroup.runIndex": "Run #{n}",
   "chatStream.emptyPlaceholder": "(empty)",
   "chatStream.truncatedSuffix": "(truncated)",
 
@@ -127,6 +129,9 @@ export const en = {
   "chatStream.diff.noChanges": "(no changes)",
   "chatStream.diff.newFile": "New file",
   "chatStream.diff.vsPreTurn": "Diff vs pre-turn",
+  "chatStream.diff.vsCurrentDisk": "Pre-turn vs current file ({n} edits)",
+  "chatStream.diff.loadingFile": "Loading file diff…",
+  "chatStream.diff.changesOnly": "Changes only",
   "chatStream.diff.newFileContent": "New file content",
 
   // ── TurnFilesCard ──

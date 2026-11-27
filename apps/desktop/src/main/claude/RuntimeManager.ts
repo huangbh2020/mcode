@@ -14,7 +14,7 @@ import { providerRegistry } from "@main/providers/registry.js";
 import { SessionRepo, ProjectRepo, MessageRepo } from "@main/store/repositories.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
 import { ApprovalBridge } from "./ApprovalBridge.js";
-import { getFileSnapshot, dropFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
+import { getFileSnapshot, dropFileSnapshot, setFilePreListener } from "@main/lib/fileSnapshotRegistry.js";
 import { restoreFiles } from "@main/lib/fileSnapshot.js";
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import type { BridgeHandle } from "@main/providers/bridge/bridgeServer.js";
@@ -509,6 +509,14 @@ class RuntimeManager {
     // adapter's late freeze() work on its own (stale) records while
     // this turn starts from a virgin snapshot.
     dropFileSnapshot(session.id);
+    setFilePreListener(session.id, (filePath, before) => {
+      rt.ctx.emit({
+        type: "turn.filePre",
+        sessionId: session.id,
+        filePath,
+        before,
+      });
+    });
 
     // Subagent history is SESSION-scoped, not turn-scoped: replay the
     // accumulated roster + transcripts so the fresh turn's adapter (which
