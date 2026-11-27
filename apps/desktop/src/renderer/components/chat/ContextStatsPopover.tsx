@@ -31,13 +31,81 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { fmtCacheHitRate, fmtTokens, getContextBreakdown, warningColor } from "@renderer/lib/contextWindow.js";
+import { fmtCacheHitRate, fmtTokens, getContextBreakdown } from "@renderer/lib/contextWindow.js";
 import type { ContextSnapshot, TurnUsageRecord } from "@contracts/runtime";
 import { ContextTooltipBody } from "./ContextRing.js";
 import { IconCalendarStats, IconChartBar, IconClock } from "@renderer/lib/icons.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 
-type View = "current" | "history";
+export type ContextPanelView = "current" | "history";
+
+/**
+ * Unified content panel shared verbatim by ContextRing's hover card and
+ * the click-pinned ContextStatsPopover, so hovering and clicking render the
+ * exact same interface with zero layout shift.
+ */
+export function ContextPanelContent({
+  snapshot,
+  history,
+  maxTokens,
+  view,
+  onViewChange,
+}: {
+  snapshot: ContextSnapshot;
+  history: TurnUsageRecord[];
+  maxTokens: number;
+  view: ContextPanelView;
+  onViewChange: (next: ContextPanelView) => void;
+}) {
+  const { t } = useI18n();
+  const breakdown = getContextBreakdown(snapshot);
+
+  return (
+    <div
+      className={cn(
+        "max-w-[calc(100vw-16px)]",
+        view === "history" ? "w-[380px]" : "w-[300px]",
+      )}
+    >
+      {/* Top segmented tabs: freely switch between Overview and Turns */}
+      <div className="flex items-center gap-1 border-b border-edge/70 bg-surface-muted/40 px-2 py-1.5">
+        <button
+          type="button"
+          onClick={() => onViewChange("current")}
+          className={cn(
+            "rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors",
+            view === "current"
+              ? "bg-surface text-content shadow-xs"
+              : "text-content-muted hover:text-content",
+          )}
+        >
+          {t("chat.context.tabOverview")}
+        </button>
+        <button
+          type="button"
+          onClick={() => onViewChange("history")}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors",
+            view === "history"
+              ? "bg-surface text-content shadow-xs"
+              : "text-content-muted hover:text-content",
+          )}
+        >
+          <IconChartBar size={11} className="opacity-75" />
+          <span>{t("chat.context.tabHistory")}</span>
+          <span className="rounded-full bg-surface-muted px-1.5 text-[9.5px] tabular-nums text-content-subtle">
+            {history.length}
+          </span>
+        </button>
+      </div>
+      {view === "current" ? (
+        <ContextTooltipBody snapshot={snapshot} breakdown={breakdown} />
+      ) : (
+        <HistoryView history={history} maxTokens={maxTokens} />
+      )}
+    </div>
+  );
+}
 
 export function ContextStatsPopover({
   snapshot,
@@ -56,11 +124,8 @@ export function ContextStatsPopover({
    *  coordinates (getBoundingClientRect). Drives the fixed positioning. */
   anchorRect: DOMRect;
   onClose: () => void;
-  /** Which view the popover opens on. The ContextRing hover tooltip's
-   *  "查看详情" affordance passes "history" so it jumps straight to the
-   *  per-turn table (the live breakdown is already what the tooltip showed),
-   *  avoiding a redundant first screen. Defaults to "current". */
-  initialView?: View;
+  /** Initial active tab when pinned open. Defaults to "current". */
+  initialView?: ContextPanelView;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   // This popover is only mounted while open (parent gates `open && anchorRect`),
@@ -68,8 +133,7 @@ export function ContextStatsPopover({
   // the panel actually reaches the browser's rect (panelRef lets
   // useSuppressBrowserView measure it); otherwise the browser stays visible.
   useSuppressBrowserView(true, panelRef);
-  const [view, setView] = useState<View>(initialView);
-  const breakdown = getContextBreakdown(snapshot);
+  const [view, setView] = useState<ContextPanelView>(initialView);
   // Whether the panel has room to sit ABOVE the ring; falls back to below.
   // Computed after first measure so we can read the panel's own height.
   const [placeAbove, setPlaceAbove] = useState(true);
@@ -86,7 +150,7 @@ export function ContextStatsPopover({
     recompute();
     window.addEventListener("resize", recompute);
     return () => window.removeEventListener("resize", recompute);
-  }, [anchorRect.top]);
+  }, [anchorRect.top, view]);
 
   // Fixed positioning relative to the viewport (portaled to <body> so the
   // composer card's overflow-hidden can't clip the panel — the same reason
@@ -113,63 +177,20 @@ export function ContextStatsPopover({
       <div
         ref={panelRef}
         style={style}
-        className={cn(
-          "z-50 w-[380px] max-w-[calc(100vw-16px)]",
-          "overflow-hidden rounded-lg border border-edge bg-surface shadow-2xl",
-        )}
+        className="z-50 overflow-hidden rounded-lg border border-edge bg-surface shadow-2xl"
         // Stop-click so interacting with the panel doesn't hit the backdrop.
         onClick={(e) => e.stopPropagation()}
       >
-        {view === "current" ? (
-          <CurrentView
-            snapshot={snapshot}
-            breakdown={breakdown}
-            historyCount={history.length}
-            onShowHistory={() => setView("history")}
-          />
-        ) : (
-          <HistoryView history={history} maxTokens={maxTokens} />
-        )}
+        <ContextPanelContent
+          snapshot={snapshot}
+          history={history}
+          maxTokens={maxTokens}
+          view={view}
+          onViewChange={setView}
+        />
       </div>
     </>,
     document.body,
-  );
-}
-
-/* ───────── current view ───────── */
-
-function CurrentView({
-  snapshot,
-  breakdown,
-  historyCount,
-  onShowHistory,
-}: {
-  snapshot: ContextSnapshot;
-  breakdown: ReturnType<typeof getContextBreakdown>;
-  historyCount: number;
-  onShowHistory: () => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <div>
-      <ContextTooltipBody snapshot={snapshot} breakdown={breakdown} />
-      <div className="border-t border-edge/70">
-        <button
-          type="button"
-          onClick={onShowHistory}
-          className={cn(
-            "flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] transition-colors",
-            "text-content-muted hover:bg-surface-muted",
-          )}
-        >
-          <IconChartBar size={12} className="shrink-0 opacity-70" />
-          <span className="min-w-0 flex-1 truncate">{t("chat.context.history")}</span>
-          <span className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] tabular-nums text-content-subtle">
-            {t("chat.context.turns", { n: historyCount })}
-          </span>
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -223,16 +244,6 @@ function HistoryView({
 
   return (
     <div>
-      {/* Header: title + count. No back button — the popover closes on
-          outside click / blur (transparent backdrop) rather than returning
-          to the current view. */}
-      <div className="flex items-center gap-1 border-b border-edge/70 px-2.5 py-1.5">
-        <span className="flex items-center gap-1 text-[11px] font-semibold text-content">
-          <IconChartBar size={12} className="opacity-80" />
-          {t("chat.context.historyTurns", { n: history.length })}
-        </span>
-      </div>
-
       {ordered.length === 0 ? (
         <div className="px-3 py-6 text-center text-[11px] text-content-subtle">
           {t("chat.context.historyEmpty")}

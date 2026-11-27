@@ -128,7 +128,9 @@ export function Divider({
       aria-orientation={isVertical ? "vertical" : "horizontal"}
       className={cn(
         "group/divider relative z-10 shrink-0",
-        isVertical ? "w-px" : "h-px",
+        hideLine
+          ? isVertical ? "w-0" : "h-0"
+          : isVertical ? "w-px" : "h-px",
         className,
       )}
     >

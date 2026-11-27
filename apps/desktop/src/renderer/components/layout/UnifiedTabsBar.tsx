@@ -567,8 +567,10 @@ export function UnifiedTabsBar({ flushLeft = false }: { flushLeft?: boolean } = 
           }
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           className={cn(
-            "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-hover hover:text-content",
-            tabsFilePreviewPlacement === "sidebar" && "bg-surface-hover text-content",
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors",
+            tabsFilePreviewPlacement === "sidebar"
+              ? "bg-accent/15 text-accent"
+              : "text-content-subtle hover:bg-surface-hover hover:text-content",
           )}
         >
           <IconLayoutSidebarRight size={14} />

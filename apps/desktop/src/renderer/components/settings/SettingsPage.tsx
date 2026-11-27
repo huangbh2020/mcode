@@ -187,10 +187,10 @@ export function SettingsPage() {
                       key={item.id}
                       onClick={() => setActive(item.id)}
                       className={cn(
-                        "relative flex w-full items-center gap-2 rounded px-3 py-2 text-left transition-colors",
+                        "relative flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors",
                         isActive
-                          ? "bg-surface-hover font-medium text-content"
-                          : "text-content-muted hover:bg-surface-hover hover:text-content",
+                          ? "bg-accent/15 font-medium text-accent"
+                          : "text-content-muted hover:bg-surface-hover/70 hover:text-content",
                       )}
                     >
                       {isActive && (

@@ -42,7 +42,6 @@ import {
   IconFocus,
   IconGitBranch,
   IconGitFork,
-  IconLayoutSidebarLeftExpand,
   IconLoader2,
   IconMoon,
   IconPin,
@@ -59,7 +58,6 @@ import { cn } from "@renderer/lib/cn.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { describeSchedule } from "@renderer/components/automation/automationFormat.js";
 import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
-import { isMac } from "@renderer/lib/platform.js";
 import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
 import { normWorktreeKey, worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { useTheme, applyThemeClass } from "@renderer/lib/theme.js";
@@ -69,8 +67,8 @@ import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
 import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { ProjectManageMenuPopup, type ManageMenuState } from "./ProjectManageMenu.js";
-import { SidebarQuickActions } from "./SidebarQuickActions.js";
 import { MobileConnectButton } from "./MobileConnectDialog.js";
+import { ArchivedDialogButton } from "./ArchivedDialogButton.js";
 import { ArchivedRow, HoverIconButton, RenameDialog, SessionContextMenu } from "./SidebarShared.js";
 import { ForkSessionDialog } from "@renderer/components/chat/ForkSessionDialog.js";
 import { beginSessionDrag } from "@renderer/lib/sessionDrag.js";
@@ -198,9 +196,6 @@ function StreamSidebarBase() {
   const renameProject = useSessionStore((s) => s.renameProject);
   const setProjectColor = useSessionStore((s) => s.setProjectColor);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
-  // Collapse affordance shared with LeftBar: while the hover-peek drawer is
-  // showing (leftOpen is already false there) "collapse" dismisses the peek.
-  const collapseLeftPanel = useSessionStore((s) => s.collapseLeftPanel);
 
   // ── Data lifecycle. The aggregate refetches whenever the dirty flag is
   // set while this view is mounted (send / remote change / pin / archive…).
@@ -595,73 +590,11 @@ function StreamSidebarBase() {
 
   return (
     <div className="flex h-full flex-col px-2 py-2 [font-size:var(--right-panel-font-size)]">
-      {/* Top strip — same layout contract as the tree view (mac: traffic
-          lights strip; win: brand header), plus the mode switch. */}
-      {isMac ? (
-        <div
-          className="-mt-2 mb-2 flex h-10 items-center gap-1 pl-[70px]"
-          style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-        >
-          <button
-            type="button"
-            onClick={() => collapseLeftPanel()}
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded text-content-muted transition-colors",
-              "hover:bg-surface-hover hover:text-content",
-            )}
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            title={t("layout.hideLeftPanel")}
-          >
-            <IconLayoutSidebarLeftExpand size={18} className="shrink-0" />
-          </button>
-          <LeftBarModeSwitch />
-        </div>
-      ) : (
-        <div className="mb-2" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => collapseLeftPanel()}
-              className={cn(
-                "group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
-                "hover:bg-surface-hover/60",
-              )}
-              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-              title={t("layout.hideLeftPanel")}
-            >
-              <BrandLogo size={30} />
-              <span className="flex min-w-0 flex-col leading-tight">
-                <span className="truncate text-[1.07em] font-semibold tracking-tight text-content">
-                  Mcode
-                </span>
-                <span className="truncate text-content-subtle [font-size:var(--rp-fs-sm)]">
-                  {t("layout.tagline")}
-                </span>
-              </span>
-            </button>
-            <LeftBarModeSwitch />
-          </div>
-        </div>
-      )}
-
-      {/* 快捷入口 — 现状组件,原样挂载。Scoped to a managed worktree, the
-          新建会话 entry spawns the session in THAT checkout; scoped to a
-          plain project, it spawns under THAT project — both instead of the
-          active project, since the user has explicitly narrowed where they
-          are working. */}
-      <SidebarQuickActions
-        newSessionOverride={
-          scopedWorktree
-            ? () => void startSession(scopedWorktree.projectId, { worktreePath: scopedWorktree.path })
-            : scopedProjectId
-              ? () => void startSession(scopedProjectId)
-              : undefined
-        }
-        newSessionOverrideTitle={scopedWorktree ? undefined : scopedProjectId ? t("layout.newSessionHere") : undefined}
-        newTerminalSessionOverride={
-          scopedProjectId ? (providerId) => void startTerminalSession(scopedProjectId, providerId) : undefined
-        }
-      />
+      {/* 品牌 Logo 与系统名称已移至顶部通栏 Titlebar；流视图顶部仅保留视图切换。 */}
+      <div className="mb-1.5 flex items-center justify-between px-1">
+        <span className="text-[11px] font-medium text-content-subtle">{t("layout.nav.chat")}</span>
+        <LeftBarModeSwitch />
+      </div>
 
       {/* Scope filter: 全部项目 / per-project (+ its worktrees) / group +
           add project. Box metrics mirror SidebarQuickActions' rows (full
@@ -777,52 +710,6 @@ function StreamSidebarBase() {
           </ul>
         )}
 
-        {/* Archive shelf — collapsed by default (the tree's bin contents). */}
-        {archivedCount > 0 && (
-          <div className="mt-2">
-            <button
-              onClick={() => setArchivedViewOpen(!archivedViewOpen)}
-              className="mb-1 mt-2 flex w-full items-center gap-2 px-1.5 text-left"
-            >
-              <span className="[font-size:var(--rp-fs-sm)] font-medium text-content-subtle/70">
-                {t("layout.archivedCount", { n: archivedCount })}
-              </span>
-              <span className="h-px flex-1 bg-edge/60" aria-hidden />
-              <IconChevronRight
-                size={12}
-                className={cn(
-                  "shrink-0 text-content-subtle/70 transition-transform",
-                  archivedViewOpen && "rotate-90",
-                )}
-              />
-            </button>
-            {archivedViewOpen && (
-              <ul className="space-y-0.5">
-                {archivedProjects.map((p) => (
-                  <ArchivedRow
-                    key={p.id}
-                    icon={<IconFolder size={14} className="opacity-60" />}
-                    title={p.name}
-                    onRestore={() => void archiveProject(p.id, false)}
-                    onDelete={() => setConfirmDelete({ kind: "project", id: p.id, name: p.name })}
-                  />
-                ))}
-                {archivedList.map((s) => (
-                  <ArchivedRow
-                    key={s.id}
-                    icon={(() => {
-                      const { Icon, color } = getProviderIcon(s.providerId);
-                      return <Icon size={14} className={cn("opacity-60", color)} />;
-                    })()}
-                    title={s.title}
-                    onRestore={() => void archiveSession(s.id, false)}
-                    onDelete={() => setConfirmDelete({ kind: "session", id: s.id, title: s.title })}
-                  />
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Footer — same dock as the tree view. */}
@@ -838,6 +725,7 @@ function StreamSidebarBase() {
           <IconSettings size={14} className="shrink-0" />
           {t("layout.settings")}
         </button>
+        <ArchivedDialogButton />
         <button
           onClick={() => locateActiveSession(true)}
           disabled={!activeSessionId}
@@ -859,18 +747,6 @@ function StreamSidebarBase() {
         >
           {effectiveTheme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
         </button>
-        {!isMac && (
-          <button
-            onClick={() => collapseLeftPanel()}
-            className={cn(
-              "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
-              "hover:bg-surface-hover hover:text-content",
-            )}
-            title={t("layout.hideLeftPanel")}
-          >
-            <IconLayoutSidebarLeftExpand size={14} />
-          </button>
-        )}
         {/* 连接手机 — same footer slot as the tree view: rightmost compact
             icon trigger (self-contained dialog; count badge / accent tint
             signal from the button itself). */}

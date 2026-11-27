@@ -109,11 +109,10 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
  *  pt-12 对齐——骨架消失、真消息落地时顶部位置不跳变。 */
 const MESSAGE_LIST_TOP_PADDING = 48;
 
-/** 展开折叠卡(「N 个操作」操作条 / 工具卡 / 思考折叠)期间,挂起虚拟列表
- *  高度触发底部钉住的单窗预算;有效期内由 interval 按半窗重臂,保证卡片
- *  持续展开时钉住始终处于挂起态——pauseBottomAnchor 的一次性窗口到期会
- *  无条件清掉挂起,interval 在最多半窗内把它拉回来(见 streamAnchorPause.ts)。 */
-const FOLD_ANCHOR_HOLD_MS = 4000;
+/** Stable maintainScrollAtEnd configs for LegendList so identity doesn't
+ *  churn across renders while bottom-anchoring is suspended. */
+const MAINTAIN_SCROLL_LAYOUT_SUSPENDED = { on: { dataChange: true } } as const;
+const MAINTAIN_SCROLL_FULLY_SUSPENDED = { on: {} } as const;
 
 /** Stable empty roster for the side-chats selector (per the store rule:
  * selectors must return stable references or subscriptions loop). */
@@ -2031,23 +2030,21 @@ function ChatPaneForSession({
       setAnchorSuspension(null);
     }, ms);
   }, []);
-  // 展开的折叠卡经 StreamAnchorPauseContext 各持有一个 hold;只要有 hold 在
-  // 外(计数 > 0),高度触发的底部钉住就保持挂起("layout" 模式仍跟随新数据
-  // 行)——用户点开的操作条停在原位,内容只向下生长。计数由卡片点击配对
-  // 增减,卸载中的展开卡经 hook 的 cleanup 释放,不会泄漏。
+  // 展开的折叠卡经 StreamAnchorPauseContext 各持有一个 hold；只要有 hold 在
+  // 外（计数 > 0），高度触发的底部钉住就同步派生为挂起态（同一帧 render 即
+  // 生效，避免旧 useEffect 延迟一帧导致 LegendList 先贴底再被拽回的跳动）。
+  // 释放时补一个短窗兜住收起瞬间的高度变化。计数由卡片点击配对增减，卸载中
+  // 的展开卡经 hook 的 cleanup 释放，不会泄漏。
   const [foldAnchorHolds, setFoldAnchorHolds] = useState(0);
-  const holdStreamAnchor = useCallback((on: boolean) => {
-    setFoldAnchorHolds((c) => Math.max(0, c + (on ? 1 : -1)));
-  }, []);
-  useEffect(() => {
-    if (foldAnchorHolds <= 0) return;
-    holdAnchorSuspension("layout", FOLD_ANCHOR_HOLD_MS);
-    const rearm = window.setInterval(
-      () => holdAnchorSuspension("layout", FOLD_ANCHOR_HOLD_MS),
-      FOLD_ANCHOR_HOLD_MS / 2,
-    );
-    return () => window.clearInterval(rearm);
-  }, [foldAnchorHolds, holdAnchorSuspension]);
+  const holdStreamAnchor = useCallback(
+    (on: boolean) => {
+      setFoldAnchorHolds((c) => Math.max(0, c + (on ? 1 : -1)));
+      if (!on) {
+        holdAnchorSuspension("layout", TURN_FOLD_MS + 60);
+      }
+    },
+    [holdAnchorSuspension],
+  );
   /** Scroll the given message to the top of the viewport ("re-anchor to the
    *  question"): the turn ended with the question pushed out above, so bring
    *  it back and let the answer sit below. Same aim-then-locate scheme as
@@ -3972,6 +3969,7 @@ function ChatPaneForSession({
           // MessageRow 自己给，动画壳不再带 margin）。
           <MessageRow
             msg={it.msg}
+            liveTurn
             tightTop
             beforeMap={beforeMap}
             hideTurnStat
@@ -3992,6 +3990,7 @@ function ChatPaneForSession({
               node: (
                 <MessageRow
                   msg={{ ...it.msg, blocks: kept }}
+                  liveTurn
                   tightTop
                   beforeMap={beforeMap}
                   hideTurnStat
@@ -4087,6 +4086,7 @@ function ChatPaneForSession({
                 <MessageRow
                   msg={m}
                   isStreamingTail={item.isStreamingTail}
+                  liveTurn={item.live}
                   isTurnTail={item.isTurnTail}
                   isTurnLead={item.isTurnLead}
                   tightTop={item.tightTop}
@@ -4508,18 +4508,17 @@ function ChatPaneForSession({
                 return `turn:${item.turnMeta?.startedAt ?? ""}`;
               }}
               maintainScrollAtEnd={
-                anchorSuspension === "layout"
-                  ? // Manual expand/collapse: drop the itemLayout/layout
-                    // triggers so LegendList stops snapping scroll to hold
-                    // the bottom pinned against our height transition.
-                    // onDataChange stays on so streaming still follows new
-                    // messages.
-                    { on: { dataChange: true } }
-                  : anchorSuspension === "full"
-                    ? // Just-completed turn fold-away: also drop dataChange —
-                      // the turn.done regroup itself is a data change and
-                      // turn-files/plan cards keep landing right after it.
-                      { on: {} }
+                anchorSuspension === "full"
+                  ? // Just-completed turn fold-away: also drop dataChange —
+                    // the turn.done regroup itself is a data change and
+                    // turn-files/plan cards keep landing right after it.
+                    MAINTAIN_SCROLL_FULLY_SUSPENDED
+                  : anchorSuspension === "layout" || foldAnchorHolds > 0
+                    ? // Manual expand/collapse or open fold card: drop
+                      // itemLayout/layout triggers synchronously on the click
+                      // frame so LegendList doesn't snap-scroll against height
+                      // growth. dataChange stays on for live streaming.
+                      MAINTAIN_SCROLL_LAYOUT_SUSPENDED
                     : true
               }
               // extraData drives LegendList's "should re-render all visible
@@ -4601,12 +4600,20 @@ function ChatPaneForSession({
       )}
       </div>
 
-      {/* Split-view portal mode: with no composer column left in the pane,
-          the empty-thread welcome centers over the pane's stream area
-          instead of riding along into the bottom strip. */}
-      {empty && composerPortalTarget && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <EmptyThreadWelcome projectName={projectName} />
+      {/* Empty-thread welcome stage — fills the upper space above the
+          bottom-docked composer (and also covers split-view portal mode). */}
+      {empty && (
+        <div
+          className={cn(
+            "flex items-center justify-center overflow-y-auto px-[var(--chat-gutter)] pb-6 pt-6",
+            composerPortalTarget ? "absolute inset-0" : "min-h-0 flex-1",
+          )}
+        >
+          <EmptyThreadWelcome
+            projectName={projectName}
+            projectPath={projectPath}
+            onFillPrompt={(text) => editorRef.current?.setText(text)}
+          />
         </div>
       )}
 
@@ -4700,33 +4707,19 @@ function ChatPaneForSession({
         </div>
       </div>
 
-      {/* Input box — fixed at the bottom (outside the scroll container) so
-          the user always has access to the composer. No border-t divider:
-          the box sits flush against the message area. When the session is
-          empty the wrapper takes flex-1 and centers the box vertically. */}
+      {/* Input box — always docked at the bottom (both on empty threads and
+          active streams) so sending the first message causes zero layout jump. */}
       <ComposerPortal target={composerPortalTarget}>
-      <div className={cn(
-        "relative px-[var(--chat-gutter)]",
-        empty
-          ? "flex flex-1 items-center justify-center overflow-hidden"
-          : "shrink-0 pb-3",
-      )}>
+      <div className="relative shrink-0 px-[var(--chat-gutter)] pb-3">
         <div
           className={cn(
-            "relative w-full",
-            empty
-              ? "max-w-4xl"
-              // Pending decision cards live in the pane above (never portaled),
-              // so the column skips its top padding while one owns the input
-              // area in single-pane mode — otherwise the card and the chips row would drift apart.
-              : hasPendingPrompt && !composerPortalTarget
-                ? "mx-auto max-w-5xl"
-                : "mx-auto max-w-5xl pt-5",
+            "relative mx-auto w-full max-w-5xl",
+            // Pending decision cards live in the pane above (never portaled),
+            // so the column skips its top padding while one owns the input
+            // area in single-pane mode — otherwise the card and the chips row would drift apart.
+            !empty && !(hasPendingPrompt && !composerPortalTarget) && "pt-5",
           )}
         >
-          {empty && !composerPortalTarget && (
-            <EmptyThreadWelcome projectName={projectName} />
-          )}
           {/* Composer-top chips row — directory switcher (fresh LOCAL
               sessions only, hidden when there's <2 projects) then the
               working-environment picker. Both are quiet text triggers
@@ -4779,8 +4772,8 @@ function ChatPaneForSession({
             // data-busy top-edge sweep bar is gone — 2026-11-17: running state
             // is carried by the turn ledger head + the cluster island instead.)
             className={cn(
-              "composer-card relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-surface transition-all duration-200",
-              "focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgb(var(--accent)/0.12)]",
+              "composer-card relative flex min-w-0 flex-col overflow-hidden rounded-[22px] border border-edge/80 bg-surface-card shadow-[0_6px_24px_-10px_rgba(0,0,0,0.32)] transition-all duration-200",
+              "focus-within:border-accent/55 focus-within:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.42)]",
               // Highlight the composer while a file-tree drag hovers over it.
               dragOver && "border-accent ring-4 ring-accent/20",
               // Voice listening active glow + subtle pulse
@@ -5098,15 +5091,15 @@ function ChatPaneForSession({
                   shouldPromotePaste={(text) => !pastePlainText && shouldPromoteToTag(text, pasteTagThresholdChars)}
                   onPasteFiles={handlePasteFiles}
                   className={cn(
-                    "px-3 pt-2.5 text-sm leading-relaxed text-content",
-                    (visibleTags.length > 0 || pendingImages.length > 0) && "pt-1.5",
+                    "px-5 pt-3.5 text-sm leading-relaxed text-content",
+                    (visibleTags.length > 0 || pendingImages.length > 0) && "pt-2",
                   )}
                 />
               </RenderErrorBoundary>
             )}
             <div
               ref={composerActionRowRef}
-              className="composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5"
+              className="composer-action-row flex flex-wrap items-center justify-between gap-2 px-3.5 pb-2.5 pt-1"
             >
               <div className="composer-chips flex min-w-0 flex-1 items-center gap-1">
                 {chipsMode === "collapsed" ? (
@@ -5170,7 +5163,7 @@ function ChatPaneForSession({
                     title={t(sessionBusy ? "chat.stopGenerating" : "orch.canvas.stop")}
                     aria-label={t("chat.stopGenerating")}
                     className={cn(
-                      "composer-stop inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-danger text-surface transition-all duration-150 ease-out",
+                      "composer-stop inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-danger text-surface transition-all duration-150 ease-out",
                       "hover:scale-105 hover:brightness-110 active:scale-95 active:brightness-95",
                     )}
                   >
@@ -5185,7 +5178,7 @@ function ChatPaneForSession({
                     data-ready={hasComposerContent ? "1" : "0"}
                     onAnimationEnd={() => setSendLaunching(false)}
                     className={cn(
-                      "composer-send inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent text-surface shadow-sm transition-all duration-150 ease-out",
+                      "composer-send inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-surface shadow-sm transition-all duration-150 ease-out",
                       "hover:scale-110 hover:brightness-110 hover:shadow-md hover:shadow-accent/20",
                       "active:scale-95 active:brightness-95",
                       "disabled:scale-100 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-content-subtle disabled:shadow-none disabled:hover:scale-100",
@@ -5386,6 +5379,7 @@ const expandedUserMessages = new Set<string>();
 const MessageRow = memo(function MessageRow({
   msg,
   isStreamingTail,
+  liveTurn,
   isTurnTail,
   isTurnLead,
   beforeMap,
@@ -5404,6 +5398,9 @@ const MessageRow = memo(function MessageRow({
 }: {
   msg: ChatMessage;
   isStreamingTail?: boolean;
+  /** True when this row belongs to an actively streaming turn (drives
+   *  incremental markdown rendering without duplicating the spine caret). */
+  liveTurn?: boolean;
   isTurnTail?: boolean;
   /** Whether this user row opens a new turn following prior assistant output. */
   isTurnLead?: boolean;
@@ -5786,7 +5783,7 @@ const MessageRow = memo(function MessageRow({
             </>
           ) : (
             <div className="relative">
-              <MessageBlocks blocks={renderBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+              <MessageBlocks blocks={renderBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} liveTurn={liveTurn} onOpenPlan={onOpenPlan} projectPath={projectPath} />
               {/* Streaming caret at the bottom of the content while this message
                   is still receiving deltas — 方案A replaces the spinner glyph
                   with a blinking caret (the reply is being typed). */}

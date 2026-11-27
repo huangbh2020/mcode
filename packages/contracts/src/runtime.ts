@@ -177,6 +177,22 @@ export type ContextWarningKind =
   | "near-window"
   | "large-prompt";
 
+/** One category slice in the context-window breakdown (e.g. Claude CLI's
+ *  `get_context_usage` / `/context` report). */
+export interface ContextCategory {
+  /** Stable identifier if supplied by the CLI (e.g. "system_prompt"). */
+  id?: string;
+  /** Category display name from the CLI (e.g. "System prompt", "MCP tools",
+   *  "Messages", "Autocompact buffer", "Free space"). */
+  name: string;
+  /** Token count attributed to this category. */
+  tokens: number;
+  /** True for deferred/lazy-loaded categories not occupying the live prompt. */
+  isDeferred?: boolean;
+  /** Raw kind hint from the CLI if provided. */
+  kind?: string;
+}
+
 /** A ready-to-render snapshot of context-window state. Built by the adapter
  *  from raw SDK usage fields; all math (pct / warning / clamps) is already
  *  applied. */
@@ -210,6 +226,13 @@ export interface ContextSnapshot {
   /** Granular doc-§5 warnings triggered this turn (uncached-ingestion /
    *  near-window / large-prompt). */
   warnings: ContextWarningKind[];
+  /** Per-category breakdown of context-window occupancy when reported by the
+   *  provider (Claude CLI control channel). */
+  categories?: ContextCategory[];
+  /** Whether auto-compaction is enabled for this session (Claude CLI). */
+  isAutoCompactEnabled?: boolean;
+  /** Token threshold at which auto-compaction triggers (Claude CLI). */
+  autoCompactThreshold?: number;
 }
 
 /** Emitted by the provider adapter whenever a new token-usage snapshot is

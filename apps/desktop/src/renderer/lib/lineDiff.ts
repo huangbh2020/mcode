@@ -86,6 +86,37 @@ export function diffSummary(diff: ReadonlyArray<DiffLine>): { adds: number; dels
   return { adds, dels };
 }
 
+/** Parse a unified diff / patch string (e.g. Codex `fileChange.changes[].diff`)
+ *  into the flat `DiffLine[]` consumed by `DiffView`. File headers (`---`/`+++`/
+ *  `diff --git`/`index`) and hunk markers (`@@ ... @@`) are stripped so the
+ *  output matches `lineDiff()`. */
+export function parseUnifiedDiff(patch: string): DiffLine[] {
+  const lines = splitLines(patch);
+  const out: DiffLine[] = [];
+  for (const line of lines) {
+    if (
+      line.startsWith("diff --git ") ||
+      line.startsWith("index ") ||
+      line.startsWith("--- ") ||
+      line.startsWith("+++ ") ||
+      line.startsWith("@@ ") ||
+      line === "\\ No newline at end of file"
+    ) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      out.push({ op: "insert", text: line.slice(1) });
+    } else if (line.startsWith("-")) {
+      out.push({ op: "delete", text: line.slice(1) });
+    } else if (line.startsWith(" ")) {
+      out.push({ op: "equal", text: line.slice(1) });
+    } else {
+      out.push({ op: "equal", text: line });
+    }
+  }
+  return out;
+}
+
 /** Split text on `\n` while preserving empty trailing lines (so a file
  *  ending with `\n` doesn't get a phantom empty last line, but a blank
  *  line in the middle of the file does show up as an empty string).

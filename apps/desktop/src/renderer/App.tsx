@@ -7,7 +7,7 @@ import { getSessionDragPayload, isSessionDrag } from "@renderer/lib/sessionDrag.
 import { ThreePaneLayout } from "./components/layout/ThreePaneLayout.js";
 import { Divider } from "./components/layout/Divider.js";
 import { Titlebar } from "./components/layout/Titlebar.js";
-import { useIsFirstTabActive } from "./components/layout/UnifiedTabsBar.js";
+import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
 import { LeftBar } from "./components/layout/LeftBar.js";
 import { StreamSidebar } from "./components/layout/StreamSidebar.js";
 import {
@@ -188,7 +188,6 @@ export function App() {
    *  a sibling view (not a modal) sharing the same titlebar + pane shell. */
   const settingsOpen = useSessionStore((s) => s.settingsOpen);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
-  const isFirstTabActive = useIsFirstTabActive();
 
   /** 定时任务只读查看页 — same full-bleed overlay form as the settings page
    *  (mutually exclusive with it; see setSchedPageOpen). */
@@ -340,10 +339,8 @@ export function App() {
   };
 
   return (
-    // bg-surface-muted (matching the sidebar/toolbar/track) so the left
-    // divider's transparent 1px layout slot blends in — a bg-surface root
-    // showed through it as a stray light/dark hairline cutting the frame.
-    <div ref={rootRef} className="flex h-full w-full bg-surface-muted text-content">
+    // 方案 4 通栏顶栏 + 紧凑三栏分舱：顶栏紧贴窗顶与原生窗口按钮无缝衔接，下方三栏各自成独立圆角分舱，统一 3px 呼吸缝。
+    <div ref={rootRef} className="flex h-full w-full flex-col gap-[3px] bg-surface-muted px-[3px] pb-[3px] pt-0 text-content">
       {/* Command palette + file search dialog overlay both workspace and
           settings views. The browser panel overlay mounts here too - it
           covers the workspace with a fixed inset overlay (z-40, below the
@@ -408,121 +405,61 @@ export function App() {
       {rightDrawer && (
         <PeekScrim active={rightPeekOpen} onClose={() => setRightPeekOpen(false)} />
       )}
-      <aside
-        onMouseEnter={leftPeekOpen ? cancelLeftPeekClose : undefined}
-        // Explicit no-arg call: React passes the MouseEvent as the first
-        // argument, and schedule's optional ms-override parameter would
-        // swallow it as a grace duration.
-        onMouseLeave={leftPeekOpen ? () => scheduleLeftPeekClose() : undefined}
-        className={cn(
-          // min-w-0 kills the flex `min-width: auto` content floor —
-          // without it the widest nowrap row in LeftBar (e.g. a long
-          // session title, which contributes its full text width to
-          // min-content) propped the aside open no matter how small
-          // leftWidthPct got.
-          "flex h-full min-w-0 shrink flex-col rounded-tl-2xl bg-surface-muted",
-          leftDrawer &&
-            cn(
-              // Drawer mode: fixed overlay parked off-canvas; the peek slides
-              // it in over the workspace (z-[45], under the z-50 dialogs).
-              // overflow-hidden clips content to the rounded right corners.
-              "fixed left-0 top-0 z-[45] shrink-0 overflow-hidden",
-              "rounded-r-2xl border-r border-edge-panel/60",
-              leftDrawerArmed &&
-                "transition-[transform,opacity,box-shadow] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
-              leftPeekOpen
-                ? "pointer-events-auto translate-x-0 opacity-100 shadow-[12px_0_48px_-12px_rgba(0,0,0,0.45)]"
-                : "pointer-events-none -translate-x-full opacity-0",
-            ),
-          (settingsOpen || schedPageOpen || rightPanelMaximized) && "hidden",
+      {/* 顶部通栏工具栏：贯穿左边栏、中间栏与右边栏。 */}
+      <Titlebar
+        mode={settingsOpen ? "settings" : schedPageOpen ? "sched" : "workspace"}
+        leftOpen={leftOpen}
+        rightOpen={settingsOpen || schedPageOpen ? false : rightOpen}
+        onBack={() => (settingsOpen ? setSettingsOpen(false) : setSchedPageOpen(false))}
+        onToggleLeft={() => setLeftOpen(!leftOpen)}
+        onToggleRight={() => setRightOpen(!rightOpen)}
+      />
+      {/* 下方三栏主工作区行（左栏 + 中栏 + 右栏），设置/定时任务覆盖层铺满此行。 */}
+      <div className="relative flex min-h-0 flex-1 gap-[3px] bg-surface-muted">
+        <aside
+          onMouseEnter={leftPeekOpen ? cancelLeftPeekClose : undefined}
+          onMouseLeave={leftPeekOpen ? () => scheduleLeftPeekClose() : undefined}
+          className={cn(
+            "flex h-full min-w-0 shrink flex-col overflow-hidden rounded-xl border border-edge bg-surface",
+            leftDrawer &&
+              cn(
+                "fixed bottom-[3px] left-[3px] top-[46px] z-[45] h-auto shrink-0 overflow-hidden bg-surface",
+                "rounded-xl border border-edge-panel/70",
+                leftDrawerArmed &&
+                  "transition-[transform,opacity,box-shadow] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
+                leftPeekOpen
+                  ? "pointer-events-auto translate-x-0 opacity-100 shadow-[12px_0_48px_-12px_rgba(0,0,0,0.45)]"
+                  : "pointer-events-none -translate-x-full opacity-0",
+              ),
+            (settingsOpen || schedPageOpen || rightPanelMaximized) && "hidden",
+          )}
+          style={
+            leftDrawer
+              ? { width: `${leftWidthPct}%` }
+              : { flexGrow: 0, flexBasis: `${leftWidthPct}%` }
+          }
+        >
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {leftBarMode === "stream" ? <StreamSidebar /> : <LeftBar />}
+          </div>
+        </aside>
+        {leftOpen && !settingsOpen && !schedPageOpen && !rightPanelMaximized && (
+          <Divider
+            orientation="vertical"
+            hideLine
+            className="z-20 -mx-[1.5px]"
+            onResize={handleLeftResize}
+            onDoubleClick={resetLeftWidthPct}
+          />
         )}
-        style={
-          leftDrawer
-            ? { width: `${leftWidthPct}%` }
-            : { flexGrow: 0, flexBasis: `${leftWidthPct}%` }
-        }
-      >
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {/* Left-bar view preference: classic project tree or the
-              session-first stream. Both are pure renderers over the same
-              store; switching keeps running turns untouched. */}
-          {leftBarMode === "stream" ? <StreamSidebar /> : <LeftBar />}
-        </div>
-      </aside>
-      {leftOpen && !settingsOpen && !schedPageOpen && !rightPanelMaximized && (
-        <Divider
-          orientation="vertical"
-          hideLine
-          // z-20 lifts the invisible ±5px hit area above the center pane's
-          // z-10 — without it the pane (later in DOM, same z) swallowed the
-          // right half of the grab zone, leaving only the sidebar-side 5px.
-          className="z-20"
-          onResize={handleLeftResize}
-          onDoubleClick={resetLeftWidthPct}
-        />
-      )}
-      {/*
-        Right column — the 7 of the 3:7 split: the toolbar (Titlebar) on top
-        and the main panel below (center chat/editor pane + right IDE panel,
-        plus the bottom terminal inside the center main).
-      */}
-      <div className="flex min-w-[600px] flex-1 flex-col">
-        {/*
-          Workspace shell is ALWAYS mounted — the settings view renders as an
-          overlay on top of it, not as a mutually-exclusive sibling. This is
-          critical: BottomTerminalBar (→ TerminalPanel → every TerminalView)
-          lives inside ThreePaneLayout. A ternary swap `settingsOpen ?
-          <Settings> : <Workspace>` would unmount the whole workspace subtree
-          on every settings open, killing all live PTYs (TerminalView's
-          cleanup calls api.terminal.kill) and destroying scrollback — and
-          racing many concurrent pty.kill() calls on Windows occasionally
-          crashes the main process. Keeping the workspace mounted preserves
-          the carefully-built cross-project terminal keep-alive (see
-          TerminalPanel.tsx) exactly as designed. The Titlebar below switches
-          its mode + the settings overlay covers the main panel visually (the
-          left sidebar stays visible alongside it).
-        */}
-        <Titlebar
-          mode={settingsOpen ? "settings" : schedPageOpen ? "sched" : "workspace"}
-          leftOpen={leftOpen}
-          rightOpen={settingsOpen || schedPageOpen ? false : rightOpen}
-          onBack={() => (settingsOpen ? setSettingsOpen(false) : setSchedPageOpen(false))}
-          onToggleLeft={() => setLeftOpen(!leftOpen)}
-          onToggleRight={() => setRightOpen(!rightOpen)}
-        />
-        {/* Main panel row — bg-surface-muted as the contrasting track so the
-            center pane's rounded left-edge corners (in ThreePaneLayout)
-            reveal this muted color through the notches and read as clean
-            arcs. The left sidebar (bg-surface-muted) blends into the track
-            on its side; the center pane (bg-surface) separates from the
-            track by the flat color step alone (no shadow). */}
-        <div className="relative flex min-h-0 flex-1 bg-surface-muted">
-          {/*
-            Center is ONE stable tree across wide mode (CenterPane takes the
-            wide flag as a render variation) — the old ternary swap
-            `<WidePanelSplit/> : <CenterPane/>` remounted every ChatPane
-            (Tiptap, timeline) + the whole right panel on each toggle, which
-            read as a lag. Wide mode only re-shapes the layout: the right
-            aside switches to the percentage share (rightWidthPct) and stays
-            open (setWidePanelOpen forces rightOpen=true on enter and
-            restores the snapshot on exit), so RightPanel — file tree, git
-            scan, browser view ownership — is never torn down.
-          */}
-          <ThreePaneLayout
-            left={null}
-            center={<CenterPane wide={widePanelOpen} />}
-            right={<RightPanel />}
-            leftOpen={false}
-            attachToTitlebar
-            flushTopLeft={
-              leftOpen &&
-              !widePanelOpen &&
-              !browserPanelOpen &&
-              !settingsOpen &&
-              !schedPageOpen &&
-              isFirstTabActive
-            }
-            flushLeftEdge={!leftOpen}
+        <ThreePaneLayout
+          left={null}
+          center={<CenterPane wide={widePanelOpen} />}
+          right={<RightPanel />}
+          leftOpen={false}
+          attachToTitlebar={false}
+          flushTopLeft={false}
+          flushLeftEdge={false}
             rightOpen={rightOpen}
             rightWidth={rightWidth}
             rightMaximized={rightPanelMaximized}
@@ -568,7 +505,7 @@ export function App() {
             renders.
           */}
           {settingsOpen && (
-            <div className="settings-root absolute inset-0 z-30 flex bg-surface-muted">
+            <div className="settings-root absolute inset-0 z-30 flex gap-[3px] bg-surface-muted">
               <SettingsPage />
             </div>
           )}
@@ -582,7 +519,6 @@ export function App() {
               <SchedPage />
             </div>
           )}
-        </div>
       </div>
       {/* Global bottom-right corner: update notification card + runtime
           reminder card + toast stack share one fixed column so they stack
@@ -730,10 +666,10 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* The tab strip lives in the TITLEBAR since the 2026-10-31 single-row
-          merge (Titlebar.tsx renders UnifiedTabsBar) — the standalone strip
-          row that used to sit here is gone; wide mode hides file/plan tabs
-          inside the strip instead. */}
+      {/* 方案 4：会话/文件标签栏内嵌在中间面板顶部。h-10 + flushLeft 还原首 Tab 贴左无左反圆角及底边融合效果。 */}
+      <div className="flex h-10 shrink-0 items-stretch border-b border-edge bg-surface-muted/75">
+        <UnifiedTabsBar flushLeft />
+      </div>
       {/* Split drag-in host: dropping a sidebar session below the tab bar
           splits the CURRENTLY OPEN tab in place (per-tab group) — the
           dragged session never becomes a tab. Only the content area is a

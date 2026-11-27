@@ -30,17 +30,21 @@ export interface RememberedComposerEntry {
 export function mergeRememberedEntry(
   prev: RememberedComposerEntry | undefined,
   incoming: {
-    model: string;
-    customModelId: string | null;
-    effort: EffortLevel;
-    permissionMode: PermissionMode;
+    model?: string;
+    customModelId?: string | null;
+    effort?: EffortLevel;
+    permissionMode?: PermissionMode;
   },
 ): RememberedComposerEntry {
-  const upgrade = incoming.model !== "default";
+  const upgrade = incoming.model !== undefined && incoming.model !== "default";
+  const nextEffort = incoming.effort ?? prev?.effort;
+  const nextPermission = incoming.permissionMode ?? prev?.permissionMode;
   return {
-    model: upgrade ? incoming.model : (prev?.model ?? incoming.model),
-    customModelId: upgrade ? incoming.customModelId : (prev?.customModelId ?? incoming.customModelId),
-    effort: incoming.effort,
-    permissionMode: incoming.permissionMode,
+    model: upgrade ? incoming.model! : (prev?.model ?? incoming.model ?? "default"),
+    customModelId: upgrade
+      ? (incoming.customModelId ?? null)
+      : (prev?.customModelId ?? incoming.customModelId ?? null),
+    ...(nextEffort !== undefined ? { effort: nextEffort } : {}),
+    ...(nextPermission !== undefined ? { permissionMode: nextPermission } : {}),
   };
 }

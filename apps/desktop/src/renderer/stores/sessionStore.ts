@@ -33,7 +33,7 @@ import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { disposeModel, getDisplayedPath, getModelEntry, updateBaseline } from "@renderer/lib/editorModelCache.js";
 import type { ClaudeMenuRoleKey, CustomModelPublic } from "@contracts/customModel";
 import type { PiThinkingLevelMap } from "@contracts/piModel";
-import { resolveEffortLevels, coerceEffortValue, defaultEffortForLevels } from "@renderer/lib/thinkingLevels.js";
+import { resolveEffortLevels, coerceEffortValue } from "@renderer/lib/thinkingLevels.js";
 import { mergeRememberedEntry } from "@renderer/lib/composerMemory.js";
 import { api, isWebTransport } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
@@ -4141,10 +4141,19 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   // model/effort/permission.
   const finalActive = nextActive ?? nextInProject?.id ?? null;
   const sess = finalActive
-    ? findSession(sessionsByProject, archivedByProject, inPinned ? nextList : s.pinnedSessions, nextStream, finalActive)
+    ? findSession(
+        sessionsByProject,
+        archivedByProject,
+        inPinned ? nextList : s.pinnedSessions,
+        nextStream,
+        finalActive,
+        s.orchWorkersById,
+      )
     : undefined;
   // Clear the new active session's unread badge - it's now visible.
   if (finalActive) delete dropped.unreadBySession[finalActive];
+  const configPatch = sess ? buildSessionConfigPatch(s, sess) : {};
+  const projectSwitched = sess != null && sess.projectId !== s.activeProjectId;
   return {
     sessionsByProject,
     archivedSessionsByProject: archivedByProject,
@@ -4160,12 +4169,16 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     // `sessions` aliases the ACTIVE PROJECT's list — never assign a bucket
     // the row was removed from (stream aggregate / pinned) into it; those
     // rows weren't part of the project window, which stays untouched.
-    sessions: isActiveProject && !inStream && !inPinned ? nextList : s.sessions,
+    ...(projectSwitched
+      ? {
+          activeProjectId: sess.projectId,
+          sessions: sessionsByProject[sess.projectId] ?? EMPTY_SESSIONS,
+        }
+      : {
+          sessions: isActiveProject && !inStream && !inPinned ? nextList : s.sessions,
+        }),
     activeSessionId: finalActive,
-    model: sess?.model ?? s.model,
-    effort: sess?.effort ?? s.effort,
-    permissionMode: sess?.permissionMode ?? s.permissionMode,
-    customModelId: sess?.customModelId ?? s.customModelId,
+    ...configPatch,
     streamDirty: true,
   };
 }
@@ -4201,7 +4214,6 @@ function coerceSlotsForProvider(
    *  persisted effort BEFORE applying that session's model patch; setProvider
    *  coerces the restored binding). Omit to use the store's current slots. */
   binding?: { customModelId: string | null; model: string },
-  options?: { resetEffort?: boolean },
 ): { effort: SessionState["effort"]; permissionMode: SessionState["permissionMode"] } {
   const provider = s.providers.find((p) => p.id === providerId);
   // Same resolution the effort chip renders with: provider-declared levels,
@@ -4222,13 +4234,7 @@ function coerceSlotsForProvider(
   });
   const modes = provider?.capabilities.permissionModes;
   return {
-    // Snap target: when resetting (explicit model switch), pick the default
-    // thinking level for the model ladder ("default"/Auto for Claude/Codex/OpenCode,
-    // "medium" for Pi). Otherwise snap the existing effort value onto the
-    // available ladder.
-    effort: options?.resetEffort
-      ? defaultEffortForLevels(levels)
-      : coerceEffortValue(s.effort, levels),
+    effort: coerceEffortValue(s.effort, levels),
     permissionMode:
       modes && modes.length > 0 && !modes.some((m) => m.value === s.permissionMode)
         ? "default"
@@ -4236,46 +4242,69 @@ function coerceSlotsForProvider(
   };
 }
 
-/** Read a session's persisted config (model / effort / permissionMode /
- *  customModelId) into the global view slots so the composer renders the
- *  active thread's choices. If the session can't be found (not yet loaded,
- *  or unknown id), leaves the slot untouched — better to keep a previous
- *  valid value than to flash a placeholder while the cache is filling. */
+/** Pure config-slot projection for activating `sess`.
+ *  Shared by `syncConfigFromSession` and inline `set((s) => ...)` transitions
+ *  (closeTab / archiveSession / applySessionDeletedState / deleteProject /
+ *  archiveProject) so every activation path keeps `providerId`, `model`,
+ *  `effort`, `permissionMode`, and `customModelId` (including provider-scoped
+ *  coercion and customModelId sanitization) in lockstep. */
+function buildSessionConfigPatch(
+  s: SessionState,
+  sess: Session,
+): Pick<
+  SessionState,
+  "providerId" | "model" | "effort" | "permissionMode" | "customModelId"
+> {
+  const bindingCustomModelId = sanitizeBinding(s, sess.providerId, sess.customModelId);
+  const coerced = coerceSlotsForProvider(
+    { ...s, effort: sess.effort, permissionMode: sess.permissionMode },
+    sess.providerId,
+    {
+      customModelId: bindingCustomModelId,
+      model: sess.model,
+    },
+  );
+  return {
+    providerId: sess.providerId,
+    model: sess.model,
+    effort: coerced.effort,
+    permissionMode: coerced.permissionMode,
+    customModelId: bindingCustomModelId,
+  };
+}
+
+/** Read a session's persisted config (providerId / model / effort /
+ *  permissionMode / customModelId) into the global view slots so the composer
+ *  renders the active thread's choices. Returns whether the session row was
+ *  found and synced; callers whose target wasn't in the paginated in-memory
+ *  caches can fall back to `syncMissingSessionConfig`. */
 function syncConfigFromSession(
   set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
   get: () => SessionState,
   sessionId: string,
-): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
-  if (!sess) return;
+  resolvedSession?: Session,
+): boolean {
+  const s = get();
+  const sess =
+    resolvedSession ??
+    findSession(
+      s.sessionsByProject,
+      s.archivedSessionsByProject,
+      s.pinnedSessions,
+      s.streamSessions,
+      sessionId,
+      s.orchWorkersById,
+    );
+  if (!sess) return false;
   // Keep activeProjectId in lockstep with the active session's owning project.
   // Without this, switching to a thread in project B while activeProjectId
   // still points at project A would leave the IDE file tree (and any
   // project-scoped UI) showing the wrong project. Every entry point that
   // activates a session (selectSession / openTab / rewindTurn) routes through
   // this helper, so this single sync covers all of them.
-  const prevPid = get().activeProjectId;
-  // effort / permissionMode are provider-namespaced (see coerceSlotsForProvider):
-  // a row persisted before a provider switch — or before this coercion existed —
-  // can carry a value its own provider doesn't declare; snap it here so the
-  // composer never renders a raw foreign id. The coercion is scoped to the
-  // SESSION's model binding (not the current slots — the patch below hasn't
-  // applied yet), so an OpenAI-protocol model whose thinking levels don't
-  // include the persisted effort is corrected against the right list.
-  // customModelId is sanitized the same way: a row can carry a Claude custom
-  // binding under providerId pi/codex (stale slots once persisted it) and the
-  // effort chip would resolve Claude's ladder for this session.
-  const bindingCustomModelId = sanitizeBinding(get(), sess.providerId, sess.customModelId);
-  const coerced = coerceSlotsForProvider(get(), sess.providerId, {
-    customModelId: bindingCustomModelId,
-    model: sess.model,
-  });
+  const prevPid = s.activeProjectId;
   const patch: Partial<SessionState> = {
-    providerId: sess.providerId,
-    model: sess.model,
-    effort: coerced.effort,
-    permissionMode: coerced.permissionMode,
-    customModelId: bindingCustomModelId,
+    ...buildSessionConfigPatch(s, sess),
     activeProjectId: sess.projectId,
   };
   // The `sessions` field is a derived view of the ACTIVE project's session
@@ -4330,6 +4359,28 @@ function syncConfigFromSession(
   // the activated session's project.
   if (prevPid !== sess.projectId) {
     void get().reloadSkills();
+  }
+  return true;
+}
+
+/** Fallback when `syncConfigFromSession` missed the in-memory caches (e.g. a
+ *  session outside the project's first page after collapsing the project, or
+ *  jumped to from search/toast/automation). Fetches the row via `session:get`
+ *  and applies its config if the session is still active. */
+async function syncMissingSessionConfig(
+  set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  get: () => SessionState,
+  sessionId: string,
+): Promise<void> {
+  try {
+    const { session } = await api.session.get({ sessionId });
+    if (!session) return;
+    patchSessionRowBuckets(set, session);
+    if (get().activeSessionId === sessionId) {
+      syncConfigFromSession(set, get, sessionId, session);
+    }
+  } catch {
+    // Session may have been deleted or transport unavailable; leave current slots.
   }
 }
 
@@ -4588,6 +4639,20 @@ function persistComposerSelection(
     });
 }
 
+const CLAUDE_MENU_ROLE_KEYS: readonly ClaudeMenuRoleKey[] = ["sonnet", "opus", "fable", "haiku"];
+
+function isClaudeModelInConfig(cfg: CustomModelPublic | undefined, model: string): boolean {
+  if (!cfg || !model || model === "default") return false;
+  if (cfg.models.some((m) => m.id === model && m.id.trim())) return true;
+  if (cfg.tierModels) {
+    for (const r of CLAUDE_MENU_ROLE_KEYS) {
+      const raw = cfg.tierModels[r];
+      if (raw && raw.replace(/(\[1m\])+$/i, "").trim() === model) return true;
+    }
+  }
+  return false;
+}
+
 /** Validate a remembered {model, customModelId} pair against the CURRENT
  *  provider + model lists — same rules as validateComposerSelection. Returns
  *  the entry when still valid, null when the model was deleted (caller then
@@ -4615,12 +4680,11 @@ function isValidRememberedModel(
     return !entry.customModelId && s.antigravityAvailableModels.some((m) => m.id === entry.model);
   }
   if (provider.id === "claude-sdk") {
-    const cfg = s.customModels.find((m) => m.id === entry.customModelId);
-    return (
-      !!cfg &&
-      !!entry.customModelId &&
-      cfg.models.some((m) => m.id === entry.model && m.id.trim())
-    );
+    if (entry.customModelId) {
+      const cfg = s.customModels.find((m) => m.id === entry.customModelId);
+      return isClaudeModelInConfig(cfg, entry.model);
+    }
+    return (provider.capabilities.builtinModels ?? []).some((b) => b.id === entry.model);
   }
   return (provider.capabilities.builtinModels ?? []).some((b) => b.id === entry.model);
 }
@@ -4689,13 +4753,12 @@ function sanitizeBinding(
     const ok = s.antigravityAvailableModels.some((m) => m.id === s.model);
     if (!ok) patch = { model: "default", customModelId: null };
   } else if (provider.id === "claude-sdk") {
-    // Valid only when the custom config still exists AND the selected model
-    // is still configured on it.
-    const cfg = s.customModels.find((m) => m.id === s.customModelId);
-    const ok =
-      !!cfg &&
-      !!s.customModelId &&
-      cfg.models.some((m) => m.id === s.model && m.id.trim());
+    const ok = s.customModelId
+      ? isClaudeModelInConfig(
+          s.customModels.find((m) => m.id === s.customModelId),
+          s.model,
+        )
+      : (provider.capabilities.builtinModels ?? []).some((b) => b.id === s.model);
     if (!ok) patch = { model: "default", customModelId: null };
   } else {
     const ok = (provider.capabilities.builtinModels ?? []).some((b) => b.id === s.model);
@@ -4703,10 +4766,21 @@ function sanitizeBinding(
   }
   if (!patch) return;
   // Also drop the stale remembered model for the current provider so a later
-  // SDK switch back doesn't restore a deleted model.
+  // SDK switch back doesn't restore a deleted model — while preserving the
+  // provider's remembered effort / permissionMode preferences.
   if (s.providerId in s.lastModelByProvider) {
-    const { [s.providerId]: _drop, ...rest } = s.lastModelByProvider;
-    patch = { ...patch, lastModelByProvider: rest };
+    const prev = s.lastModelByProvider[s.providerId];
+    patch = {
+      ...patch,
+      lastModelByProvider: {
+        ...s.lastModelByProvider,
+        [s.providerId]: {
+          ...prev,
+          model: "default",
+          customModelId: null,
+        },
+      },
+    };
   }
   set(patch);
   persistComposerSelection(get());
@@ -5636,6 +5710,74 @@ function recordDeltaArrival(): void {
   if (deltaArrivals.length > MAX_WINDOW) deltaArrivals.shift();
 }
 
+/** Slice `text` at up to `maxUnits` UTF-16 code units without splitting a
+ *  surrogate pair (e.g. emoji), returning `[taken, rest]`. */
+function sliceCodeUnitsSafe(text: string, maxUnits: number): [string, string] {
+  if (text.length <= maxUnits) return [text, ""];
+  let cut = maxUnits;
+  const lastCode = text.charCodeAt(cut - 1);
+  if (lastCode >= 0xd800 && lastCode <= 0xdbff && cut < text.length) {
+    cut += 1;
+  }
+  return [text.slice(0, cut), text.slice(cut)];
+}
+
+/** Adaptive per-frame character budget for smooth typewriter pacing.
+ *  Small backlogs release 1–2 chars/frame for a steady typing rhythm; larger
+ *  bursts scale proportionally so the display catches up within ~120–250ms. */
+function smoothPacingBudget(backlog: number): number {
+  if (backlog <= 6) return 1;
+  if (backlog <= 18) return 2;
+  return Math.ceil(backlog / 7);
+}
+
+/** Take a paced slice from `entry.segs` for one display frame. Non-text
+ *  segments (thinking) drain immediately so reasoning folds aren't slowed;
+ *  text segments release up to the adaptive budget and leave any remainder. */
+function takePacedSegments(segs: DeltaSeg[]): { emit: DeltaSeg[]; rest: DeltaSeg[] } {
+  let textBacklog = 0;
+  for (const seg of segs) {
+    if (seg.k === "text") textBacklog += seg.text.length;
+  }
+  if (textBacklog === 0) return { emit: segs, rest: [] };
+
+  let budget = smoothPacingBudget(textBacklog);
+  const emit: DeltaSeg[] = [];
+  const rest: DeltaSeg[] = [];
+
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i];
+    if (budget <= 0) {
+      rest.push(seg);
+      continue;
+    }
+    if (seg.k !== "text") {
+      emit.push(seg);
+      continue;
+    }
+    if (seg.text.length <= budget) {
+      emit.push(seg);
+      budget -= seg.text.length;
+    } else {
+      const [head, tail] = sliceCodeUnitsSafe(seg.text, budget);
+      if (head) emit.push({ k: "text", text: head });
+      if (tail) rest.push({ k: "text", text: tail });
+      budget = 0;
+    }
+  }
+  return { emit, rest };
+}
+
+function scheduleNextPacedFrame(): void {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  if (typeof requestAnimationFrame !== "undefined") {
+    requestAnimationFrame(() => flushDeltas(false));
+  } else {
+    setTimeout(() => flushDeltas(false), 16);
+  }
+}
+
 function scheduleDeltaFlush(): void {
   recordDeltaArrival();
   if (flushScheduled) return;
@@ -5644,25 +5786,45 @@ function scheduleDeltaFlush(): void {
   const avg = avgIntervalMs();
   if (avg > 100 && deltaArrivals.length >= 2) {
     // Sparse deltas: flush on next microtask (near-immediate).
-    queueMicrotask(flushDeltas);
+    queueMicrotask(() => flushDeltas(false));
   } else {
     // Continuous streaming: natural rAF batching locked to native display refresh.
     if (typeof requestAnimationFrame !== "undefined") {
-      requestAnimationFrame(flushDeltas);
+      requestAnimationFrame(() => flushDeltas(false));
     } else {
-      setTimeout(flushDeltas, 16);
+      setTimeout(() => flushDeltas(false), 16);
     }
   }
 }
 
-function flushDeltas(): void {
+function flushDeltas(drainAll = false): void {
   flushScheduled = false;
   if (deltaBuf.size === 0) return;
 
   // Snapshot the buffer and clear it atomically so new deltas that arrive
   // during this flush start a fresh accumulation rather than being lost.
-  const entries = Array.from(deltaBuf.values());
+  const rawEntries = Array.from(deltaBuf.entries());
   deltaBuf.clear();
+
+  const activeSid = useSessionStore.getState().activeSessionId;
+  const entries: DeltaEntry[] = [];
+  for (const [key, entry] of rawEntries) {
+    if (!drainAll && entry.sessionId === activeSid) {
+      const { emit, rest } = takePacedSegments(entry.segs);
+      if (emit.length > 0) {
+        entries.push({ sessionId: entry.sessionId, messageId: entry.messageId, segs: emit });
+      }
+      if (rest.length > 0) {
+        deltaBuf.set(key, { sessionId: entry.sessionId, messageId: entry.messageId, segs: rest });
+      }
+    } else {
+      entries.push(entry);
+    }
+  }
+  if (entries.length === 0) {
+    if (deltaBuf.size > 0) scheduleNextPacedFrame();
+    return;
+  }
   // Sessions that just received stream content are provably "hot" — stamp the
   // eviction activity clock and let the debounced check ride along. (Function
   // is declared later in the module; hoisting makes the order irrelevant.)
@@ -5783,6 +5945,12 @@ function flushDeltas(): void {
       ...(streamRateBySession !== s.streamRateBySession ? { streamRateBySession } : {}),
     };
   });
+
+  // If smooth pacing left remaining characters in the buffer, schedule the
+  // next display frame to keep draining smoothly.
+  if (deltaBuf.size > 0) {
+    scheduleNextPacedFrame();
+  }
 }
 
 /** Flush any buffered deltas immediately (called before terminal events). */
@@ -5790,7 +5958,7 @@ function forceDeltaFlush(): void {
   if (deltaBuf.size === 0) return;
   flushScheduled = false;
   deltaArrivals.length = 0; // Reset the adaptive window.
-  flushDeltas();
+  flushDeltas(true);
 }
 
 /** Drop all buffered deltas for a session. Called on interrupt so the aborted
@@ -7708,15 +7876,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // model binding (model-scoped thinking ladders on OpenAI-protocol
     // endpoints included), so a stale remembered value snaps to the neutral
     // slot instead of being sent raw to an SDK that can't read it.
-    const coercedStart = rememberedValid
+    const coercedStart = remembered
       ? coerceSlotsForProvider(
           {
             providers: s0.providers,
             customModels: s0.customModels,
             customModelId,
             model,
-            effort: rememberedValid.effort ?? s0.effort,
-            permissionMode: rememberedValid.permissionMode ?? s0.permissionMode,
+            effort: remembered.effort ?? s0.effort,
+            permissionMode: remembered.permissionMode ?? s0.permissionMode,
             piModelMaps: s0.piModelMaps,
             opencodeModelVariants: s0.opencodeModelVariants,
             antigravityModelVariants: s0.antigravityModelVariants,
@@ -7868,14 +8036,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         centerTabFocus: "chat" as const,
       };
     });
-    // With explicit overrides — or a remembered per-provider config — the new
-    // row's config differs from the composer slots (which may still hold the
-    // previously-viewed thread's values) — re-sync so the chips reflect the
-    // session the user just landed on AND the next turn sends this row's
-    // config (sendTurn rides the view slots). Skipped only in the pure
-    // legacy path (no overrides, no remembered entry — slots were the row's
-    // source anyway) to keep that behavior untouched.
-    if (overrides || coercedStart) syncConfigFromSession(set, get, session.id);
+    // Always sync composer slots from the returned session row — covers
+    // explicit overrides, remembered per-provider configs, and server-side
+    // reuse of an existing blank session that may carry another provider/model.
+    syncConfigFromSession(set, get, session.id, session);
   },
 
   /** Terminal session (see the interface doc). The session.changed broadcast
@@ -8053,7 +8217,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Config hydration reads LIGHT fields only (model / effort / …), which
     // slim rows carry too — it stays before the activeSessionId flip per the
     // chip-flash prevention documented above, with no detail fetch in front.
-    syncConfigFromSession(set, get, sessionId);
+    const configSynced = syncConfigFromSession(set, get, sessionId);
     void get().loadOrchRuns(sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
@@ -8077,6 +8241,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (isWebTransport) await get().prefetchSessionMessages(sessionId);
       else void get().prefetchSessionMessages(sessionId);
     }
+    if (!configSynced) {
+      await syncMissingSessionConfig(set, get, sessionId);
+    }
     await get().ensureSessionDetail(sessionId);
     if (get().activeSessionId !== sessionId) return;
     hydrateContextSnapshot(set, get, sessionId);
@@ -8096,7 +8263,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   openTab: async (sessionId) => {
     // Same split as selectSession: light-field config sync before the flip
     // (chip-flash prevention), full-row fetch + payload hydrates after it.
-    syncConfigFromSession(set, get, sessionId);
+    const configSynced = syncConfigFromSession(set, get, sessionId);
     void get().loadOrchRuns(sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
@@ -8119,6 +8286,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!get().historyLoadedBySession[sessionId]) {
       if (isWebTransport) await get().prefetchSessionMessages(sessionId);
       else void get().prefetchSessionMessages(sessionId);
+    }
+    if (!configSynced) {
+      await syncMissingSessionConfig(set, get, sessionId);
     }
     await get().ensureSessionDetail(sessionId);
     if (get().activeSessionId !== sessionId) return;
@@ -8412,21 +8582,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
       }
       // If the new active tab changed, sync its config so the composer
-      // chips reflect the right model/effort/permission. Also clear its
-      // unread badge - it's now the visible session.
+      // chips reflect the right provider/model/effort/permission. Also clear
+      // its unread badge - it's now the visible session.
       if (nextActive && nextActive !== s.activeSessionId) {
-        // Defer to the set body: we can't call syncConfigFromSession
-        // here because it uses the same `set`. Inline the same lookup.
-        const sess = findSession(s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, s.streamSessions, nextActive);
+        const sess = findSession(
+          s.sessionsByProject,
+          s.archivedSessionsByProject,
+          s.pinnedSessions,
+          s.streamSessions,
+          nextActive,
+          s.orchWorkersById,
+        );
         const unreadBySession = { ...s.unreadBySession };
         delete unreadBySession[nextActive];
+        const configPatch = sess ? buildSessionConfigPatch(s, sess) : {};
+        const projectPatch =
+          sess && sess.projectId !== s.activeProjectId
+            ? {
+                activeProjectId: sess.projectId,
+                sessions: s.sessionsByProject[sess.projectId] ?? EMPTY_SESSIONS,
+              }
+            : {};
         return {
           openTabs: nextTabs,
           activeSessionId: nextActive,
-          model: sess?.model ?? s.model,
-          effort: sess?.effort ?? s.effort,
-          permissionMode: sess?.permissionMode ?? s.permissionMode,
-          customModelId: sess?.customModelId ?? s.customModelId,
+          ...configPatch,
+          ...projectPatch,
           unreadBySession,
           centerTabFocus,
           ...(hadGroup ? { splitGroupsBySession } : {}),
@@ -8444,6 +8625,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const st = get();
     if (!st.runningBySession[sessionId] && !st.pendingQuestionBySession[sessionId]) {
       st.pruneSessionHistory(sessionId);
+    }
+    // If closing the active tab landed on a session missing from the paginated
+    // in-memory caches, fetch its row to sync composer slots.
+    if (st.activeSessionId && st.activeSessionId !== sessionId) {
+      const landed = findSession(
+        st.sessionsByProject,
+        st.archivedSessionsByProject,
+        st.pinnedSessions,
+        st.streamSessions,
+        st.activeSessionId,
+        st.orchWorkersById,
+      );
+      if (!landed) {
+        void syncMissingSessionConfig(set, get, st.activeSessionId);
+      }
     }
   },
 
@@ -8556,12 +8752,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const activeSessionId = openTabs.includes(s.activeSessionId ?? "")
           ? s.activeSessionId
           : (openTabs[0] ?? null);
+        const switchedSess =
+          activeSessionId && activeSessionId !== s.activeSessionId
+            ? findSession(
+                sessionsByProject,
+                archivedByProject,
+                s.pinnedSessions,
+                s.streamSessions,
+                activeSessionId,
+                s.orchWorkersById,
+              )
+            : undefined;
         return {
           projects, sessionsByProject, archivedSessionsByProject: archivedByProject,
           sessionsTotalByProject: totalByProject, sessionsHasMoreByProject: hasMoreByProject,
           ideOpenFilesByProject, ideActiveFileByProject, ideFileViewModeByProject, ideExpandedDirsByProject, gitDiffByProject,
           navBackByProject, navForwardByProject,
           openTabs, activeSessionId,
+          ...(switchedSess ? buildSessionConfigPatch(s, switchedSess) : {}),
         };
       }
       // Pick a new active project + its latest session.
@@ -8583,6 +8791,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         sessions: nextSessions,
         activeSessionId: nextSession?.id ?? null,
         openTabs: nextSession ? [nextSession.id] : openTabs,
+        ...(nextSession ? buildSessionConfigPatch(s, nextSession) : {}),
       };
     });
   },
@@ -8610,6 +8819,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         sessions: nextSessions,
         activeSessionId: nextSession?.id ?? null,
         openTabs: nextSession ? [nextSession.id] : openTabs,
+        ...(nextSession ? buildSessionConfigPatch(s, nextSession) : {}),
       };
     });
   },
@@ -8731,24 +8941,35 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         nextActiveId = idx > 0 ? openTabs[idx - 1] : openTabs[0];
       }
       const sess = nextActiveId
-        ? findSession(sessionsByProject, archivedByProject, nextPinned, streamSessions, nextActiveId)
+        ? findSession(
+            sessionsByProject,
+            archivedByProject,
+            nextPinned,
+            streamSessions,
+            nextActiveId,
+            s.orchWorkersById,
+          )
         : undefined;
       // Clear the new active session's unread badge - it's now visible.
       const unreadBySession = { ...s.unreadBySession };
       if (nextActiveId) delete unreadBySession[nextActiveId];
+      const configPatch = sess ? buildSessionConfigPatch(s, sess) : {};
+      const projectSwitched = sess != null && sess.projectId !== s.activeProjectId;
       return {
         sessionsByProject,
         archivedSessionsByProject: archivedByProject,
         pinnedSessions: nextPinned,
         sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: Math.max(totalActive, 0) },
         sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
-        sessions: nextActive,
+        ...(projectSwitched
+          ? {
+              activeProjectId: sess.projectId,
+              sessions: sessionsByProject[sess.projectId] ?? EMPTY_SESSIONS,
+            }
+          : { sessions: nextActive }),
         openTabs,
         activeSessionId: nextActiveId,
-        model: sess?.model ?? s.model,
-        effort: sess?.effort ?? s.effort,
-        permissionMode: sess?.permissionMode ?? s.permissionMode,
-        customModelId: sess?.customModelId ?? s.customModelId,
+        ...configPatch,
         unreadBySession,
         streamSessions,
         streamDirty: true,
@@ -10336,23 +10557,41 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (e.type === "token-usage.updated") {
       if (!isValidSnapshot(e.snapshot)) return;
       set((s) => {
+        // Carry forward the last known category breakdown across mid-turn
+        // Path-A updates (which only carry aggregate usage) so hovering the
+        // ring mid-stream doesn't flash back to the fallback view until the
+        // turn-end control-channel reply refreshes categories.
+        const prev = s.contextSnapshotBySession[sid];
+        const nextSnap: ContextSnapshot =
+          !e.snapshot.categories && prev?.categories
+            ? {
+                ...e.snapshot,
+                categories: prev.categories,
+                ...(e.snapshot.isAutoCompactEnabled === undefined && prev.isAutoCompactEnabled !== undefined
+                  ? { isAutoCompactEnabled: prev.isAutoCompactEnabled }
+                  : {}),
+                ...(e.snapshot.autoCompactThreshold === undefined && prev.autoCompactThreshold !== undefined
+                  ? { autoCompactThreshold: prev.autoCompactThreshold }
+                  : {}),
+              }
+            : e.snapshot;
         const patch: Partial<SessionState> = {
-          contextSnapshotBySession: { ...s.contextSnapshotBySession, [sid]: e.snapshot },
+          contextSnapshotBySession: { ...s.contextSnapshotBySession, [sid]: nextSnap },
         };
         // Keep the in-memory session row cache in sync. Only touch the list
         // entry actually found (no-op if this session isn't in the cache, e.g.
         // archived / not yet loaded).
         const cached = findSession(s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, s.streamSessions, sid);
-        if (cached && cached.contextSnapshot !== e.snapshot) {
+        if (cached && cached.contextSnapshot !== nextSnap) {
           patch.sessionsByProject = patchSessionInCache(
-            s.sessionsByProject, cached.projectId, sid, { contextSnapshot: e.snapshot },
+            s.sessionsByProject, cached.projectId, sid, { contextSnapshot: nextSnap },
           );
           // Pinned rows live in the global pinned bucket, not the per-project
           // list — mirror the snapshot there too.
           const pinnedIdx = s.pinnedSessions.findIndex((x) => x.id === sid);
           if (pinnedIdx !== -1) {
             patch.pinnedSessions = s.pinnedSessions.map((x, i) =>
-              i === pinnedIdx ? { ...x, contextSnapshot: e.snapshot } : x,
+              i === pinnedIdx ? { ...x, contextSnapshot: nextSnap } : x,
             );
           }
         }
@@ -10591,39 +10830,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
 
+    if (e.type === "text.delta" || e.type === "thinking") {
+      // Buffer the delta BEFORE entering set(): flushDeltas applies accumulated
+      // text on a rAF boundary, so intercepting here avoids cloning
+      // messagesBySession on every raw delta event.
+      const kind = e.type === "text.delta" ? "text" : "thinking";
+      const key = `${sid}:${e.messageId}`;
+      const existing = deltaBuf.get(key);
+      if (existing) {
+        appendDelta(existing, kind, e.text);
+      } else {
+        deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, segs: [{ k: kind, text: e.text }] });
+      }
+      noteStreamDelta(sid, e.text);
+      scheduleDeltaFlush();
+      return;
+    }
+
     set((s) => {
       const list = s.messagesBySession[sid] ?? [];
       let next: ChatMessage[] = list;
 
       switch (e.type) {
-        case "text.delta": {
-          // Buffer the delta — flushDeltas will apply accumulated text in a
-          // single rAF-bound setState, collapsing many single-char deltas into
-          // one React update per frame (~60 Hz instead of per-char).
-          const key = `${sid}:${e.messageId}`;
-          const existing = deltaBuf.get(key);
-          if (existing) {
-            appendDelta(existing, "text", e.text);
-          } else {
-            deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, segs: [{ k: "text", text: e.text }] });
-          }
-          noteStreamDelta(sid, e.text);
-          scheduleDeltaFlush();
-          // Don't add to `next` — flushDeltas mutates the store directly.
-          break;
-        }
-        case "thinking": {
-          const key = `${sid}:${e.messageId}`;
-          const existing = deltaBuf.get(key);
-          if (existing) {
-            appendDelta(existing, "thinking", e.text);
-          } else {
-            deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, segs: [{ k: "thinking", text: e.text }] });
-          }
-          noteStreamDelta(sid, e.text);
-          scheduleDeltaFlush();
-          break;
-        }
         case "tool.use": {
           // messageId path: the event carries the owning message (pi: the
           // PiMessageAdapter forwards the narration messageId snapshot at
@@ -12306,7 +12534,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         lastModelByProvider: {
           ...s.lastModelByProvider,
           [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
-            ...rememberedEntryOf(s),
+            model: s.model,
+            customModelId: s.customModelId,
             permissionMode: mode,
           }),
         },
@@ -12376,7 +12605,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // a Claude custom pick is stripped here; otherwise the effort chip keeps
       // resolving Claude's ladder for a pi session.
       const customModelId = sanitizeBinding(s, s.providerId, s.customModelId);
-      const isSwitchingModel = model !== s.model || customModelId !== s.customModelId;
       const coerced = coerceSlotsForProvider(
         s,
         s.providerId,
@@ -12384,19 +12612,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           customModelId,
           model,
         },
-        { resetEffort: isSwitchingModel },
       );
+      const prevRemembered = s.lastModelByProvider[s.providerId];
+      const shouldUpdateEffort = coerced.effort !== s.effort || prevRemembered?.effort === undefined;
       return {
         model,
         customModelId,
         ...coerced,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
-            ...rememberedEntryOf(s),
+          [s.providerId]: mergeRememberedEntry(prevRemembered, {
             model,
             customModelId,
-            effort: coerced.effort,
+            ...(shouldUpdateEffort ? { effort: coerced.effort } : {}),
           }),
         },
       };
@@ -12424,7 +12652,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       lastModelByProvider: {
         ...s.lastModelByProvider,
         [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
-          ...rememberedEntryOf(s),
+          model: s.model,
+          customModelId: s.customModelId,
           effort,
         }),
       },
@@ -12466,7 +12695,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         : roleArg !== undefined
           ? roleArg
           : inferRole(cfg, nextModel);
-      const isSwitchingModel = id !== s.customModelId || nextModel !== s.model;
       const coerced = coerceSlotsForProvider(
         s,
         s.providerId,
@@ -12474,8 +12702,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           customModelId: id,
           model: nextModel,
         },
-        { resetEffort: isSwitchingModel },
       );
+      const prevRemembered = s.lastModelByProvider[s.providerId];
+      const shouldUpdateEffort = coerced.effort !== s.effort || prevRemembered?.effort === undefined;
       return {
         customModelId: id,
         model: nextModel,
@@ -12484,11 +12713,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...coerced,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
-            ...rememberedEntryOf(s),
+          [s.providerId]: mergeRememberedEntry(prevRemembered, {
             model: nextModel,
             customModelId: id,
-            effort: coerced.effort,
+            ...(shouldUpdateEffort ? { effort: coerced.effort } : {}),
           }),
         },
       };
@@ -12620,7 +12848,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       tempState,
       prev.providerId,
       { customModelId: nextCustomModelId, model: nextModel },
-      { resetEffort: changedBinding },
     );
 
     set((s) => ({
@@ -12635,10 +12862,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             lastModelByProvider: {
               ...s.lastModelByProvider,
               [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
-                ...rememberedEntryOf(s),
                 model: nextModel,
                 customModelId: nextCustomModelId,
-                effort: coerced.effort,
+                ...(coerced.effort !== s.effort || s.lastModelByProvider[s.providerId]?.effort === undefined
+                  ? { effort: coerced.effort }
+                  : {}),
               }),
             },
           }
@@ -12682,7 +12910,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const s = get();
       if (s.providerId === "claude-sdk" && s.customModelId) {
         const cfg = models.find((m) => m.id === s.customModelId);
-        if (cfg && !cfg.models.some((m) => m.id === s.model && m.id.trim())) {
+        if (cfg && !isClaudeModelInConfig(cfg, s.model)) {
           get().syncClaudeConfigUpdated(models, { editedId: cfg.id, activeProviderId });
           return;
         }
@@ -12820,12 +13048,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (nextArchived[projectId]) {
         nextArchived[projectId] = patchRow(nextArchived[projectId]);
       }
+      const nextPinned = s.pinnedSessions.some((x) => x.id === sid)
+        ? patchRow(s.pinnedSessions)
+        : s.pinnedSessions;
+      const nextStream = s.streamSessions.some((x) => x.id === sid)
+        ? patchRow(s.streamSessions)
+        : s.streamSessions;
       // `sessions` is a derived alias of the active project's list; refresh it
       // only when it currently points at this session's project.
       const nextSessions = s.activeProjectId === projectId && nextByProject[projectId]
         ? nextByProject[projectId]
         : s.sessions;
-      return { sessionsByProject: nextByProject, archivedSessionsByProject: nextArchived, sessions: nextSessions };
+      return {
+        sessionsByProject: nextByProject,
+        archivedSessionsByProject: nextArchived,
+        pinnedSessions: nextPinned,
+        streamSessions: nextStream,
+        sessions: nextSessions,
+      };
     });
 
     // Persist the provider change to the session row, along with the restored
@@ -12861,7 +13101,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // effort / permissionMode leftovers the active provider doesn't declare
       // onto "default" — the boot-time counterpart of setProvider's coercion.
       const s = get();
-      set(coerceSlotsForProvider(s, s.providerId));
+      if (!(s.providerId === "claude-sdk" && s.customModelId && !s.customModelsLoaded)) {
+        set(coerceSlotsForProvider(s, s.providerId));
+      }
     } catch (err) {
       console.error("reloadProviders failed:", err);
     }
@@ -13299,7 +13541,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         lastModelByProvider: {
           ...s.lastModelByProvider,
           [s.providerId]: mergeRememberedEntry(s.lastModelByProvider[s.providerId], {
-            ...rememberedEntryOf(s),
             model: target.model,
             customModelId: target.customModelId,
           }),

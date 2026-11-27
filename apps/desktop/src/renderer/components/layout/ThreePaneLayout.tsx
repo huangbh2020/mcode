@@ -119,7 +119,7 @@ export function ThreePaneLayout({
          this muted base. */}
       {leftOpen && (
         <aside
-          className="flex h-full shrink-0 flex-col bg-surface-muted"
+          className="flex h-full shrink-0 flex-col overflow-hidden rounded-xl border border-edge bg-surface"
           style={{ width: leftWidth }}
         >
           <div className="min-h-0 flex-1 overflow-y-auto">{left}</div>
@@ -128,6 +128,8 @@ export function ThreePaneLayout({
       {leftOpen && onResizeLeft && (
         <Divider
           orientation="vertical"
+          hideLine
+          className="z-20 -mx-[1.5px]"
           onResize={onResizeLeft}
           onDoubleClick={onResetLeft}
         />
@@ -145,10 +147,8 @@ export function ThreePaneLayout({
          Stacks the center content above an optional bottom terminal bar. */}
       <main
         className={cn(
-          "relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden border-t border-edge bg-surface",
+          "relative z-10 flex min-w-[600px] shrink-0 flex-1 flex-col overflow-hidden rounded-xl border border-edge bg-surface",
           attachToTitlebar && "-mt-px",
-          !flushLeftEdge && "rounded-bl-2xl border-l",
-          !flushLeftEdge && !flushTopLeft && "rounded-tl-xl",
           rightMaximized && "hidden",
         )}
       >
@@ -183,6 +183,8 @@ export function ThreePaneLayout({
       {rightOpen && !rightMaximized && onResizeRight && (
         <Divider
           orientation="vertical"
+          hideLine
+          className="z-20 -mx-[1.5px]"
           onResize={onResizeRight}
           onDoubleClick={onResetRight}
           onDragStart={() => setIsDraggingRight(true)}
@@ -232,7 +234,7 @@ export function ThreePaneLayout({
                     : "pointer-events-none translate-x-full opacity-0",
                 )
               : cn(
-                  "border-t border-edge-panel",
+                  "rounded-xl border border-edge",
                   attachToTitlebar && "-mt-px",
                   !rightOpen && "hidden",
                   rightMaximized && "w-full flex-1",
@@ -247,12 +249,7 @@ export function ThreePaneLayout({
                 : rightWidth,
           }}
         >
-          <div
-            className={cn(
-              "min-h-0 flex-1 overflow-hidden",
-              !rightPeekDrawer && !rightMaximized && "border-l border-edge-panel",
-            )}
-          >
+          <div className="min-h-0 flex-1 overflow-hidden">
             {right}
           </div>
         </aside>

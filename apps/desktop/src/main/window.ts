@@ -38,13 +38,12 @@ function overlayColors() {
   const dark = getEffectiveTheme() === "dark";
   const sketch = getThemeStylePreference() === "sketch";
   return {
-    // Light default #f0f2f6 = --surface-muted (240 242 246) so the native
-    // controls' backdrop is the SAME color as the Titlebar's bg-surface-muted
-    // — the old zinc-100 (#f4f4f5) left a visible tone seam where the overlay
-    // met the React bar. Dark default already matches (#2c313c = 44 49 60).
-    color: dark ? (sketch ? "#332a20" : "#2c313c") : sketch ? "#f6f2e7" : "#f0f2f6",
-    symbolColor: dark ? (sketch ? "#aca089" : "#9ea2ab") : sketch ? "#8d8371" : "#71717a",
-    height: 40,
+    // 同步通栏顶栏的 --surface 底色（亮 #ffffff / 暗方案4 #2a2e37 / 手绘浅 #fcfaf3 / 手绘深 #3b3126），
+    // 让 Windows 原生最小化/最大化/关闭按钮区域与工具栏融为一体，无色差。
+    color: dark ? (sketch ? "#3b3126" : "#2a2e37") : sketch ? "#fcfaf3" : "#ffffff",
+    symbolColor: dark ? (sketch ? "#aca089" : "#9ca3b2") : sketch ? "#8d8371" : "#71717a",
+    // 39px = h-10(40px) - 1px border-b，留出底部 1px 灰色分割线不被原生 overlay 遮盖。
+    height: 39,
   };
 }
 

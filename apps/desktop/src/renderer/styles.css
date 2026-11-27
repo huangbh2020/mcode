@@ -202,71 +202,28 @@ div:has(> [role="menu"]) {
 }
 
 .dark {
-  /* Dark-mode base font weight. White text on a dark background undergoes
-   * optical thinning, so the default 400 reads as low-contrast. The base is
-   * lifted to 600 for crisp, readable UI text. The matching .dark .font-*
-   * ladder shift (in the font-weight ladder section below) keeps relative
-   * hierarchy intact. Light mode uses a 500 base via :root (lighter than
-   * dark because black-on-white needs less help), with its own ladder shift
-   * in the same section. */
-  font-weight: 600;
+  /* Windows/macOS 下深色背景文字使用标准 400 字重，避免微软雅黑等中文字体在
+   * 600 字重下触发合成粗体（synthetic bold）导致笔画粘连发糊；通过提亮前景色
+   * 保证清晰锐利度。 */
+  font-weight: 400;
 
-  /* Slate-tinted dark ramp (VS Code Dark+ / GitHub Dark style). The whole
-   * ramp carries a slight cool bias — the B channel runs a few units above
-   * R/G — so the base surface, recesses, hovers and borders all share ONE
-   * color temperature. The previous neutral-zinc ground (#18181b) read as a
-   * flat void next to the blue-gray wells once --surface-muted was moved to
-   * slate, which made the center pane look harshly black against the left
-   * sidebar. The base stays dark (≈#1a1d24) for immersion; muted/hover step
-   * up from there keeping the same cool proportion so the three panes (left
-   * = muted track, center/right = surface) read as one cool palette with
-   * brightness hierarchy, not a warm/cold split. Text stays neutral
-   * white/gray — it doesn't follow the tint, keeping contrast clean. */
-  --surface: 26 29 36; /* #1a1d24 — slate-tinted near-black; the base app
-                        * background (center pane, right sidebar, popups,
-                        * titlebar). B channel sits ~10 above R so the cool
-                        * bias matches --surface-muted. */
-  --surface-muted: 44 49 60; /* #2c313c — slate-tinted recess: inset panels /
-                              * track / left sidebar / code-block & tool-result
-                              * wells in the data stream. Tinted cool (B channel
-                              * runs higher than R/G) so recesses read as a calm
-                              * blue-gray instead of flat neutral — the VS Code
-                              * Dark+ look. The gap to --surface is ~20, enough
-                              * that /40 /60 alpha variants still resolve as a
-                              * visible layer. */
-  --surface-hover: 58 64 78; /* #3a404e — hover/active states, lifted in step
-                              * and keeping the same slate tint so the three
-                              * layers (surface → muted → hover) stay on one
-                              * cool ramp. */
-  --surface-card: 33 37 46; /* #21252e — chat cards, sits between canvas (#1a1d24) and toolbar (#2c313c) */
-  --surface-card-header: 38 43 54; /* #262b36 — card/code-block header strip */
-  --surface-card-well: 28 32 40; /* #1c2028 — inset well inside cards */
-  --surface-card-item: 39 44 55; /* #272c37 — elevated rows inside cards */
-  --shadow-card: 0 2px 8px rgb(0 0 0 / 0.28), 0 1px 2px rgb(0 0 0 / 0.18);
-  --content: 231 232 236; /* soft off-white (#e7e8ec) — ~14.5:1 on the new
-                           * surface, still well above WCAG AAA (7:1) */
-  /* Secondary/tertiary text — brightened one step from the old
-   * #aaadb4 / #848891. On a near-black surface a mid-gray at a "passing"
-   * ratio still reads perceptually dimmer than the same ratio on white
-   * (white-on-dark loses apparent contrast to the eye), and model replies
-   * are dominated by bullet lists / tables / tool cards rendered at muted —
-   * the whole reply body read one tier dimmer than its intro paragraph.
-   * New values: muted ≈9.2:1, subtle ≈6.6:1 on the base surface (both clear
-   * WCAG AA for body text). Tier gaps stay wide (content 231 → muted 188 →
-   * subtle 158) so the three levels still resolve as distinct. */
-  --content-muted: 188 191 198; /* #bcbfc6 — lists / tables / thinking body /
-                                 * tool-card labels */
-  --content-subtle: 158 162 171; /* #9ea2ab — metadata: paths / summaries /
-                                  * timestamps / markers / hints */
-  --edge: 45 51 64; /* #2d3340 — slate-tinted to match the muted/hover ramp;
-                     * one notch below hover so borders read as separators,
-                     * not highlights. */
-  --panel-edge: 45 51 64; /* mirrors dark --edge — the lighter structural
-                           * divider is a light-mode-only concern */
-  --input-edge: 95 99 110; /* cool gray — brighter than --edge so the
-                            * composer box outline stays visible on the
-                            * background. Tuned to read clearly without
-                            * being as bright as the muted-text color. */
+  /* 方案 4 · 通透雾灰（2026-11-27）：拉升深色整体明度，顺排
+   * 底壳/凹槽 (#20232a) → 主分舱 (#2a2e37) → 卡片/输入框 (#333843) → 悬停 (#3f4552)
+   * 四级层次，告别死黑与边界模糊。 */
+  --surface: 42 46 55; /* #2a2e37 — 主面板、顶栏、左右分舱 */
+  --surface-muted: 32 35 42; /* #20232a — 外层分舱缝隙底壳、Tab 轨道、内凹区 */
+  --surface-hover: 63 69 82; /* #3f4552 — 悬停/交互高亮 */
+  --surface-card: 51 56 67; /* #333843 — 卡片、概览面板、底部输入框 */
+  --surface-card-header: 57 63 75; /* #393f4b — 代码块与卡片头部 */
+  --surface-card-well: 36 40 48; /* #242830 — 卡片内嵌凹槽 */
+  --surface-card-item: 59 65 78; /* #3b414e — 卡片内条目 */
+  --shadow-card: 0 2px 10px rgb(0 0 0 / 0.24), 0 1px 2px rgb(0 0 0 / 0.16);
+  --content: 244 246 250; /* #f4f6fa — 锐利柔白主文字 */
+  --content-muted: 204 209 219; /* #ccd1db — 列表 / 表格 / 思考正文 / 卡片标签 */
+  --content-subtle: 156 163 178; /* #9ca3b2 — 元信息 / 路径 / 时间戳 / 提示 */
+  --edge: 75 82 98; /* #4b5262 — 清晰柔和的分舱与卡片边界 */
+  --panel-edge: 75 82 98; /* mirrors dark --edge */
+  --input-edge: 93 101 120; /* #5d6578 — 输入框外轮廓 */
   --accent: 56 189 248; /* #38bdf8 sky-400 — 统一内置品牌强调色: 科技冷灰蓝 */
   --accent-strong: 56 189 248; /* sky-400 — dark accent is already ~7.5:1
                                  * on the slate surface, so the small-text
@@ -295,7 +252,7 @@ div:has(> [role="menu"]) {
    * step above light's 450) because white strokes thin optically on the deep
    * background. Line height is density-driven (--chat-md-leading) and shared
    * across themes. */
-  --chat-font-weight: 500;
+  --chat-font-weight: 400;
   --user-bubble: 113 113 122; /* default = zinc-500 (\#71717a) */
   /* Low-alpha gray over #1a1d24 barely moves: 15% ≈ 1.1:1, indistinguishable
    * from the chat surface. 25% lands the bubble at ~1.30:1 — the same
@@ -424,19 +381,19 @@ html .font-bold {
   font-weight: 800;
 }
 
-/* Dark-mode ladder (.dark base = 600). Must come AFTER the light block so it
- * wins the equal-specificity tie when <html> carries .dark. */
+/* Dark-mode ladder (.dark base = 400): restore standard weights so CJK UI
+ * text stays crisp without synthetic bolding. */
 .dark .font-normal {
-  font-weight: 500;
+  font-weight: 400;
 }
 .dark .font-medium {
-  font-weight: 600;
+  font-weight: 500;
 }
 .dark .font-semibold {
-  font-weight: 700;
+  font-weight: 600;
 }
 .dark .font-bold {
-  font-weight: 800;
+  font-weight: 700;
 }
 
 /* ───────────── Derived chat font sizes ─────────────
@@ -586,15 +543,11 @@ body {
   overscroll-behavior: none;
 }
 
-/* Dark-mode font rendering: switch from gray-scale antialiasing to the
- * platform default (subpixel on macOS). Gray AA thins light-on-dark strokes,
- * which is the "still not enough contrast" symptom on white text. Letting
- * the browser use subpixel rendering restores edge crispness so the heavier
- * font weights read as intended. Scoped to .dark so light mode keeps its
- * smoother antialiased look (black-on-white doesn't need the help). */
+/* Dark-mode font rendering: keep antialiased grayscale smoothing on dark
+ * surfaces to avoid subpixel color fringing around light text on Windows. */
 .dark {
-  -webkit-font-smoothing: auto;
-  -moz-osx-font-smoothing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Dark-mode monospace crispness for code / terminal / diff / tool cards.
@@ -1583,18 +1536,18 @@ button.chat-ledger-head:hover {
   --composer-dur-fade: 220ms;
 }
 
-/* ── Mini pill ──────────────────────────────────────────────────────────
- * One bordered container; every segment is an independent trigger opening
- * its own menu/popover — no behaviour change vs the old chip row, just a
- * tighter container that persists through every width. */
+/* ── Mini pill (版本 3 · 极简无框) ──────────────────────────────────────
+ * Borderless, transparent container; every segment is a soft pill trigger
+ * that stays quiet at rest and reveals a gentle hover fill on pointerover. */
 [data-chat-root] .composer-minipill {
   display: inline-flex;
   align-items: center;
-  height: 1.75rem;            /* 28px — matches the chip row's visual height */
-  padding: 0 0.1875rem;
-  border: 1px solid rgb(var(--edge));
-  border-radius: 0.5625rem;   /* 9px */
-  background: rgb(var(--surface-muted) / 0.6);
+  gap: 0.125rem;
+  height: 1.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
   flex: none;
   min-width: 0;
 }
@@ -1602,11 +1555,11 @@ button.chat-ledger-head:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.3125rem;
-  height: 1.375rem;           /* 22px segment — comfortable hit target */
-  padding: 0 0.4375rem;
+  height: 1.75rem;
+  padding: 0 0.5625rem;
   border: none;
-  background: none;
-  border-radius: 0.375rem;
+  background: transparent;
+  border-radius: 9999px;
   cursor: pointer;
   white-space: nowrap;
   font-size: 0.75rem;
@@ -1617,11 +1570,12 @@ button.chat-ledger-head:hover {
   transition: background 0.15s, color 0.15s, gap var(--composer-dur-collapse) var(--composer-ease-out);
 }
 [data-chat-root] .composer-minipill-seg:hover {
-  background: rgb(var(--accent) / 0.11);
-  color: rgb(var(--accent-strong));
+  background: rgb(var(--surface-hover) / 0.65);
+  color: rgb(var(--content));
 }
 [data-chat-root] .composer-minipill-seg[data-popup-open] {
-  background: rgb(var(--accent) / 0.12);
+  background: rgb(var(--surface-hover) / 0.8);
+  color: rgb(var(--content));
 }
 /* Disabled segment (the attach "+" while an approval owns the composer):
  * no hover play, just the dim. */
@@ -1631,15 +1585,9 @@ button.chat-ledger-head:hover {
   background: none;
   color: rgb(var(--content-muted));
 }
+/* Borderless minimal canvas omits vertical hairline dividers between triggers. */
 [data-chat-root] .composer-minipill-mid {
-  width: 1px;
-  height: 0.875rem;
-  background: rgb(var(--edge));
-  flex: none;
-  transition: opacity 0.3s var(--composer-ease-out);
-}
-[data-chat-root] .composer-minipill[data-compact="1"] .composer-minipill-mid {
-  opacity: 0.5;
+  display: none;
 }
 /* Compact: labels collapse to icons, so the icon↔label gap collapses with
  * them (the lblwrap shells shrink the width; the gap must follow to zero or
@@ -1654,7 +1602,7 @@ button.chat-ledger-head:hover {
 [data-chat-root] .composer-minipill-ringseg {
   display: inline-flex;
   align-items: center;
-  padding: 0 0.4375rem;
+  padding: 0 0.375rem;
   flex: none;
 }
 

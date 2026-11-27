@@ -141,6 +141,7 @@ import {
   mergeClaudeTokenUsageSnapshot,
   buildCompactSnapshot,
   buildSnapshotFromControlChannel,
+  extractControlChannelMeta,
   resolveEffectiveContextWindow,
   totalProcessedTokensFromRawUsage,
   type RawClaudeUsage,
@@ -1641,7 +1642,7 @@ export class SdkMessageAdapter {
     // before response received" because the generator is already tearing
     // down. We don't await here - just kick it off and let it resolve in the
     // background.
-    if (this.enableControlChannel && this.query && !this.state.pendingContextUsage) {
+    if (this.query && !this.state.pendingContextUsage) {
       // Diagnostic: log when the control channel fires relative to the turn's
       // assistant-message stream, plus the last path-A occupancy. Lets us
       // correlate getContextUsage accuracy with kickoff timing (gateway
@@ -2377,21 +2378,75 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
     reportedWindow: number | undefined,
     lastKnown: ContextSnapshot | undefined,
   ): Promise<void> {
-    // Path B: control channel. The most authoritative source for window
-    // occupancy - the CLI reports the live context-window size directly. We
-    // race the promise kicked off at handleAssistant time (before the
-    // generator started tearing down) against a short timeout.
+    // Path B: control channel (`get_context_usage`). Runs for ALL Claude CLI
+    // sessions (official and custom endpoints alike) so the UI always receives
+    // per-category breakdown (System prompt / System tools / MCP tools / Skills
+    // / Memory files / Messages / Autocompact buffer).
+    //
+    // On custom/gateway endpoints (`!this.trustControlChannelTotals`), we emit
+    // Path C immediately so the ring updates with zero latency, then enrich it
+    // with `cc.categories` once the control channel replies (never letting an
+    // untrusted gateway `cc.totalTokens` overwrite the real occupancy).
+    const buildPathCSnapshot = (): ContextSnapshot | null => {
+      const accumulated = normalizeClaudeTokenUsage(accumulatedRaw, {
+        reported: reportedWindow,
+        lastKnown: this.state.lastKnownContextWindow,
+        configured: this.configured,
+      });
+      if (!accumulated) return null;
+      if (!lastKnown) return accumulated;
+      return mergeClaudeTokenUsageSnapshot(lastKnown, accumulated, accumulated.maxTokens);
+    };
+
     const pending = this.state.pendingContextUsage;
     this.state.pendingContextUsage = null; // one-shot
+
+    if (!this.enableControlChannel) {
+      // Custom/gateway endpoint: publish reliable Path C immediately so the
+      // ring never waits on a slow gateway `get_context_usage` reply, then
+      // enrich with categories in the background if available.
+      const base = buildPathCSnapshot();
+      if (base) {
+        this.ctx.log.info(
+          `context-usage pathC-merge: lastKnownUsed=${lastKnown?.usedTokens ?? "none"} ` +
+            `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
+            `assistantMsgs=${this.state.assistantMessageCount} ` +
+            `deltaUsage=${this.state.streamDeltaUsageCount} ` +
+            `final=${base.usedTokens}/${base.pct}%`,
+        );
+        this.publishTokenUsageSnapshot(base);
+      }
+      if (pending && base) {
+        try {
+          void pending.catch(() => {});
+          const cc = (await Promise.race([
+            pending,
+            new Promise<null>((resolve) => {
+              setTimeout(() => resolve(null), CONTEXT_USAGE_PATH_B_TIMEOUT_MS).unref();
+            }),
+          ])) as Awaited<ReturnType<ClaudeControlChannel["getContextUsage"]>> | null;
+          if (cc) {
+            const meta = extractControlChannelMeta(cc);
+            this.ctx.log.info(
+              `context-usage pathB-enrich: categories=${meta.categories?.length ?? 0} ` +
+                `ccTotal=${cc.totalTokens} baseUsed=${base.usedTokens}`,
+            );
+            if (meta.categories && meta.categories.length > 0) {
+              this.publishTokenUsageSnapshot({ ...base, ...meta });
+            }
+          }
+        } catch (err) {
+          this.ctx.log.warn(
+            `getContextUsage (enrich) failed: ${(err as Error).message}`,
+          );
+        }
+      }
+      return;
+    }
+
+    let fallbackMeta: ReturnType<typeof extractControlChannelMeta> | null = null;
     if (pending) {
       try {
-        // Race the control channel against a short timeout. First-party CLI
-        // answers arrive in milliseconds; third-party gateways have been
-        // observed answering after 17-36s with garbage values (which the
-        // plausibility gate below discards anyway). This snapshot already
-        // runs off the turn's critical path, but a 36s-late publish could
-        // land mid-next-turn and regress the ring — so on timeout we drop
-        // the late answer and fall through to path C.
         void pending.catch(() => {}); // a late rejection must not surface as unhandled
         const cc = await Promise.race([
           pending,
@@ -2404,32 +2459,20 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
             `getContextUsage timed out after ${CONTEXT_USAGE_PATH_B_TIMEOUT_MS}ms, falling back to path C`,
           );
         } else {
-          // Diagnostic: raw control-channel values vs the accumulated usage
-          // (billing) and the last path-A occupancy. `cc.totalTokens` far below
-          // `accInput` means the CLI's context tracker missed the conversation
-          // (gateway models) — the ring then shows garbage occupancy.
+          const meta = extractControlChannelMeta(cc);
           this.ctx.log.info(
             `context-usage pathB: cc=${JSON.stringify({
               totalTokens: cc.totalTokens,
               maxTokens: cc.maxTokens,
               percentage: cc.percentage,
               model: cc.model,
+              categories: meta.categories?.length ?? 0,
             })} accInput=${accumulatedRaw.inputTokens ?? 0} ` +
               `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
               `assistantMsgs=${this.state.assistantMessageCount} ` +
               `deltaUsage=${this.state.streamDeltaUsageCount} ` +
               `lastKnownUsed=${lastKnown?.usedTokens ?? "none"}`,
           );
-          // Plausibility gate: on third-party gateways the CLI's control channel
-          // often returns a grossly undercounted occupancy (observed ~0.2%-1.6%
-          // of the real prompt; e.g. 1,814 vs 677,944 input tokens on multi-call
-          // turns), which would render a ghost "0%" ring. Cross-check against the
-          // accumulated result.usage — a totalTokens below 10% of the real input
-          // is treated as untrusted and we fall through to path C (path-A merge).
-          // Single-call turns report exactly (`totalTokens == accInput`), so the
-          // gate never fires there. Post-compaction the occupancy may legitimately
-          // shrink below 10% of the cumulative input, but path C's merge uses the
-          // last known snapshot (post-compact value), so the result stays correct.
           const accInput = accumulatedRaw.inputTokens ?? 0;
           const plausible = accInput <= 0 || cc.totalTokens >= accInput * 0.1;
           if (plausible) {
@@ -2443,9 +2486,12 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
               return;
             }
           } else {
+            // Even when `cc.totalTokens` is implausible, keep its category
+            // breakdown to enrich the Path C snapshot below.
+            fallbackMeta = meta;
             this.ctx.log.warn(
               `context-usage pathB implausible: totalTokens=${cc.totalTokens} vs accInput=${accInput} ` +
-                `(${((cc.totalTokens / accInput) * 100).toFixed(1)}%), falling back to path C`,
+                `(${((cc.totalTokens / accInput) * 100).toFixed(1)}%), falling back to path C (keeping categories=${meta.categories?.length ?? 0})`,
             );
           }
         }
@@ -2459,27 +2505,23 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
     // Path C fallback: accumulated result.usage for throughput/billing,
     // merged with path A's last known window read for occupancy.
     if (!lastKnown) {
-      // No path-A snapshot - emit accumulated directly as better-than-nothing.
       this.ctx.log.info(
         `context-usage pathC-direct: accInput=${accumulatedRaw.inputTokens ?? 0} ` +
           `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
           `assistantMsgs=${this.state.assistantMessageCount} ` +
           `deltaUsage=${this.state.streamDeltaUsageCount} (no path-A snapshot)`,
       );
-      this.emitTokenUsage(accumulatedRaw, model, reportedWindow);
+      const base = buildPathCSnapshot();
+      if (base) {
+        this.publishTokenUsageSnapshot(fallbackMeta ? { ...base, ...fallbackMeta } : base);
+      } else {
+        this.emitTokenUsage(accumulatedRaw, model, reportedWindow);
+      }
       return;
     }
 
-    const accumulated = normalizeClaudeTokenUsage(
-      accumulatedRaw,
-      { reported: reportedWindow, lastKnown: this.state.lastKnownContextWindow, configured: this.configured },
-    );
-    if (accumulated) {
-      const merged = mergeClaudeTokenUsageSnapshot(
-        lastKnown,
-        accumulated,
-        accumulated.maxTokens,
-      );
+    const merged = buildPathCSnapshot();
+    if (merged) {
       this.ctx.log.info(
         `context-usage pathC-merge: lastKnownUsed=${lastKnown.usedTokens} ` +
           `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
@@ -2487,7 +2529,7 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
           `deltaUsage=${this.state.streamDeltaUsageCount} ` +
           `final=${merged.usedTokens}/${merged.pct}%`,
       );
-      this.publishTokenUsageSnapshot(merged);
+      this.publishTokenUsageSnapshot(fallbackMeta ? { ...merged, ...fallbackMeta } : merged);
     }
   }
 }

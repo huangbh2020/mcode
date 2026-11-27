@@ -354,7 +354,11 @@ export class CodexMessageAdapter {
       case "fileChange":
         if (!completed) {
           this.emitToolUse(item.id, "file_change", {
-            changes: (item.changes ?? []).map((c) => ({ path: c.path, kind: changeKind(c.kind) })),
+            changes: (item.changes ?? []).map((c) => ({
+              path: c.path,
+              kind: changeKind(c.kind),
+              ...(typeof c.diff === "string" && c.diff.length > 0 ? { diff: c.diff } : {}),
+            })),
           });
         } else {
           this.emit({
@@ -362,7 +366,11 @@ export class CodexMessageAdapter {
             sessionId: this.sessionId,
             toolCallId: item.id,
             isError: item.status === "failed" || item.status === "declined",
-            content: (item.changes ?? []).map((c) => ({ path: c.path, kind: changeKind(c.kind) })),
+            content: (item.changes ?? []).map((c) => ({
+              path: c.path,
+              kind: changeKind(c.kind),
+              ...(typeof c.diff === "string" && c.diff.length > 0 ? { diff: c.diff } : {}),
+            })),
           });
         }
         break;

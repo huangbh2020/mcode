@@ -3,18 +3,23 @@ import { cn } from "@renderer/lib/cn.js";
 import { isMac } from "@renderer/lib/platform.js";
 import {
   IconArrowLeft,
-  IconLayoutSidebarLeftExpand,
+  IconChevronDown,
   IconLayoutSidebarRightExpand,
   IconGitFork,
+  IconPlus,
   IconTerminal2,
+  IconSearch,
 } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { ToolbarGitCommit } from "@renderer/components/layout/ToolbarGitCommit.js";
 import { WorktreeMergeToolbarButton } from "@renderer/components/chat/WorktreeMergeBack.js";
+import { BrandLogo } from "@renderer/components/layout/BrandLogo.js";
+import { NewSessionMenu } from "@renderer/components/layout/NewSessionMenu.js";
+import { ProjectAvatar } from "@renderer/components/layout/ProjectAvatar.js";
+import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { UnifiedTabsBar } from "./UnifiedTabsBar.js";
 
 type Mode = "workspace" | "settings" | "sched";
 
@@ -97,11 +102,19 @@ export function Titlebar({
   const terminalPosition = useSessionStore((s) => s.terminalPosition);
   const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
   const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
+  const setCommandPaletteOpen = useSessionStore((s) => s.setCommandPaletteOpen);
+  const startSession = useSessionStore((s) => s.startSession);
+  const activeProjectId = useSessionStore((s) => s.activeProjectId);
+  const canNewSession = activeProjectId !== null;
 
   // Subscribe once to the shortcut overrides so every toggle button's tooltip
   // shows the *effective* chord (override ?? default). Re-resolved per render
   // via `hintFor` below — cheap (a handful of lookups).
   const overrides = useSessionStore((s) => s.shortcutOverrides);
+  const searchChord = useMemo(() => {
+    const a = resolveShortcut("command.palette", overrides);
+    return a ? acceleratorToDisplayString(a) : isMac ? "⌘K" : "Ctrl K";
+  }, [overrides]);
   /** Append the effective shortcut for `commandId` to a label, e.g.
    *  "隐藏左侧面板" → "隐藏左侧面板 (⌘B)". Returns the label unchanged when
    *  the command has no binding. */
@@ -114,38 +127,45 @@ export function Titlebar({
 
   return (
     <div
-      className="relative z-20 flex h-10 shrink-0 items-stretch bg-surface-muted"
+      className="relative z-20 -mx-[3px] flex h-10 shrink-0 items-stretch overflow-hidden border-b border-edge bg-surface"
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       <div
         className={cn(
-          // overflow-hidden: total containment — the tab strip's flex chain
-          // (min-w-0 at every level + overflow-x-auto track) normally keeps
-          // everything inside, but in degenerate narrow windows the strip's
-          // own shrink-0 chrome (chevrons/⋯) must never spill over the right
-          // cluster; clipping beats overlapping. Portaled popups (⋯ menu,
-          // git pill popover, dialogs) render at <body> and are unaffected.
-          "relative flex flex-1 items-center overflow-hidden bg-surface-muted pr-2",
-          flushLeft ? "pl-0" : "pl-2",
+          "relative flex flex-1 items-center gap-1.5 overflow-hidden bg-surface pl-2.5 pr-2",
           !isMac && "pr-[138px]",
-          // macOS traffic lights sit at the window's top-left. They overlay
-          // the full-height sidebar while it's visible (LeftBar's header
-          // reserves the room). Whenever the sidebar is NOT visible — closed,
-          // or hidden because a fullscreen page (settings / 定时任务) covers
-          // the row — this bar starts at x=0 and must reserve the space itself.
-          isMac && !(leftOpen && !isOverlayPage) && "pl-[78px]",
+          // 通栏顶栏始终从窗口最左侧开始，macOS 统一预留交通灯空间。
+          isMac && "pl-[78px]",
         )}
       >
-        {/* Overlay pages (settings / sched / fullscreen browser) have no
-            attached tabs, so keep a hairline divider along the bottom edge.
-            In workspace mode the main pane's own top border (pulled up 1px
-            under this z-20 titlebar) forms the seam so its top-left arc stays
-            clean and the active tab cleanly masks the segment beneath it. */}
+        {/* 品牌 Logo + 系统名称：工作区模式下点击直接隐藏/显示左侧面板 */}
+        {!isOverlayPage && !isBrowserMode ? (
+          <button
+            type="button"
+            onClick={onToggleLeft}
+            className="flex shrink-0 items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-surface-hover/70"
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+            title={
+              (leftOpen ? t("layout.hideLeftPanel") : t("layout.showLeftPanel")) +
+              hintFor("layout.toggle-left")
+            }
+          >
+            <BrandLogo size={22} />
+            <span className="text-[13px] font-semibold tracking-tight text-content">Mcode</span>
+          </button>
+        ) : (
+          <div className="flex shrink-0 items-center gap-2 px-1.5 py-1">
+            <BrandLogo size={22} />
+            <span className="text-[13px] font-semibold tracking-tight text-content">Mcode</span>
+          </div>
+        )}
+
         {(isOverlayPage || isBrowserOverlay) && (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-px bg-edge" />
         )}
         {isOverlayPage ? (
           <>
+            <span className="mx-0.5 h-3.5 w-px shrink-0 bg-edge" aria-hidden />
             <button
               onClick={onBack}
               className={cn(
@@ -164,13 +184,7 @@ export function Titlebar({
           </>
         ) : (
           <>
-            {isBrowserMode ? (
-              // Browser overlay / wide-panel mode: a back button that closes
-              // the mode and returns to the IDE workspace. Mirrors the
-              // settings-mode back button in form (icon + label) so the
-              // "exit this mode" affordances read consistently. The tooltip
-              // appends the effective toggle shortcut (the same command this
-              // button triggers).
+            {isBrowserMode && (
               <button
                 onClick={() =>
                   widePanelOpen ? setWidePanelOpen(false) : setBrowserPanelOpen(false)
@@ -188,42 +202,78 @@ export function Titlebar({
                 <IconArrowLeft size={16} className="shrink-0" />
                 {widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")}
               </button>
-            ) : (
-              // Workspace: the sidebar's collapse toggle lives in the LeftBar
-              // footer/header, so the toolbar hides it while the sidebar is open
-              // and only shows the expand button when the sidebar is closed.
-              !leftOpen && (
-                <button
-                  onClick={onToggleLeft}
+            )}
+            {!isBrowserOverlay && (
+              <>
+                <span className="mx-0.5 h-3.5 w-px shrink-0 bg-edge" aria-hidden />
+                <ActiveProjectBadge />
+                <div
                   className={cn(
-                    "mr-1 flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
-                    "text-content-muted hover:bg-surface-hover hover:text-content",
+                    "flex h-7 shrink-0 items-stretch rounded-lg border transition-colors",
+                    canNewSession
+                      ? "border-accent/25 bg-accent/10 text-accent"
+                      : "cursor-not-allowed border-edge bg-surface-muted/50 text-content-subtle opacity-55",
                   )}
-                  title={t("layout.showLeftPanel") + hintFor("layout.toggle-left")}
                   style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
                 >
-                  <IconLayoutSidebarLeftExpand
-                    size={18}
-                    className="shrink-0 scale-x-[-1]"
+                  <button
+                    type="button"
+                    disabled={!canNewSession}
+                    onClick={() => {
+                      if (canNewSession) void startSession();
+                    }}
+                    title={
+                      (canNewSession ? t("layout.newSessionInProject") : t("layout.needProject")) +
+                      hintFor("session.new")
+                    }
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-l-[7px] px-2 text-xs font-medium transition-colors focus:outline-none",
+                      canNewSession ? "hover:bg-accent/15" : "cursor-not-allowed",
+                    )}
+                  >
+                    <IconPlus size={13} className="shrink-0" />
+                    <span className="hidden sm:inline">{t("layout.newSession")}</span>
+                  </button>
+                  <span
+                    className={cn(
+                      "my-1.5 w-px shrink-0",
+                      canNewSession ? "bg-accent/25" : "bg-edge",
+                    )}
+                    aria-hidden
                   />
+                  <NewSessionMenu
+                    disabled={!canNewSession}
+                    triggerTitle={t("layout.newSessionMenu.more")}
+                    triggerClassName={cn(
+                      "flex items-center justify-center rounded-r-[7px] px-1.5 transition-colors focus:outline-none",
+                      canNewSession ? "hover:bg-accent/20" : "cursor-not-allowed",
+                    )}
+                  >
+                    <IconChevronDown size={12} className="shrink-0 opacity-80" />
+                  </NewSessionMenu>
+                </div>
+              </>
+            )}
+            {/* 方案 4：标签栏已移入中间面板顶部，顶栏中间留作简洁的全局命令搜索条（两侧空白仍可拖拽窗口）。 */}
+            <div className="flex min-w-0 flex-1 items-center justify-center px-2">
+              {!isBrowserOverlay && (
+                <button
+                  type="button"
+                  onClick={() => setCommandPaletteOpen(true)}
+                  className="inline-flex w-full max-w-[320px] items-center justify-between gap-2 rounded-lg border border-edge bg-surface-muted/65 px-2.5 py-1 text-[11px] text-content-subtle transition-colors hover:border-edge-input hover:bg-surface-hover/70 hover:text-content"
+                  style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                  title={t("layout.searchPlaceholder")}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <IconSearch size={12} className="shrink-0 opacity-75" />
+                    <span className="truncate">{t("layout.searchPlaceholder")}</span>
+                  </span>
+                  <kbd className="shrink-0 rounded border border-edge bg-surface px-1.5 py-0.5 font-mono text-[10px] leading-none text-content-subtle">
+                    {searchChord}
+                  </kbd>
                 </button>
-              )
-            )}
-            {/* Unified tab strip — the merged single-row titlebar's middle
-                region. Session title/project identity live ON the tabs now
-                (the old ActiveThreadTitle/ActiveProjectChip chips are gone —
-                the title appeared twice in the two-row layout). The wrapper
-                stays mounted so the right cluster keeps its place even when
-                the strip renders null (no tabs/files/plan). Hidden on
-                overlay pages (settings/sched cover the workspace) and during
-                the fullscreen browser overlay; wide-panel mode keeps it
-                (sessions remain the visible surface there). */}
-            {!isOverlayPage && !isBrowserOverlay && (
-              <div className="flex min-w-0 flex-1 items-stretch self-stretch">
-                <UnifiedTabsBar flushLeft={flushLeft} />
-              </div>
-            )}
-            {isBrowserOverlay && <div className="flex-1" />}
+              )}
+            </div>
             {/* Worktree chip — the active thread's isolated-checkout name.
                 Renders only for worktree sessions; local threads leave no
                 gap (the component returns null). Neutral tone: the accent
@@ -248,9 +298,9 @@ export function Titlebar({
               <button
                 onClick={() => setBottomTerminalOpen(!bottomTerminalOpen)}
                 className={cn(
-                  "flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
+                  "flex shrink-0 items-center justify-center rounded-md p-1.5 transition-colors",
                   bottomTerminalOpen
-                    ? "bg-surface-hover text-content"
+                    ? "bg-accent/15 text-accent"
                     : "text-content-muted hover:bg-surface-hover hover:text-content",
                 )}
                 title={
@@ -273,9 +323,9 @@ export function Titlebar({
               <button
                 onClick={onToggleRight}
                 className={cn(
-                  "flex shrink-0 items-center justify-center rounded p-1.5 transition-colors",
+                  "flex shrink-0 items-center justify-center rounded-md p-1.5 transition-colors",
                   rightOpen
-                    ? "bg-surface-hover text-content"
+                    ? "bg-accent/15 text-accent"
                     : "text-content-muted hover:bg-surface-hover hover:text-content",
                 )}
                 title={(rightOpen ? t("layout.hideRightPanel") : t("layout.showRightPanel")) + hintFor("layout.toggle-right")}
@@ -293,6 +343,50 @@ export function Titlebar({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Active-session project badge: resolves the active session's owning project
+ *  (falling back to activeProjectId when no session is open) so switching
+ *  sessions/tabs immediately reflects which project the current thread belongs to. */
+function ActiveProjectBadge() {
+  const project = useSessionStore((s) => {
+    let pid: string | null = null;
+    if (s.activeSessionId) {
+      const sess =
+        s.sessions.find((x) => x.id === s.activeSessionId) ??
+        s.pinnedSessions.find((x) => x.id === s.activeSessionId) ??
+        s.streamSessions.find((x) => x.id === s.activeSessionId);
+      if (sess) {
+        pid = sess.projectId;
+      } else {
+        for (const list of Object.values(s.sessionsByProject)) {
+          const hit = list?.find((x) => x.id === s.activeSessionId);
+          if (hit) {
+            pid = hit.projectId;
+            break;
+          }
+        }
+      }
+    }
+    const targetId = pid ?? s.activeProjectId;
+    if (!targetId) return null;
+    return s.projects.find((p) => p.id === targetId) ?? null;
+  });
+  const projectColors = useSessionStore((s) => s.projectColors);
+  if (!project) return null;
+  return (
+    <div
+      className="flex h-7 max-w-[180px] shrink-0 items-center gap-1.5 rounded-lg border border-edge bg-surface-muted/60 px-2 text-xs font-medium text-content"
+      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+      title={project.path}
+    >
+      <ProjectAvatar
+        name={project.name}
+        color={projectDisplayColor(project, projectColors)}
+      />
+      <span className="truncate">{project.name}</span>
     </div>
   );
 }

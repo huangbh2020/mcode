@@ -924,6 +924,107 @@ function buildComponents(): Components {
 
 const STATIC_MARKDOWN_COMPONENTS: Components = buildComponents();
 
+/** Matches reference-style link definitions (`[id]: url`) or footnote
+ *  definitions (`[^id]: text`) at the start of a line. When present, blocks
+ *  can cross-reference each other so we fall back to single-pass parsing. */
+const REF_OR_FOOTNOTE_DEF_RE = /^\s{0,3}\[[^\]]+\]:/m;
+
+/** Split streaming Markdown into top-level blocks at blank lines while
+ *  respecting fenced code blocks (``` / ~~~) and display math blocks ($$).
+ *  Returns `null` when splitting is unnecessary (single block) or unsafe
+ *  (cross-block reference definitions present). */
+function splitStreamingMarkdownBlocks(source: string): string[] | null {
+  if (!source.includes("\n\n") && !source.includes("\r\n\r\n")) return null;
+  if (REF_OR_FOOTNOTE_DEF_RE.test(source)) return null;
+
+  const lines = source.split("\n");
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let fenceChar: "`" | "~" | null = null;
+  let fenceLen = 0;
+  let inMathBlock = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (fenceChar) {
+      current.push(line);
+      const closeMatch = /^(`{3,}|~{3,})\s*$/.exec(trimmed);
+      if (closeMatch && closeMatch[1][0] === fenceChar && closeMatch[1].length >= fenceLen) {
+        fenceChar = null;
+        fenceLen = 0;
+      }
+      continue;
+    }
+
+    if (inMathBlock) {
+      current.push(line);
+      if (trimmed === "$$" || (trimmed.endsWith("$$") && trimmed !== "$$")) {
+        inMathBlock = false;
+      }
+      continue;
+    }
+
+    const openFence = /^(`{3,}|~{3,})/.exec(trimmed);
+    if (openFence) {
+      fenceChar = openFence[1][0] as "`" | "~";
+      fenceLen = openFence[1].length;
+      current.push(line);
+      continue;
+    }
+
+    if (trimmed.startsWith("$$")) {
+      // Single-line `$$ ... $$` opens and closes on the same line.
+      if (trimmed === "$$" || !trimmed.endsWith("$$")) {
+        inMathBlock = true;
+      }
+      current.push(line);
+      continue;
+    }
+
+    if (trimmed === "") {
+      if (current.length > 0) {
+        blocks.push(current.join("\n"));
+        current = [];
+      }
+      continue;
+    }
+
+    current.push(line);
+  }
+
+  if (current.length > 0) {
+    blocks.push(current.join("\n"));
+  }
+
+  return blocks.length > 1 ? blocks : null;
+}
+
+/** Memoized single Markdown chunk used during streaming so already-completed
+ *  paragraphs skip remark/rehype re-parsing as new characters arrive at the
+ *  tail. Renders directly without a wrapper element so parent `.chat-md`
+ *  direct-child selectors (`[&>p]`, `:first-child`, `:last-child`) match the
+ *  single-pass DOM identically. */
+const MarkdownChunk = memo(function MarkdownChunk({
+  text,
+  rehypePlugins,
+}: {
+  text: string;
+  rehypePlugins: Parameters<typeof ReactMarkdown>[0]["rehypePlugins"];
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={DEFAULT_REMARK_PLUGINS}
+      rehypePlugins={rehypePlugins}
+      urlTransform={urlTransform}
+      components={STATIC_MARKDOWN_COMPONENTS}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+});
+
 export const Markdown = memo(function Markdown({
   children,
   projectPath,
@@ -931,6 +1032,7 @@ export const Markdown = memo(function Markdown({
   inlineFiles,
   baseDir,
   streaming = false,
+  showCaret,
 }: {
   children: string;
   /** Project root — bare file paths in prose (and inline code) that fall
@@ -953,9 +1055,13 @@ export const Markdown = memo(function Markdown({
    *  render INLINE (loaded via file.readBinary) and relative links open the
    *  exact sibling file; leave unset for chat output. */
   baseDir?: string | null;
-  /** The text is still arriving. A file-citation directive that has not
-   *  finished streaming is held back instead of flashing as raw markup. */
+  /** The text is still arriving. Enables block-level incremental parsing and
+   *  holds back an incomplete trailing file-citation directive. */
   streaming?: boolean;
+  /** Whether to draw the inline blinking caret (`.chat-streaming-tail`).
+   *  Defaults to `streaming`; callers whose live spine already renders a
+   *  caret pass `showCaret={false}` so two carets never stack. */
+  showCaret?: boolean;
 }) {
   // Build a single regex matching any known `/skillName` at its boundary.
   // Sorted longest-first so a skill named `pdf` doesn't shadow `pdf-generator`.
@@ -1002,6 +1108,11 @@ export const Markdown = memo(function Markdown({
     () => preprocessFileCitations(children, { hideTrailingPartial: streaming }),
     [children, streaming],
   );
+  const streamingBlocks = useMemo(
+    () => (streaming ? splitStreamingMarkdownBlocks(cited.text) : null),
+    [cited.text, streaming],
+  );
+  const caretVisible = showCaret ?? streaming;
   // Block margins + line-height here are density-driven (--chat-md-gap-* /
   // --chat-md-leading, see the chat-density section in styles.css) so the
   // 对话紧凑度 setting shapes the reply body itself, not just the gaps
@@ -1018,21 +1129,20 @@ export const Markdown = memo(function Markdown({
     <div
       className={cn(
         "chat-md break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-md-leading)] [font-weight:var(--chat-font-weight)] [&>p]:my-[var(--chat-md-gap-sm)] [&>:first-child]:mt-0 [&>:last-child]:mb-0",
-        streaming && "chat-streaming-tail",
+        caretVisible && "chat-streaming-tail",
       )}
     >
       <MarkdownStreamingContext.Provider value={streaming}>
         <MarkdownProjectContext.Provider value={projectPath ?? null}>
           <MarkdownBaseDirContext.Provider value={baseDir ?? null}>
             <FileCitationContext.Provider value={cited.citations}>
-              <ReactMarkdown
-                remarkPlugins={DEFAULT_REMARK_PLUGINS}
-                rehypePlugins={rehypePlugins}
-                urlTransform={urlTransform}
-                components={STATIC_MARKDOWN_COMPONENTS}
-              >
-                {cited.text}
-              </ReactMarkdown>
+              {streamingBlocks ? (
+                streamingBlocks.map((chunk, idx) => (
+                  <MarkdownChunk key={idx} text={chunk} rehypePlugins={rehypePlugins} />
+                ))
+              ) : (
+                <MarkdownChunk text={cited.text} rehypePlugins={rehypePlugins} />
+              )}
             </FileCitationContext.Provider>
           </MarkdownBaseDirContext.Provider>
         </MarkdownProjectContext.Provider>

@@ -143,7 +143,7 @@ export function ProviderDropdown({
     return (
       <span
         className={cn(
-          "composer-chip composer-provider-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium",
+          "composer-chip composer-provider-chip flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium",
           "cursor-default text-content-muted",
         )}
         data-compact={compact ? "1" : "0"}
@@ -175,7 +175,7 @@ export function ProviderDropdown({
     <button
       type="button"
       className={cn(
-        "composer-chip composer-provider-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
+        "composer-chip composer-provider-chip flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
         "text-content-muted hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
       )}
       data-compact={compact ? "1" : "0"}

@@ -42,7 +42,7 @@ import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { fmtTokens } from "@renderer/lib/contextWindow.js";
 import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
-import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
+import { lineDiff, diffSummary, parseUnifiedDiff } from "@renderer/lib/lineDiff.js";
 import { FileLink } from "./FileLink.js";
 import { ToolPathDisplay } from "./ToolPathDisplay.js";
 import { MediaGallery, type MediaBlock, type ToolMeta } from "./mediaGallery.js";
@@ -156,6 +156,7 @@ const MessageBlocks = memo(function MessageBlocks({
   blocks,
   beforeMap,
   isStreamingTail,
+  liveTurn,
   onOpenPlan,
   projectPath,
   inlineFiles,
@@ -167,9 +168,12 @@ const MessageBlocks = memo(function MessageBlocks({
    *  TurnPanel). */
   beforeMap?: BeforeContentMap;
   /** When true, this message is the last one in the stream and is still
-   *  receiving content deltas. Instructs text blocks to skip expensive
-   *  Markdown parsing and render as raw text until streaming settles. */
+   *  receiving content deltas. */
   isStreamingTail?: boolean;
+  /** True when this message belongs to an actively streaming turn. Enables
+   *  block-level incremental Markdown rendering without forcing an inline
+   *  caret (the live spine owns the caret). */
+  liveTurn?: boolean;
   /** Called when the user clicks an inline plan block - opens the right-side
    *  PlanDrawer with that plan's full markdown content. Forwarded to
    *  PlanStreamBlock via BlockView. */
@@ -210,6 +214,7 @@ const MessageBlocks = memo(function MessageBlocks({
               defaultOpen={seg.defaultOpen}
               beforeMap={beforeMap}
               isStreamingTail={Boolean(isStreamingTail) && i === segments.length - 1}
+              liveTurn={Boolean(liveTurn) && i === segments.length - 1}
               thinkingActive={Boolean(isStreamingTail) && seg.block.kind === "thinking" && i === segments.length - 1}
               onOpenPlan={onOpenPlan}
               projectPath={projectPath}
@@ -314,9 +319,19 @@ function segmentKeys(segments: Segment[]): string[] {
 const WRITE_EDIT_TOOL_NAMES = new Set([
   // Claude
   "Write", "Edit", "MultiEdit", "NotebookEdit",
-  // Pi (lowercase)
+  // Pi / OpenCode (lowercase)
   "write", "edit", "multiedit", "notebookedit",
+  // Codex
+  "file_change",
 ]);
+
+function isEditToolName(toolName: string): boolean {
+  return toolName === "Edit" || toolName === "edit" || toolName === "MultiEdit" || toolName === "multiedit";
+}
+
+function isWriteToolName(toolName: string): boolean {
+  return toolName === "Write" || toolName === "write";
+}
 
 /** Classify a block as an Edit/Write diff row — the two card kinds that carry
  *  the +/- line-count badges — returning the block narrowed to `tool_use`
@@ -324,33 +339,24 @@ const WRITE_EDIT_TOOL_NAMES = new Set([
  *  both go through this classifier: a block that joins an edit-run is
  *  guaranteed to render as an EditToolCard / WriteToolCard, while one with
  *  malformed input (null here) falls to GenericToolCard today and simply
- *  breaks the run — identical behavior on both sides. MultiEdit/NotebookEdit
- *  stay out on purpose: their generic card shows no diff row, and it doubles
- *  as a run break (adjacent-only grouping). Exported for ChatPane's live
- *  partition, which merges these rows across assistant messages while the
- *  turn streams. Returned as a payload object (not a type predicate) because
- *  the grouping loops need the path alongside the narrowed block, and a
- *  predicate can't carry both. */
+ *  breaks the run — identical behavior on both sides. NotebookEdit stays out
+ *  on purpose: its generic card shows no diff row, and it doubles as a run
+ *  break (adjacent-only grouping). Exported for ChatPane's live partition,
+ *  which merges these rows across assistant messages while the turn streams.
+ *  Returned as a payload object (not a type predicate) because the grouping
+ *  loops need the path alongside the narrowed block, and a predicate can't
+ *  carry both. */
 export type FileEditOpKind = "edit" | "write";
 
-/** Classify a block as an Edit/Write diff row — the two card kinds that carry
- *  the +/- line-count badges — returning the block narrowed to `tool_use`,
- *  its file path, and normalized operation kind (`"edit"` or `"write"`);
- *  null for everything else. Grouping and rendering MUST both go through this
- *  classifier: a block that joins an edit-run is guaranteed to have valid
- *  Edit/Write input, while one with malformed input (null here) falls to
- *  GenericToolCard and breaks the run. MultiEdit/NotebookEdit stay out on
- *  purpose. Exported for ChatPane's live partition, which merges consecutive
- *  same-operation rows across assistant messages while the turn streams. */
 export function fileEditRowInfo(
   block: Block,
 ): { block: ToolUseBlock; path: string; opKind: FileEditOpKind } | null {
   if (block.kind !== "tool_use") return null;
-  if (block.toolName === "Edit" || block.toolName === "edit") {
+  if (isEditToolName(block.toolName)) {
     const path = getNormalizedEditInput(block.input)?.filePath ?? pathField(block.input);
     return path === null ? null : { block, path, opKind: "edit" };
   }
-  if (block.toolName === "Write" || block.toolName === "write") {
+  if (isWriteToolName(block.toolName)) {
     const path = getNormalizedWriteInput(block.input)?.filePath ?? pathField(block.input);
     return path === null ? null : { block, path, opKind: "write" };
   }
@@ -407,10 +413,10 @@ function groupBlocks(blocks: Block[]): Segment[] {
   let atts: Extract<Block, { kind: "attachment" }>[] = [];
   const flushTools = () => {
     if (run.length > 0) {
-      if (run.length === 1) {
-        out.push({ kind: "single", block: run[0], defaultOpen: false });
-      } else {
-        out.push({ kind: "batch", blocks: run });
+      // 直接逐条平铺展示（2026-11-27，用户要求）：外层过程面板已负责整体折叠，
+      // 内部连续的思考与工具操作不再二次收缩到 BatchToolGroup 折叠块中。
+      for (const b of run) {
+        out.push({ kind: "single", block: b, defaultOpen: false });
       }
       run = [];
     }
@@ -1367,26 +1373,22 @@ const BlockView = memo(function BlockView({
       // singleton + LRU cache + useMemo on rawCode), so the expensive path is
       // already guarded without sacrificing live markdown formatting.
       const skillNames = mergedSkillNames;
-      // Whitespace-only text blocks render nothing. They are stream
-      // artifacts: the bridge's <think> segmenter forwards the bare newlines
-      // models emit around reasoning sections, and each isolated run became
-      // a standalone text block — an empty Markdown container whose
-      // surrounding block gaps read as a blank line in the chat. The guard
-      // sits AFTER the useDeferredValue call above (hoisted out of the
-      // switch): a streaming block can start whitespace-only and grow prose
-      // within its lifetime, and a conditional hook would crash React
-      // ("rendered more hooks than previous render").
       if (!block.text.trim()) return null;
+      const isStreaming = Boolean(isStreamingTail) || Boolean(liveTurn);
+      // Streaming text uses block-level incremental Markdown rendering inside
+      // <Markdown> (so each frame only parses the active tail paragraph in O(1))
+      // and receives paced character slices from sessionStore. Passing the live
+      // text directly avoids React's useDeferredValue coalescing/stalling into
+      // jerky jumps; non-streaming text keeps deferredText.
       return (
         <Markdown
           projectPath={projectPath}
           skillNames={skillNames}
           inlineFiles={inlineFiles}
-          // A file-citation directive that is mid-stream is held back until it
-          // completes. Only a block at the tail of a live turn can end in one.
-          streaming={Boolean(isStreamingTail) || Boolean(liveTurn)}
+          streaming={isStreaming}
+          showCaret={Boolean(isStreamingTail)}
         >
-          {deferredText}
+          {isStreaming ? block.text : deferredText}
         </Markdown>
       );
     }
@@ -1559,26 +1561,27 @@ export function BatchToolGroup(props: {
   hasFollowingText?: boolean;
   /** The turn is live AND this run is the turn's tail (its last block is the
    *  one streaming). Only meaningful when that last block is thinking — it
-   *  drives the standalone thinking card's shimmer sweep. Multi-block runs
-   *  derive the same fact internally. */
+   *  drives the standalone thinking card's shimmer sweep. */
   thinkingActive?: boolean;
   projectPath?: string | null;
 }) {
-  if (props.blocks.length === 1) {
-    return (
-      <div className="my-0.5 [font-size:var(--chat-fs-sm)]">
+  // 直接逐条平铺渲染（2026-11-27，用户要求）：不再把连续的思考与工具操作
+  // 二次收缩进可折叠的操作组块，保持与外层过程面板内单条卡片一致的展示形态。
+  return (
+    <div className="space-y-[var(--chat-block-gap)] [font-size:var(--chat-fs-sm)]">
+      {props.blocks.map((block, idx) => (
         <BlockView
-          block={props.blocks[0]}
+          key={block.kind === "tool_use" ? block.toolCallId : `thinking:${idx}`}
+          block={block}
           beforeMap={props.beforeMap}
           liveTurn={props.turnActive}
-          thinkingActive={props.thinkingActive}
+          thinkingActive={Boolean(props.thinkingActive) && block.kind === "thinking" && idx === props.blocks.length - 1}
           projectPath={props.projectPath}
           defaultOpen={false}
         />
-      </div>
-    );
-  }
-  return <MultiBatchToolGroup {...props} />;
+      ))}
+    </div>
+  );
 }
 
 /** A pasted-content or file-reference attachment shown as a chip-like card in
@@ -1983,14 +1986,14 @@ function ToolCard({
   liveTurn?: boolean;
   projectPath?: string | null;
 }) {
-  const isEdit = block.toolName === "Edit" || block.toolName === "edit";
+  const isEdit = isEditToolName(block.toolName);
   const editInput = isEdit ? getNormalizedEditInput(block.input) : null;
   if (editInput) {
     return (
       <EditToolCard
+        toolName={block.toolName}
         filePath={editInput.filePath}
-        oldString={editInput.oldString}
-        newString={editInput.newString}
+        hunks={editInput.hunks}
         status={block.status}
         result={block.result}
         defaultOpen={defaultOpen}
@@ -1999,7 +2002,7 @@ function ToolCard({
       />
     );
   }
-  const isWrite = block.toolName === "Write" || block.toolName === "write";
+  const isWrite = isWriteToolName(block.toolName);
   const writeInput = isWrite ? getNormalizedWriteInput(block.input) : null;
   if (writeInput) {
     return (
@@ -2014,6 +2017,20 @@ function ToolCard({
         projectPath={projectPath}
       />
     );
+  }
+  if (block.toolName === "file_change") {
+    const changes = extractFileChangeEntries(block.input, block.result);
+    if (changes.length > 0) {
+      return (
+        <FileChangeToolCard
+          changes={changes}
+          status={block.status}
+          defaultOpen={defaultOpen}
+          live={liveTurn}
+          projectPath={projectPath}
+        />
+      );
+    }
   }
   if (block.toolName === ORCH_PLAN_TOOL_FULL) {
     return <OrchPlanToolCard block={block} defaultOpen={defaultOpen} live={liveTurn} />;
@@ -2115,23 +2132,24 @@ function OrchPlanToolCard({
   );
 }
 
-/** Edit tool card: line-level diff view. Inside an expanded TurnPanel it
+/** Edit tool card: line-level diff view (supports single-hunk Edit and
+ *  multi-hunk Pi `edit` / Claude `MultiEdit`). Inside an expanded TurnPanel it
  *  defaults to collapsed (`defaultOpen` false); the user clicks to inspect
  *  the diff. The header stays clickable so an individual edit can still be
  *  folded away. */
 function EditToolCard({
+  toolName = "Edit",
   filePath,
-  oldString,
-  newString,
+  hunks,
   status,
   result,
   defaultOpen = false,
   live,
   projectPath,
 }: {
+  toolName?: string;
   filePath: string;
-  oldString: string;
-  newString: string;
+  hunks: EditHunk[];
   status: "running" | "done" | "error";
   result?: unknown;
   defaultOpen?: boolean;
@@ -2148,8 +2166,134 @@ function EditToolCard({
   const [open, setOpen] = useState(defaultOpen);
   const holdFold = useFoldHold();
   const { t } = useI18n();
-  const diff = useMemo(() => lineDiff(oldString, newString), [oldString, newString]);
-  const { adds, dels } = useMemo(() => diffSummary(diff), [diff]);
+  const hunkDiffs = useMemo(
+    () =>
+      hunks.map((h) => {
+        const diff = lineDiff(h.oldString, h.newString);
+        const { adds, dels } = diffSummary(diff);
+        return { diff, adds, dels };
+      }),
+    [hunks],
+  );
+  const { adds, dels } = useMemo(
+    () => hunkDiffs.reduce((acc, d) => ({ adds: acc.adds + d.adds, dels: acc.dels + d.dels }), { adds: 0, dels: 0 }),
+    [hunkDiffs],
+  );
+
+  return (
+    <div className={TOOL_CARD_SHELL_CLASS}>
+      <button
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
+        className={TOOL_CARD_BTN_CLASS}
+      >
+        <ToolIcon name={toolName} className="shrink-0 text-content-subtle" />
+        <span className={cn("shrink-0 font-medium text-content-muted", status === "running" && !!live && "shimmer-text")}>
+          {toolDisplayName(t, toolName)}
+        </span>
+        <ToolPathDisplay filePath={filePath} className="min-w-0 flex-1" />
+        {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
+          {adds > 0 && <span className="text-success">+{adds}</span>}
+          {dels > 0 && <span className="text-danger">−{dels}</span>}
+          <Chevron open={open} />
+        </span>
+      </button>
+      {open && (
+        <div className={TOOL_CARD_BODY_CLASS}>
+          {hunkDiffs.length === 1 ? (
+            <DiffView diff={hunkDiffs[0].diff} />
+          ) : (
+            <div className="space-y-2">
+              {hunkDiffs.map((hd, idx) => (
+                <div key={idx} className="space-y-1">
+                  <div className="flex items-center justify-between font-mono text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                    <span>{t("chatStream.editGroup.changeIndex", { n: idx + 1 })}</span>
+                    <span className="flex items-center gap-1.5">
+                      {hd.adds > 0 && <span className="text-success">+{hd.adds}</span>}
+                      {hd.dels > 0 && <span className="text-danger">−{hd.dels}</span>}
+                    </span>
+                  </div>
+                  <DiffView diff={hd.diff} />
+                </div>
+              ))}
+            </div>
+          )}
+          {status === "error" && result !== undefined && (
+            <div>
+              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.tool.result")}</div>
+              <pre className="max-h-40 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+                {truncateResult(result)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface FileChangeEntry {
+  path: string;
+  kind?: string;
+  diff?: string;
+}
+
+function extractFileChangeEntries(input: unknown, result: unknown): FileChangeEntry[] {
+  const fromResult = Array.isArray(result) ? result : null;
+  const fromInput =
+    input && typeof input === "object" && Array.isArray((input as Record<string, unknown>).changes)
+      ? ((input as Record<string, unknown>).changes as unknown[])
+      : null;
+  const rawList = fromResult && fromResult.length > 0 ? fromResult : fromInput;
+  if (!rawList) return [];
+  const entries: FileChangeEntry[] = [];
+  for (const item of rawList) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    if (typeof rec.path !== "string" || !rec.path) continue;
+    entries.push({
+      path: rec.path,
+      kind: typeof rec.kind === "string" ? rec.kind : undefined,
+      diff: typeof rec.diff === "string" && rec.diff.length > 0 ? rec.diff : undefined,
+    });
+  }
+  return entries.some((e) => e.diff !== undefined) ? entries : [];
+}
+
+/** Codex `file_change` card: renders unified patch diffs per touched file. */
+function FileChangeToolCard({
+  changes,
+  status,
+  defaultOpen = false,
+  live,
+  projectPath,
+}: {
+  changes: FileChangeEntry[];
+  status: "running" | "done" | "error";
+  defaultOpen?: boolean;
+  live?: boolean;
+  projectPath?: string | null;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
+  const { t } = useI18n();
+  const parsed = useMemo(
+    () =>
+      changes.map((c) => {
+        const diff = c.diff ? parseUnifiedDiff(c.diff) : [];
+        const { adds, dels } = diffSummary(diff);
+        return { ...c, diff, adds, dels };
+      }),
+    [changes],
+  );
+  const { adds, dels } = useMemo(
+    () => parsed.reduce((acc, c) => ({ adds: acc.adds + c.adds, dels: acc.dels + c.dels }), { adds: 0, dels: 0 }),
+    [parsed],
+  );
+  const firstPath = parsed[0]?.path ?? "";
 
   return (
     <div className={TOOL_CARD_SHELL_CLASS}>
@@ -2164,7 +2308,13 @@ function EditToolCard({
         <span className={cn("shrink-0 font-medium text-content-muted", status === "running" && !!live && "shimmer-text")}>
           {toolDisplayName(t, "Edit")}
         </span>
-        <ToolPathDisplay filePath={filePath} className="min-w-0 flex-1" />
+        {parsed.length === 1 ? (
+          <ToolPathDisplay filePath={firstPath} className="min-w-0 flex-1" />
+        ) : (
+          <span className="min-w-0 flex-1 truncate font-mono text-content-muted">
+            {parsed.map((c) => basename(c.path)).join(" · ")}
+          </span>
+        )}
         {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
           {adds > 0 && <span className="text-success">+{adds}</span>}
@@ -2174,15 +2324,25 @@ function EditToolCard({
       </button>
       {open && (
         <div className={TOOL_CARD_BODY_CLASS}>
-          <DiffView diff={diff} />
-          {result !== undefined && (
-            <div>
-              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.tool.result")}</div>
-              <pre className="max-h-40 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
-                {truncateResult(result)}
-              </pre>
+          {parsed.map((c, idx) => (
+            <div key={`${c.path}:${idx}`} className="space-y-1">
+              {parsed.length > 1 && (
+                <div className="flex items-center justify-between font-mono text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                  <FileLink
+                    token={c.path}
+                    projectPath={projectPath}
+                    title={c.path}
+                    display={<span className="truncate font-semibold text-content hover:text-accent-strong">{basename(c.path)}</span>}
+                  />
+                  <span className="flex items-center gap-1.5">
+                    {c.adds > 0 && <span className="text-success">+{c.adds}</span>}
+                    {c.dels > 0 && <span className="text-danger">−{c.dels}</span>}
+                  </span>
+                </div>
+              )}
+              <DiffView diff={c.diff} />
             </div>
-          )}
+          ))}
         </div>
       )}
     </div>
@@ -2284,7 +2444,7 @@ function WriteToolCard({
               </pre>
             </div>
           )}
-          {result !== undefined && (
+          {status === "error" && result !== undefined && (
             <div>
               <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.tool.result")}</div>
               <pre className="max-h-40 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
@@ -2308,37 +2468,38 @@ function computeFileOpStats(
   filePath: string;
   adds: number;
   dels: number;
-  diff: ReturnType<typeof lineDiff> | null;
+  diffs: Array<ReturnType<typeof lineDiff>> | null;
   writeContent?: string;
   writeBefore?: string;
   rawInput?: unknown;
 } | null {
-  const edit = block.toolName === "Edit" || block.toolName === "edit" ? getNormalizedEditInput(block.input) : null;
+  const edit = isEditToolName(block.toolName) ? getNormalizedEditInput(block.input) : null;
   if (edit) {
-    const diff = lineDiff(edit.oldString, edit.newString);
-    const { adds, dels } = diffSummary(diff);
-    return { filePath: edit.filePath, adds, dels, diff };
+    const diffs = edit.hunks.map((h) => lineDiff(h.oldString, h.newString));
+    const { adds, dels } = diffs.reduce(
+      (acc, d) => {
+        const s = diffSummary(d);
+        return { adds: acc.adds + s.adds, dels: acc.dels + s.dels };
+      },
+      { adds: 0, dels: 0 },
+    );
+    return { filePath: edit.filePath, adds, dels, diffs };
   }
-  const write = block.toolName === "Write" || block.toolName === "write" ? getNormalizedWriteInput(block.input) : null;
+  const write = isWriteToolName(block.toolName) ? getNormalizedWriteInput(block.input) : null;
   if (write) {
     const before = lookupBefore(beforeMap, write.filePath);
     if (before !== undefined) {
       const diff = lineDiff(before, write.content);
       const { adds, dels } = diffSummary(diff);
-      return { filePath: write.filePath, adds, dels, diff, writeContent: write.content, writeBefore: before };
+      return { filePath: write.filePath, adds, dels, diffs: [diff], writeContent: write.content, writeBefore: before };
     }
     const lineCount = write.content ? write.content.split("\n").length : 0;
-    return { filePath: write.filePath, adds: lineCount, dels: 0, diff: null, writeContent: write.content };
+    return { filePath: write.filePath, adds: lineCount, dels: 0, diffs: null, writeContent: write.content };
   }
-  if (
-    block.toolName === "Edit" ||
-    block.toolName === "edit" ||
-    block.toolName === "Write" ||
-    block.toolName === "write"
-  ) {
+  if (isEditToolName(block.toolName) || isWriteToolName(block.toolName)) {
     const fallbackPath = pathField(block.input);
     if (fallbackPath !== null) {
-      return { filePath: fallbackPath, adds: 0, dels: 0, diff: null, rawInput: block.input };
+      return { filePath: fallbackPath, adds: 0, dels: 0, diffs: null, rawInput: block.input };
     }
   }
   return null;
@@ -2375,7 +2536,7 @@ interface AggregatedEditFile {
     block: ToolUseBlock;
     adds: number;
     dels: number;
-    diff: ReturnType<typeof lineDiff> | null;
+    diffs: Array<ReturnType<typeof lineDiff>> | null;
     writeContent?: string;
     writeBefore?: string;
     rawInput?: unknown;
@@ -2430,7 +2591,7 @@ function EditRunGroup({
         block: b,
         adds: stats.adds,
         dels: stats.dels,
-        diff: stats.diff,
+        diffs: stats.diffs,
         writeContent: stats.writeContent,
         writeBefore: stats.writeBefore,
         rawInput: stats.rawInput,
@@ -2576,14 +2737,23 @@ function EditRunGroup({
                     </span>
                   </div>
                 )}
-                {op.diff !== null ? (
-                  <div>
+                {op.diffs !== null ? (
+                  <div className="space-y-1.5">
                     {op.writeBefore !== undefined && (
                       <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">
                         {op.writeBefore === "" ? t("chatStream.diff.newFile") : t("chatStream.diff.vsPreTurn")}
                       </div>
                     )}
-                    <DiffView diff={op.diff} />
+                    {op.diffs.map((d, dIdx) => (
+                      <div key={dIdx} className="space-y-1">
+                        {op.diffs!.length > 1 && (
+                          <div className="font-mono text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                            {t("chatStream.editGroup.changeIndex", { n: dIdx + 1 })}
+                          </div>
+                        )}
+                        <DiffView diff={d} />
+                      </div>
+                    ))}
                   </div>
                 ) : op.writeContent !== undefined ? (
                   <div>
@@ -2604,7 +2774,7 @@ function EditRunGroup({
                     </pre>
                   </div>
                 )}
-                {op.block.result !== undefined && (
+                {op.block.result !== undefined && (op.block.status === "error" || (op.diffs === null && op.writeContent === undefined)) && (
                   <div>
                     <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">
                       {t("chatStream.tool.result")}
@@ -2991,10 +3161,14 @@ function resultPreview(v: unknown): string {
  * OpenCode/Pi SDK. We normalize their shapes here so EditToolCard / WriteToolCard
  * can render structured diffs and content previews instead of falling back to raw JSON. */
 
-interface NormalizedEditInput {
-  filePath: string;
+interface EditHunk {
   oldString: string;
   newString: string;
+}
+
+interface NormalizedEditInput {
+  filePath: string;
+  hunks: EditHunk[];
 }
 
 interface NormalizedWriteInput {
@@ -3002,32 +3176,49 @@ interface NormalizedWriteInput {
   content: string;
 }
 
+function extractEditHunk(raw: unknown): EditHunk | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const oldString =
+    typeof o.old_string === "string" ? o.old_string :
+    typeof o.oldString === "string" ? o.oldString :
+    typeof o.oldText === "string" ? o.oldText :
+    typeof o.old_str === "string" ? o.old_str :
+    typeof o.TargetContent === "string" ? o.TargetContent : null;
+  const newString =
+    typeof o.new_string === "string" ? o.new_string :
+    typeof o.newString === "string" ? o.newString :
+    typeof o.newText === "string" ? o.newText :
+    typeof o.new_str === "string" ? o.new_str :
+    typeof o.ReplacementContent === "string" ? o.ReplacementContent : null;
+  if (oldString !== null && newString !== null) {
+    return { oldString, newString };
+  }
+  return null;
+}
+
 function getNormalizedEditInput(i: unknown): NormalizedEditInput | null {
   if (!i || typeof i !== "object") return null;
   const o = i as Record<string, unknown>;
-  const filePath =
-    typeof o.file_path === "string" ? o.file_path :
-    typeof o.path === "string" ? o.path :
-    typeof o.filePath === "string" ? o.filePath : null;
-  const oldString =
-    typeof o.old_string === "string" ? o.old_string :
-    typeof o.oldString === "string" ? o.oldString : null;
-  const newString =
-    typeof o.new_string === "string" ? o.new_string :
-    typeof o.newString === "string" ? o.newString : null;
-  if (filePath && oldString !== null && newString !== null) {
-    return { filePath, oldString, newString };
+  const filePath = pathField(o);
+  if (!filePath) return null;
+  if (Array.isArray(o.edits)) {
+    const hunks: EditHunk[] = [];
+    for (const item of o.edits) {
+      const h = extractEditHunk(item);
+      if (h) hunks.push(h);
+    }
+    if (hunks.length > 0) return { filePath, hunks };
   }
+  const single = extractEditHunk(o);
+  if (single) return { filePath, hunks: [single] };
   return null;
 }
 
 function getNormalizedWriteInput(i: unknown): NormalizedWriteInput | null {
   if (!i || typeof i !== "object") return null;
   const o = i as Record<string, unknown>;
-  const filePath =
-    typeof o.file_path === "string" ? o.file_path :
-    typeof o.path === "string" ? o.path :
-    typeof o.filePath === "string" ? o.filePath : null;
+  const filePath = pathField(o);
   const content =
     typeof o.content === "string" ? o.content :
     typeof o.contents === "string" ? o.contents :
@@ -3036,26 +3227,6 @@ function getNormalizedWriteInput(i: unknown): NormalizedWriteInput | null {
     return { filePath, content };
   }
   return null;
-}
-
-/** Edit tool input: { file_path, old_string, new_string }. */
-function isEditInput(
-  i: unknown,
-): i is { file_path: string; old_string: string; new_string: string } {
-  if (!i || typeof i !== "object") return false;
-  const o = i as Record<string, unknown>;
-  return (
-    typeof o.file_path === "string" &&
-    typeof o.old_string === "string" &&
-    typeof o.new_string === "string"
-  );
-}
-
-/** Write tool input: { file_path, content }. */
-function isWriteInput(i: unknown): i is { file_path: string; content: string } {
-  if (!i || typeof i !== "object") return false;
-  const o = i as Record<string, unknown>;
-  return typeof o.file_path === "string" && typeof o.content === "string";
 }
 
 /** Pull a single-file path out of a tool input, accepting Claude's `file_path`,
@@ -3077,9 +3248,9 @@ function pathField(input: unknown): string | null {
  *  (capitalized) and OpenCode/Pi (lowercase) tool names. */
 function extractToolFilePath(toolName: string, input: unknown): string | null {
   const normEdit = getNormalizedEditInput(input);
-  if (toolName === "Edit" || toolName === "edit") return normEdit?.filePath ?? pathField(input);
+  if (isEditToolName(toolName)) return normEdit?.filePath ?? pathField(input);
   const normWrite = getNormalizedWriteInput(input);
-  if (toolName === "Write" || toolName === "write") return normWrite?.filePath ?? pathField(input);
+  if (isWriteToolName(toolName)) return normWrite?.filePath ?? pathField(input);
   if (toolName === "Read" || toolName === "read") return pathField(input);
   if (toolName === "find" || toolName === "Glob") return pathField(input);
   return null;

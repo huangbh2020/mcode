@@ -25,7 +25,7 @@ import {
   resolveShortcut,
   acceleratorToDisplayTokens,
 } from "@renderer/lib/shortcuts.js";
-import { IconGitFork, IconPlus, IconSearch, IconChevronDown } from "@renderer/lib/icons.js";
+import { IconGitFork, IconPlus, IconChevronDown } from "@renderer/lib/icons.js";
 import { NewSessionMenu } from "@renderer/components/layout/NewSessionMenu.js";
 import { Kbd } from "@renderer/components/ui/index.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -61,8 +61,6 @@ export function SidebarQuickActions({
 } = {}) {
   const { t } = useI18n();
   const startSession = useSessionStore((s) => s.startSession);
-  const startTerminalSession = useSessionStore((s) => s.startTerminalSession);
-  const setCommandPaletteOpen = useSessionStore((s) => s.setCommandPaletteOpen);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
 
   const canNewSession = newSessionOverride != null || activeProjectId !== null;
@@ -126,23 +124,6 @@ export function SidebarQuickActions({
           <IconChevronDown size={13} className="shrink-0 opacity-70 group-hover/split:opacity-100" />
         </NewSessionMenu>
       </div>
-
-      {/* 搜索 — entry to the unified Ctrl+K palette. Mirrors 新建会话's
-          neutral rest + accent-on-hover so the two read as a matched pair. */}
-      <button
-        type="button"
-        onClick={() => setCommandPaletteOpen(true)}
-        title={t("layout.palette.placeholder.all")}
-        className={cn(
-          "flex w-full items-center gap-2 rounded-lg px-1 py-2 transition-colors",
-          "[font-size:var(--right-panel-font-size)]",
-          "text-content-muted hover:bg-accent/10 hover:text-accent",
-        )}
-      >
-        <IconSearch size={16} className="shrink-0" />
-        <span className="flex-1 text-left font-medium">{t("common.search")}</span>
-        <ShortcutBadge commandId="command.palette" />
-      </button>
     </div>
   );
 }

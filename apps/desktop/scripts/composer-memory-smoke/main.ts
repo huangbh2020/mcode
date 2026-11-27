@@ -121,6 +121,35 @@ check(
   }),
 );
 
+/* ── partial incoming updates preserve untouched slots ── */
+check(
+  "merge: permission-only update preserves remembered effort and binding",
+  eq(mergeRememberedEntry(GOOD, { model: "default", customModelId: null, permissionMode: "plan" }), {
+    model: GOOD.model,
+    customModelId: GOOD.customModelId,
+    effort: GOOD.effort,
+    permissionMode: "plan",
+  }),
+);
+check(
+  "merge: effort-only update preserves remembered permissionMode and binding",
+  eq(mergeRememberedEntry(GOOD, { model: "default", customModelId: null, effort: "xhigh" }), {
+    model: GOOD.model,
+    customModelId: GOOD.customModelId,
+    effort: "xhigh",
+    permissionMode: GOOD.permissionMode,
+  }),
+);
+check(
+  "merge: model-only switch preserves remembered effort and permissionMode",
+  eq(mergeRememberedEntry(GOOD, { model: "claude-opus-4-6", customModelId: "cm_other" }), {
+    model: "claude-opus-4-6",
+    customModelId: "cm_other",
+    effort: GOOD.effort,
+    permissionMode: GOOD.permissionMode,
+  }),
+);
+
 /* ── non-optional slots carry older entries' missing fields fine ── */
 check(
   "merge: prev without effort/permissionMode still preserves binding",

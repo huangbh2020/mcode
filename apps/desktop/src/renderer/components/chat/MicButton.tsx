@@ -303,7 +303,7 @@ function MicButtonDesktop({
     <div className="flex items-center gap-1">
       {listening && (
         <div
-          className="flex h-8 items-center gap-1 rounded-xl bg-accent/10 px-2 text-accent animate-fade-in"
+          className="flex h-8 items-center gap-1 rounded-full bg-accent/10 px-2.5 text-accent animate-fade-in"
           title={t("chat.voice.listening")}
         >
           <span className="text-[11px] font-medium tracking-tight select-none mr-0.5">
@@ -333,7 +333,7 @@ function MicButtonDesktop({
           listening ? t("chat.voice.stopListening") : t("chat.voice.startListening")
         }
         className={cn(
-          "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
+          "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-content-muted transition-all duration-150 ease-out",
           "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
           listening && "bg-accent/10 text-accent hover:text-accent",
           "disabled:scale-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-muted",

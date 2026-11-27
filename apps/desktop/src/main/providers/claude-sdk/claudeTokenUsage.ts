@@ -344,6 +344,46 @@ function dedupeWarnings(ws: ContextWarningKind[]): ContextWarningKind[] {
  *  @param accumulated  Snapshot built from accumulated `result.usage` (path C)
  *                      — only its throughput/billing fields are used here
  *  @returns A complete snapshot with authoritative window occupancy */
+/** Extract the sanitized per-category breakdown and autocompact metadata from
+ *  a CLI `get_context_usage` response. Used by both Path B (authoritative
+ *  control-channel snapshot) and Path C enrichment (when a custom gateway's
+ *  `totalTokens` is untrusted, we still keep the CLI's category breakdown). */
+export function extractControlChannelMeta(
+  cc: ClaudeContextUsageResponse,
+): Pick<ContextSnapshot, "categories" | "isAutoCompactEnabled" | "autoCompactThreshold"> {
+  const categories = Array.isArray(cc.categories)
+    ? cc.categories
+        .filter(
+          (c) =>
+            c &&
+            typeof c.name === "string" &&
+            c.name.length > 0 &&
+            typeof c.tokens === "number" &&
+            Number.isFinite(c.tokens) &&
+            c.tokens >= 0,
+        )
+        .map((c) => ({
+          ...(typeof c.id === "string" ? { id: c.id } : {}),
+          name: c.name,
+          tokens: c.tokens,
+          ...(typeof c.isDeferred === "boolean" ? { isDeferred: c.isDeferred } : {}),
+          ...(typeof c.kind === "string" ? { kind: c.kind } : {}),
+        }))
+    : undefined;
+
+  return {
+    ...(categories && categories.length > 0 ? { categories } : {}),
+    ...(typeof cc.isAutoCompactEnabled === "boolean"
+      ? { isAutoCompactEnabled: cc.isAutoCompactEnabled }
+      : {}),
+    ...(typeof cc.autoCompactThreshold === "number" &&
+    Number.isFinite(cc.autoCompactThreshold) &&
+    cc.autoCompactThreshold > 0
+      ? { autoCompactThreshold: cc.autoCompactThreshold }
+      : {}),
+  };
+}
+
 export function buildSnapshotFromControlChannel(
   cc: ClaudeContextUsageResponse,
   accumulated: ContextSnapshot,
@@ -367,5 +407,6 @@ export function buildSnapshotFromControlChannel(
     // Control channel doesn't surface warning kinds; carry forward any
     // warnings the accumulated snapshot detected (e.g. large-prompt).
     warnings: accumulated.warnings,
+    ...extractControlChannelMeta(cc),
   };
 }

@@ -45,19 +45,17 @@ import {
   IconSun,
   IconMoon,
   IconFocus,
-  IconLayoutSidebarLeftExpand,
   IconTerminal,
   IconListCheck,
 } from "@renderer/lib/icons.js";
 import { NewSessionMenu } from "@renderer/components/layout/NewSessionMenu.js";
 import { useTheme, applyThemeClass } from "@renderer/lib/theme.js";
-import { isMac } from "@renderer/lib/platform.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { Button, ConfirmDialog, Dialog, Input } from "@renderer/components/ui/index.js";
 import { BrandLogo } from "./BrandLogo.js";
-import { SidebarQuickActions } from "./SidebarQuickActions.js";
 import { MobileConnectButton } from "./MobileConnectDialog.js";
+import { ArchivedDialogButton } from "./ArchivedDialogButton.js";
 import { describeSchedule, taskNextLine } from "@renderer/components/automation/automationFormat.js";
 import { HoverIconButton, RenameDialog, SessionContextMenu, ArchivedRow } from "./SidebarShared.js";
 import { ForkSessionDialog } from "@renderer/components/chat/ForkSessionDialog.js";
@@ -147,9 +145,6 @@ function LeftBarBase() {
   const deleteSession = useSessionStore((s) => s.deleteSession);
   const archiveSession = useSessionStore((s) => s.archiveSession);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
-  // Collapse affordance shared with StreamSidebar: while the hover-peek drawer
-  // is showing (leftOpen is already false there) "collapse" dismisses the peek.
-  const collapseLeftPanel = useSessionStore((s) => s.collapseLeftPanel);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const renameSession = useSessionStore((s) => s.renameSession);
@@ -158,7 +153,26 @@ function LeftBarBase() {
   const setProjectPinned = useSessionStore((s) => s.setProjectPinned);
   const projectView = useSessionStore((s) => s.projectView);
   const setProjectView = useSessionStore((s) => s.setProjectView);
+  const selectProject = useSessionStore((s) => s.selectProject);
+  const projectColors = useSessionStore((s) => s.projectColors);
   const setProjectGroup = useSessionStore((s) => s.setProjectGroup);
+  // 方案 4 左栏项目聚焦模式："active" 仅展示当前切换器选中的单个项目（纯净会话列表），
+  // "all" 保留原有的全部项目树（含分组/拖拽排序）。持久化在 localStorage。
+  const [projectScope, setProjectScope] = useState<"active" | "all">(() => {
+    try {
+      return localStorage.getItem("mcode.leftbar.projectScope") === "all" ? "all" : "active";
+    } catch {
+      return "active";
+    }
+  });
+  const updateProjectScope = useCallback((next: "active" | "all") => {
+    setProjectScope(next);
+    try {
+      localStorage.setItem("mcode.leftbar.projectScope", next);
+    } catch {
+      /* ignore storage errors */
+    }
+  }, []);
   const reorderProjects = useSessionStore((s) => s.reorderProjects);
   const groupMeta = useSessionStore((s) => s.groupMeta);
   const setGroupColor = useSessionStore((s) => s.setGroupColor);
@@ -711,70 +725,97 @@ function LeftBarBase() {
 
   return (
     <div className="flex h-full flex-col px-2 py-2 [font-size:var(--right-panel-font-size)]">
-      {/* Top strip. mac: the brand header (logo + name) was removed — the
-          strip now hosts the sidebar-collapse toggle, moved up from the
-          footer, sitting right of the traffic lights (trafficLightPosition
-          {x:20,y:13}: three 12px circles ending ~x=72): -mt-2 cancels the
-          root's pt-2 so the box spans the Titlebar's 40px band (y 0..40) and
-          the button centers on the traffic lights' centerline; pl-[70px]
-          clears the buttons (toggle starts at x≈78). The strip doubles as a
-          window drag handle; the button opts out. win: keeps the original
-          brand header (logo + name + tagline), clicking it collapses the
-          sidebar (collapseLeftPanel()) — settings remain in the footer. */}
-      {isMac ? (
-        <div
-          className="-mt-2 mb-2 flex h-10 items-center gap-1 pl-[70px]"
-          style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-        >
-          <button
-            type="button"
-            onClick={() => collapseLeftPanel()}
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded text-content-muted transition-colors",
-              "hover:bg-surface-hover hover:text-content",
-            )}
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            title={t("layout.hideLeftPanel")}
-          >
-            <IconLayoutSidebarLeftExpand size={18} className="shrink-0" />
-          </button>
-          {/* Tree ↔ stream view switch (same spot in both sidebars). */}
-          <LeftBarModeSwitch />
-        </div>
-      ) : (
-        <div className="mb-2" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => collapseLeftPanel()}
-              className={cn(
-                "group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
-                "hover:bg-surface-hover/60",
-              )}
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            title={t("layout.hideLeftPanel")}
-          >
-            <BrandLogo size={30} />
-            <span className="flex min-w-0 flex-col leading-tight">
-              <span className="truncate text-[1.07em] font-semibold tracking-tight text-content">
-                Mcode
-              </span>
-              <span className="truncate text-content-subtle [font-size:var(--rp-fs-sm)]">
-                {t("layout.tagline")}
-              </span>
-            </span>
-            </button>
-            {/* Tree ↔ stream view switch (same spot in both sidebars). */}
-            <LeftBarModeSwitch />
-          </div>
-        </div>
-      )}
+      {/* 品牌 Logo 与系统名称已移至顶部通栏 Titlebar；左侧栏顶部直接以快捷入口与视图切换开篇。 */}
+      <div className="mb-1.5 flex items-center justify-between px-1">
+        <span className="text-[11px] font-medium text-content-subtle">{t("layout.projects")}</span>
+        <LeftBarModeSwitch />
+      </div>
 
-      {/* Quick actions — 新建会话 / 搜索. Full-width buttons docked
-          directly under the brand logo so the most-used workspace entry
-          points are always visible without scrolling. (连接手机 moved to
-          the footer's icon group below.) */}
-      <SidebarQuickActions />
+      {/* 方案 4 项目切换器：一键切换聚焦单个项目（纯净会话列表）或展开全部项目树。 */}
+      {activeProjects.length > 0 && (() => {
+        const focusedProject =
+          activeProjects.find((p) => p.id === (activeProjectId ?? activeSessionProjectId)) ??
+          activeProjects[0] ??
+          null;
+        return (
+          <div className="mb-2">
+            <Menu.Root>
+              <Menu.Trigger
+                className="flex w-full items-center justify-between gap-2 rounded-lg border border-edge bg-surface-muted/65 px-2.5 py-1.5 text-left text-xs font-medium text-content transition-colors hover:bg-surface-hover/70"
+                title={t("layout.switchProject")}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  {projectScope === "active" && focusedProject ? (
+                    <>
+                      <ProjectAvatar
+                        name={focusedProject.name}
+                        color={projectDisplayColor(focusedProject, projectColors)}
+                      />
+                      <span className="truncate">{focusedProject.name}</span>
+                    </>
+                  ) : (
+                    <>
+                      <IconFolder size={14} className="shrink-0 text-content-subtle" />
+                      <span className="truncate">{t("layout.allProjects")}</span>
+                    </>
+                  )}
+                </span>
+                <IconChevronDown size={13} className="shrink-0 text-content-subtle" />
+              </Menu.Trigger>
+              <Menu.Portal>
+                <Menu.Positioner side="bottom" align="start" sideOffset={4}>
+                  <Menu.Popup className="z-50 max-h-80 min-w-[210px] max-w-[260px] overflow-y-auto rounded-xl border border-edge bg-surface p-1 shadow-xl">
+                    <Menu.Item
+                      onClick={() => updateProjectScope("all")}
+                      className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                    >
+                      <span className="flex items-center gap-2 truncate">
+                        <IconFolder size={13} className="shrink-0 opacity-75" />
+                        <span className="truncate">{t("layout.allProjects")}</span>
+                      </span>
+                      {projectScope === "all" && <IconCheck size={13} className="shrink-0 text-accent" />}
+                    </Menu.Item>
+                    <div className="my-1 border-t border-edge/70" />
+                    {activeProjects.map((p) => {
+                      const isSelected = projectScope === "active" && focusedProject?.id === p.id;
+                      return (
+                        <Menu.Item
+                          key={p.id}
+                          onClick={() => {
+                            updateProjectScope("active");
+                            void selectProject(p.id);
+                            if (!expandedProjects[p.id]) {
+                              void toggleProjectExpanded(p.id);
+                            }
+                          }}
+                          className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <ProjectAvatar
+                              name={p.name}
+                              color={projectDisplayColor(p, projectColors)}
+                            />
+                            <span className="truncate">{p.name}</span>
+                          </span>
+                          {isSelected && <IconCheck size={13} className="shrink-0 text-accent" />}
+                        </Menu.Item>
+                      );
+                    })}
+                    <div className="my-1 border-t border-edge/70" />
+                    <Menu.Item
+                      onClick={() => void addProject()}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                    >
+                      <IconPlus size={13} className="shrink-0 opacity-75" />
+                      <span className="truncate">{t("layout.addProject")}</span>
+                    </Menu.Item>
+                  </Menu.Popup>
+                </Menu.Positioner>
+              </Menu.Portal>
+            </Menu.Root>
+          </div>
+        );
+      })()}
 
       {/* Header */}
       <div className="group mb-1 flex items-center justify-between px-1">
@@ -799,7 +840,7 @@ function LeftBarBase() {
               className={cn(
                 "flex items-center rounded-l px-1 py-0.5 transition-colors",
                 projectView === "flat"
-                  ? "bg-surface-hover text-content"
+                  ? "bg-accent/15 text-accent"
                   : "text-content-subtle hover:bg-surface-hover/60 hover:text-content",
               )}
               title={t("layout.viewFlat")}
@@ -812,7 +853,7 @@ function LeftBarBase() {
               className={cn(
                 "flex items-center rounded-r border-l border-edge px-1 py-0.5 transition-colors",
                 projectView === "grouped"
-                  ? "bg-surface-hover text-content"
+                  ? "bg-accent/15 text-accent"
                   : "text-content-subtle hover:bg-surface-hover/60 hover:text-content",
               )}
               title={t("layout.viewGrouped")}
@@ -933,7 +974,16 @@ function LeftBarBase() {
             )}
           </div>
         )}
-        {projects.length === 0 ? null : (
+        {projects.length === 0 ? null : projectScope === "active" && activeProjects.length > 0 ? (() => {
+          const focusedProject =
+            activeProjects.find((p) => p.id === (activeProjectId ?? activeSessionProjectId)) ??
+            activeProjects[0];
+          return (
+            <ul className="space-y-0.5">
+              {renderProjectNode(focusedProject)}
+            </ul>
+          );
+        })() : (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -991,69 +1041,6 @@ function LeftBarBase() {
         )}
       </div>
 
-      {/* Archived bin — archived projects first, then archived sessions
-          grouped by their parent project. */}
-      {archivedCount > 0 && (
-        <div className="mt-2 border-t border-edge pt-2">
-          <button
-            onClick={() => setArchivedViewOpen(!archivedViewOpen)}
-            className={cn(
-              "flex w-full items-center gap-1 rounded px-1 py-0.5 font-medium uppercase tracking-wide [font-size:var(--rp-fs-md)]",
-              "text-content-subtle transition-colors hover:bg-surface-hover/60",
-            )}
-          >
-            <IconChevronRight
-              size={12}
-              className={cn(
-                "shrink-0 transition-transform",
-                archivedViewOpen && "rotate-90",
-              )}
-            />
-            {t("layout.archivedCount", { n: archivedCount })}
-          </button>
-          {archivedViewOpen && (
-            <ul className="mt-1 space-y-0.5">
-              {archivedProjects.map((p) => (
-                <ArchivedRow
-                  key={p.id}
-                  icon={<IconFolder size={14} className="opacity-60" />}
-                  title={p.name}
-                  onRestore={() => void archiveProject(p.id, false)}
-                  onDelete={() => {
-                    setConfirmDelete({ kind: "project", id: p.id, name: p.name });
-                  }}
-                />
-              ))}
-              {archivedGroups.map(({ project, sessions }) => (
-                <li key={project.id} className="mt-0.5">
-                  {/* Group header: parent project name (non-interactive). */}
-                  <div className="flex items-center gap-1 px-1 py-0.5 text-content-subtle [font-size:var(--rp-fs-md)]">
-                    <IconFolder size={12} className="opacity-50" />
-                    <span className="truncate">{project.name}</span>
-                  </div>
-                  <ul className="ml-3 space-y-0.5 border-l border-edge/50 pl-2">
-                    {sessions.map((s) => (
-                      <ArchivedRow
-                        key={s.id}
-                        icon={(() => {
-                          const { Icon, color } = getProviderIcon(s.providerId);
-                          return <Icon size={14} className={cn("opacity-60", color)} />;
-                        })()}
-                        title={s.title}
-                        onRestore={() => void archiveSession(s.id, false)}
-                        onDelete={() => {
-                          setConfirmDelete({ kind: "session", id: s.id, title: s.title });
-                        }}
-                      />
-                    ))}
-                  </ul>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
       {/* Bulk-management action bar — replaces the settings footer while the
           mode is on, so the destructive action can't scroll out of view.
           「已选 N | 全选 | 删除 | 退出」per the bulk-management spec. Delete
@@ -1104,6 +1091,7 @@ function LeftBarBase() {
           <IconSettings size={14} className="shrink-0" />
           {t("layout.settings")}
         </button>
+        <ArchivedDialogButton />
         <button
           onClick={() => locateActiveSession(true)}
           disabled={!activeSessionId}
@@ -1125,22 +1113,6 @@ function LeftBarBase() {
         >
           {effectiveTheme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
         </button>
-        {/* Collapse-sidebar toggle — win only. On mac it moved to the
-            sidebar's top strip (right of the traffic lights). The toolbar
-            re-shows its own toggle while the sidebar is CLOSED, since this
-            footer button is inside the hidden sidebar then. */}
-        {!isMac && (
-          <button
-            onClick={() => collapseLeftPanel()}
-            className={cn(
-              "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
-              "hover:bg-surface-hover hover:text-content",
-            )}
-            title={t("layout.hideLeftPanel")}
-          >
-            <IconLayoutSidebarLeftExpand size={14} />
-          </button>
-        )}
         {/* 连接手机 — LAN pairing (QR + code) / remote relay. Self-contained
             trigger + dialog; the compact icon metrics match the toggles left
             of it (count badge / accent tint signal from the button itself). */}
