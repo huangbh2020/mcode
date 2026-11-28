@@ -20,10 +20,6 @@ import {
   listAntigravityModels,
 } from "@main/providers/antigravity-acp/antigravityModels.js";
 import {
-  getAntigravityUsage,
-  invalidateAntigravityUsageCache,
-} from "@main/providers/antigravity-acp/antigravityUsage.js";
-import {
   captureGoogleAntigravityAccount,
   deleteAntigravityAccount,
   listAntigravityAccounts,
@@ -50,11 +46,6 @@ export function registerAntigravityHandlers(ipcMain: IpcMain): void {
     return listAntigravityModels(force);
   });
 
-  ipcMain.handle(IPC.ANTIGRAVITY_USAGE, async (_evt, raw) => {
-    const force = Boolean(raw && typeof raw === "object" && (raw as { force?: unknown }).force === true);
-    return getAntigravityUsage(force);
-  });
-
   ipcMain.handle(IPC.ANTIGRAVITY_LIST_ACCOUNTS, () => listAntigravityAccounts());
 
   ipcMain.handle(IPC.ANTIGRAVITY_SELECT_ACCOUNT, async (_evt, raw) => {
@@ -62,7 +53,6 @@ export function registerAntigravityHandlers(ipcMain: IpcMain): void {
     const res = await selectAntigravityAccount(accountId);
     if (res.ok) {
       invalidateAntigravityModelsCache();
-      invalidateAntigravityUsageCache();
     }
     return res;
   });
@@ -72,7 +62,6 @@ export function registerAntigravityHandlers(ipcMain: IpcMain): void {
     const res = saveAntigravityAccount(parsed);
     if (res.ok) {
       invalidateAntigravityModelsCache();
-      invalidateAntigravityUsageCache();
     }
     return res;
   });
@@ -87,7 +76,6 @@ export function registerAntigravityHandlers(ipcMain: IpcMain): void {
     const res = await deleteAntigravityAccount(accountId);
     if (res.ok) {
       invalidateAntigravityModelsCache();
-      invalidateAntigravityUsageCache();
     }
     return res;
   });

@@ -610,7 +610,6 @@ const opencode: Api["opencode"] = {
 const antigravity: Api["antigravity"] = {
   listModels: (input) => rpc("antigravity:listModels", input),
   cliStatus: (input) => rpc("antigravity:cliStatus", input),
-  usage: (input) => rpc("antigravity:usage", input),
   listAccounts: () => rpc("antigravity:listAccounts"),
   selectAccount: (input) => rpc("antigravity:selectAccount", input),
   saveAccount: () => webUnsupported("antigravity.saveAccount"),

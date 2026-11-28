@@ -1413,9 +1413,6 @@ export interface SessionState {
   /** Saved Antigravity (`agy acp`) account profiles & currently selected id. */
   antigravityAccounts: AntigravityAccountPublic[];
   antigravityActiveAccountId: string;
-  /** Monotonic counter bumped whenever the active Antigravity account changes
-   *  (triggers AntigravityUsageBar to re-fetch quota). */
-  antigravityAccountVersion: number;
   /** Whether each composer config list has landed (initDeferred reloads run
    *  concurrently). validateComposerSelection stays hands-off until ALL are
    *  in — validating against a not-yet-loaded list reads "empty" as "the
@@ -6519,7 +6516,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   antigravityModelVariants: EMPTY_ANTIGRAVITY_VARIANTS,
   antigravityAccounts: EMPTY_ANTIGRAVITY_ACCOUNTS,
   antigravityActiveAccountId: "default",
-  antigravityAccountVersion: 0,
   providersLoaded: false,
   customModelsLoaded: false,
   piModelsLoaded: false,
@@ -13267,10 +13263,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const res = await api.antigravity.selectAccount({ accountId });
       if (!res.ok) return { ok: false, error: res.error };
-      set((s) => ({
-        antigravityActiveAccountId: res.activeAccountId,
-        antigravityAccountVersion: s.antigravityAccountVersion + 1,
-      }));
+      set({ antigravityActiveAccountId: res.activeAccountId });
       void get().reloadAntigravityAvailableModels(true);
       return { ok: true };
     } catch (err) {
@@ -13283,10 +13276,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const res = await api.antigravity.deleteAccount({ accountId });
       if (!res.ok) return { ok: false, error: res.error };
       await get().reloadAntigravityAccounts();
-      set((s) => ({
-        antigravityActiveAccountId: res.activeAccountId,
-        antigravityAccountVersion: s.antigravityAccountVersion + 1,
-      }));
+      set({ antigravityActiveAccountId: res.activeAccountId });
       void get().reloadAntigravityAvailableModels(true);
       return { ok: true };
     } catch (err) {

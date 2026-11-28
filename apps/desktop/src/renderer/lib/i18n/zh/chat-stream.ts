@@ -81,6 +81,9 @@ export const zh = {
   "chatStream.editGroup.changeIndex": "修改 #{n}",
   "chatStream.readGroup.readIndex": "读取 #{n}",
   "chatStream.bashGroup.runIndex": "运行 #{n}",
+  "chatStream.fileGroup.fileCount": "{n} 个文件",
+  "chatStream.fileGroup.previewMore": "{names} 等",
+  "chatStream.fileGroup.previewSep": "、",
   "chatStream.emptyPlaceholder": "(空)",
   "chatStream.truncatedSuffix": "(已截断)",
 

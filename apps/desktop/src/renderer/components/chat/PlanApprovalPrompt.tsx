@@ -296,94 +296,21 @@ export function PlanApprovalPrompt({
   return (
     <div
       className={cn(
-        "mb-2 rounded-2xl border border-edge-input bg-surface px-4 py-2.5 text-xs text-content shadow-2xl",
+        "mb-2 overflow-hidden rounded-2xl border border-edge bg-surface text-xs text-content shadow-2xl",
         "animate-[qa-sheet-in_140ms_ease-out]",
       )}
     >
-      {/* Compact header - always visible */}
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <IconRocket size={14} className="shrink-0 text-accent" />
-          <span className="font-semibold text-accent">{t("chat.planApproval.title")}</span>
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 border-b border-edge/60 px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className="h-2 w-2 shrink-0 rounded-full bg-accent ring-4 ring-accent/15"
+            aria-hidden
+          />
+          <span className="font-semibold text-content">{t("chat.planApproval.title")}</span>
         </div>
-        <span className="shrink-0 text-[10px] text-content-subtle">{hint}</span>
-      </div>
-
-      {/* Execution picker - where the approved plan runs. Default: this
-          thread, in place. The alternatives end the blocked turn and re-fire
-          the plan with a different executor (see component docs). */}
-      <div className="mb-2.5 flex flex-wrap items-center gap-2">
-        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-content-subtle">
-          {t("chat.planApproval.execLabel")}
-        </span>
-        <div className="flex items-center gap-0.5 rounded-lg bg-surface-muted p-0.5">
-          {segButton("current", t("chat.planApproval.execCurrent"), t("chat.planApproval.execCurrentTitle"))}
-          {canRemodel && segButton("remodel", t("chat.planApproval.execRemodel"), t("chat.planApproval.execRemodelTitle"))}
-          {segButton("newSession", t("chat.planApproval.execNewSession"), t("chat.planApproval.execNewSessionTitle"))}
-        </div>
-        {exec === "remodel" && renderModelSelect(remodelSelected, remodelOptions, setRemodelKey)}
-        {exec === "newSession" && (
-          <>
-            {providers.length > 1 && (
-              <Select.Root
-                value={handoffProviderId}
-                onValueChange={(v) => {
-                  const id = v as string;
-                  setHandoffProviderId(id);
-                  // The model surface is per-provider — drop the stale pick so
-                  // the default re-resolves against the new provider's list.
-                  setNewSessionKey(null);
-                }}
-                onOpenChange={(o) => setMenuOpen(o)}
-              >
-                <Select.Trigger className="h-6 gap-1 px-2 py-0 text-[11px]">
-                  <Select.Value placeholder={t("chat.planApproval.pickProvider")}>
-                    {(val: string) => providers.find((p) => p.id === val)?.displayName ?? val}
-                  </Select.Value>
-                </Select.Trigger>
-                <Select.Portal>
-                  <Select.Positioner align="start">
-                    <Select.Popup ref={providerPopupRef}>
-                      <Select.List>
-                        {providers.map((p) => (
-                          <Select.Item key={p.id} value={p.id}>
-                            <span className="min-w-0 truncate">{p.displayName}</span>
-                          </Select.Item>
-                        ))}
-                      </Select.List>
-                    </Select.Popup>
-                  </Select.Positioner>
-                </Select.Portal>
-              </Select.Root>
-            )}
-            {renderModelSelect(newSessionSelected, newSessionOptions, setNewSessionKey)}
-          </>
-        )}
-      </div>
-
-      {/* Adjustment-feedback input (always visible). The text rides along with
-          whichever decision the user makes - approve delivers it to the model
-          as an adjustment instruction, reject sends it as the reason, a
-          handoff appends it to the kickoff prompt. Enter fires the primary
-          action (mirrors QuestionPrompt's Enter-to-submit). */}
-      <Input
-        type="text"
-        value={feedback}
-        onChange={(e) => setFeedback(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            handlePrimary();
-          }
-        }}
-        placeholder={t("chat.planApproval.feedbackPlaceholder")}
-        className="mb-2.5 font-sans"
-      />
-
-      {/* Action footer */}
-      <div className="flex items-center justify-between gap-2 border-t border-edge pt-2">
         <Button
-          variant="ghost"
+          variant="secondary"
           size="sm"
           onClick={onViewPlan}
           title={t("chat.planApproval.viewInEditor")}
@@ -391,7 +318,78 @@ export function PlanApprovalPrompt({
           <IconEye size={12} />
           {edited ? t("chat.planApproval.viewEdited") : t("chat.plan.view")}
         </Button>
-        <div className="flex items-center gap-1.5">
+      </div>
+
+      {/* Body: execution picker + feedback input */}
+      <div className="space-y-2.5 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="shrink-0 text-[11px] font-medium text-content-subtle">
+            {t("chat.planApproval.execLabel")}
+          </span>
+          <div className="inline-flex items-center gap-0.5 rounded-lg border border-edge/60 bg-surface-muted p-0.5">
+            {segButton("current", t("chat.planApproval.execCurrent"), t("chat.planApproval.execCurrentTitle"))}
+            {canRemodel && segButton("remodel", t("chat.planApproval.execRemodel"), t("chat.planApproval.execRemodelTitle"))}
+            {segButton("newSession", t("chat.planApproval.execNewSession"), t("chat.planApproval.execNewSessionTitle"))}
+          </div>
+          {exec === "remodel" && renderModelSelect(remodelSelected, remodelOptions, setRemodelKey)}
+          {exec === "newSession" && (
+            <>
+              {providers.length > 1 && (
+                <Select.Root
+                  value={handoffProviderId}
+                  onValueChange={(v) => {
+                    const id = v as string;
+                    setHandoffProviderId(id);
+                    // The model surface is per-provider — drop the stale pick so
+                    // the default re-resolves against the new provider's list.
+                    setNewSessionKey(null);
+                  }}
+                  onOpenChange={(o) => setMenuOpen(o)}
+                >
+                  <Select.Trigger className="h-6 gap-1 px-2 py-0 text-[11px]">
+                    <Select.Value placeholder={t("chat.planApproval.pickProvider")}>
+                      {(val: string) => providers.find((p) => p.id === val)?.displayName ?? val}
+                    </Select.Value>
+                  </Select.Trigger>
+                  <Select.Portal>
+                    <Select.Positioner align="start">
+                      <Select.Popup ref={providerPopupRef}>
+                        <Select.List>
+                          {providers.map((p) => (
+                            <Select.Item key={p.id} value={p.id}>
+                              <span className="min-w-0 truncate">{p.displayName}</span>
+                            </Select.Item>
+                          ))}
+                        </Select.List>
+                      </Select.Popup>
+                    </Select.Positioner>
+                  </Select.Portal>
+                </Select.Root>
+              )}
+              {renderModelSelect(newSessionSelected, newSessionOptions, setNewSessionKey)}
+            </>
+          )}
+        </div>
+
+        <Input
+          type="text"
+          value={feedback}
+          onChange={(e) => setFeedback(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              handlePrimary();
+            }
+          }}
+          placeholder={t("chat.planApproval.feedbackPlaceholder")}
+          className="rounded-lg font-sans"
+        />
+      </div>
+
+      {/* Action footer */}
+      <div className="flex items-center justify-between gap-2 border-t border-edge/60 bg-surface-card/70 px-4 py-2.5">
+        <span className="min-w-0 truncate text-[11px] text-content-subtle">{hint}</span>
+        <div className="flex shrink-0 items-center gap-1.5">
           <Button
             variant="ghost"
             size="sm"

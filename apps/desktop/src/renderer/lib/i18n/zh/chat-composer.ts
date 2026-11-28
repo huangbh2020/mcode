@@ -410,19 +410,6 @@ export const zh = {
   "chat.worktree.badgeDirty": "有未提交更改",
   "chat.worktree.badgeRefTitle": "引用该工作树的会话数",
 
-  // ── Antigravity quota/usage bar below composer ──
-  "chat.agyUsage.loading": "查询 Antigravity 配额…",
-  "chat.agyUsage.unavailable": "配额暂不可用",
-  "chat.agyUsage.window5h": "5h",
-  "chat.agyUsage.windowWeekly": "周",
-  "chat.agyUsage.remaining": "剩余 {pct}%",
-  "chat.agyUsage.refresh": "刷新配额",
-  "chat.agyUsage.title": "Antigravity 配额余量",
-  "chat.agyUsage.resetsIn": "{time}后重置",
-  "chat.agyUsage.resetSoon": "即将重置",
-  "chat.agyUsage.detailsHint": "点击查看全部模型分组配额",
-  "chat.agyUsage.unmetered": "按 API / GCP 计费（无订阅配额限制）",
-
   // ── Antigravity multi-account switcher & dialog ──
   "chat.agyAccount.section": "Antigravity 账号",
   "chat.agyAccount.switchHint": "点击切换或管理 Antigravity 账号",

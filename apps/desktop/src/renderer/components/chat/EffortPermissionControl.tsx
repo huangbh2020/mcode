@@ -198,7 +198,7 @@ function PanelPopup({
         <Popover.Popup
           ref={popupRef}
           className={cn(
-            "z-50 rounded-xl border border-edge bg-surface py-1 shadow-2xl",
+            "z-50 overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl",
             cascade ? "origin-top-left" : "origin-bottom-left",
             "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
             "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
@@ -523,15 +523,23 @@ export function PermissionChip({
         )}
       </Popover.Trigger>
       <PanelPopup popupRef={popupRef} cascade={cascade}>
-        <div className="w-72 select-none px-3.5 pb-2.5 pt-2">
-          <SectionHeader
-            title={t("chat.permission.section")}
-            value={permLabel}
-            valueColorVar={permColorVar}
-            icon={activeMode ? resolveIcon(activeMode, 11) : <IconShield size={11} />}
-          />
-          {/* block grid: 4+ modes → 2 columns, 3 → a single 3-wide row */}
-          <div className={cn("grid gap-1", modes.length >= 4 ? "grid-cols-2" : "grid-cols-3")}>
+        <div className="w-[316px] select-none">
+          <div className="flex items-center justify-between border-b border-edge/60 px-3.5 py-2.5">
+            <span className="text-[11px] font-semibold tracking-wide text-content-subtle uppercase">
+              {t("chat.permission.section")}
+            </span>
+            <span
+              className={cn(
+                "flex items-center gap-1 text-[11.5px] font-semibold",
+                !permColorVar && "text-accent-strong",
+              )}
+              style={permColorVar ? { color: `rgb(${permColorVar})` } : undefined}
+            >
+              {activeMode ? resolveIcon(activeMode, 12) : <IconShield size={12} />}
+              {permLabel}
+            </span>
+          </div>
+          <div className="space-y-0.5 p-1.5">
             {sortedModes.map((m) => {
               const active = m.value === permissionMode;
               const cVar = colorVarOf(m.color);
@@ -542,27 +550,42 @@ export function PermissionChip({
                   onClick={() => setPermissionMode(m.value)}
                   title={fullHintOf(m)}
                   className={cn(
-                    "relative flex min-w-0 flex-col items-start gap-0.5 rounded-lg border px-2.5 py-1.5 text-left outline-none transition-colors duration-100",
-                    "border-edge bg-surface hover:border-input-edge hover:bg-surface-hover/45",
-                    active && !cVar && "border-accent bg-accent/8",
+                    "flex w-full items-center gap-2.5 rounded-xl border border-transparent px-2.5 py-2 text-left outline-none transition-colors duration-100",
+                    !active && "hover:bg-surface-muted/80",
+                    active && !cVar && "border-accent/35 bg-accent/10",
                   )}
                   style={
                     active && cVar
-                      ? { borderColor: `rgb(${cVar})`, background: `rgb(${cVar} / 0.06)` }
+                      ? { borderColor: `rgb(${cVar} / 0.34)`, background: `rgb(${cVar} / 0.09)` }
                       : undefined
                   }
                 >
-                  <span className="flex max-w-full items-center gap-1 text-[11.5px] leading-tight font-semibold text-content">
-                    {resolveIcon(m, 11)}
-                    <span className="truncate">{m.label}</span>
+                  <span
+                    className={cn(
+                      "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors",
+                      !active && "bg-surface-muted text-content-muted",
+                      active && !cVar && "bg-accent/15 text-accent-strong",
+                    )}
+                    style={
+                      active && cVar
+                        ? { background: `rgb(${cVar} / 0.14)`, color: `rgb(${cVar})` }
+                        : undefined
+                    }
+                  >
+                    {resolveIcon(m, 14)}
                   </span>
-                  <span className="max-w-full truncate text-[9.5px] leading-tight text-content-subtle">
-                    {tileOf(m)}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12.5px] font-semibold leading-tight text-content">
+                      {m.label}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[11px] leading-snug text-content-subtle">
+                      {tileOf(m)}
+                    </span>
                   </span>
                   {active && (
                     <IconCheck
-                      size={11}
-                      className="absolute top-1 right-1"
+                      size={14}
+                      className="shrink-0"
                       style={{ color: cVar ? `rgb(${cVar})` : "rgb(var(--accent-strong))" }}
                     />
                   )}

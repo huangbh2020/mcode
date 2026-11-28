@@ -5,7 +5,6 @@ import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import { formatPathWithMaxDirsText } from "@renderer/lib/path.js";
 import { Button } from "@renderer/components/ui/index.js";
 import {
-  IconAlertTriangle,
   IconChevronDown,
   IconCheck,
   IconX,
@@ -122,18 +121,21 @@ export function ApprovalPrompt({
       role="alertdialog"
       aria-label={t("chat.approval.aria")}
       className={cn(
-        "mb-2 rounded-2xl border border-edge-input bg-surface px-4 py-3 text-xs text-content shadow-2xl",
+        "mb-2 overflow-hidden rounded-2xl border border-edge bg-surface text-xs text-content shadow-2xl",
         "animate-[qa-sheet-in_140ms_ease-out]",
       )}
     >
       {/* Header */}
-      <div className="mb-2.5 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <IconAlertTriangle size={14} className="shrink-0 text-warning" />
-          <span className="font-semibold text-warning">{t("chat.approval.title")}</span>
+      <div className="flex items-center justify-between gap-2 border-b border-edge/60 px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className="h-2 w-2 shrink-0 rounded-full bg-warning ring-4 ring-warning/15"
+            aria-hidden
+          />
+          <span className="font-semibold text-content">{t("chat.approval.title")}</span>
           {queueTotal > 1 && (
             <span
-              className="rounded-full border border-warning/60 bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-warning"
+              className="rounded-full bg-warning/15 px-2 py-0.5 font-mono text-[10.5px] font-semibold tabular-nums text-warning"
               title={t("chat.approval.queueTitle", { n: queueTotal - queuePosition })}
             >
               {queuePosition} / {queueTotal}
@@ -144,76 +146,116 @@ export function ApprovalPrompt({
           type="button"
           onClick={() => setOpen((v) => !v)}
           className={cn(
-            "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+            "inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium transition-colors",
             "text-content-muted hover:bg-surface-hover hover:text-content",
           )}
           title={open ? t("chat.approval.collapseTitle") : t("chat.approval.expandTitle")}
         >
+          <span>{open ? t("chat.approval.collapse") : t("chat.approval.details")}</span>
           <IconChevronDown
             size={12}
             className={cn("transition-transform", open && "rotate-180")}
           />
-          {open ? t("chat.approval.collapse") : t("chat.approval.details")}
         </button>
       </div>
 
-      {/* Tool name + summary */}
-      <div className="mb-2.5 rounded-lg border border-edge bg-surface-muted/40 px-3 py-2">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <code className="rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-warning">
-            {toolDisplayName(t, toolName)}
-          </code>
-          {summary && (
-            <span className="line-clamp-2 break-all text-content-muted">{summary}</span>
+      {/* Body: Tool name + summary + optional expandable input */}
+      <div className="space-y-2.5 px-4 py-3">
+        <div className="rounded-xl border border-edge/70 bg-surface-card-well/80 px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <code className="rounded-md bg-warning/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-warning">
+              {toolDisplayName(t, toolName)}
+            </code>
+            {summary && (
+              <span className="line-clamp-2 break-all font-mono text-[12px] text-content">
+                {summary}
+              </span>
+            )}
+          </div>
+          {domain ? (
+            <div className="mt-1.5 text-[11.5px] text-content-subtle">
+              {t("chat.approval.domainDesc", { domain })}
+            </div>
+          ) : (
+            description && <div className="mt-1.5 text-[11.5px] text-content-subtle">{description}</div>
           )}
         </div>
-        {domain ? (
-          <div className="mt-1 text-[11px] text-content-muted">
-            {t("chat.approval.domainDesc", { domain })}
+
+        {open && (
+          <div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-content-subtle">
+              Input
+            </div>
+            <pre className="max-h-40 overflow-auto rounded-xl border border-edge/60 bg-surface-card-well p-2.5 font-mono text-[11px] text-content-muted">
+              {safeStringify(input)}
+            </pre>
           </div>
-        ) : (
-          description && <div className="mt-1 text-[11px] text-content-muted">{description}</div>
         )}
       </div>
 
-      {/* Expandable input */}
-      {open && (
-        <div className="mb-2.5">
-          <div className="mb-0.5 text-[10px] uppercase tracking-wide text-content-subtle">Input</div>
-          <pre className="max-h-40 overflow-auto rounded-lg bg-surface-muted/60 p-2 text-[11px] text-content-muted">
-            {safeStringify(input)}
-          </pre>
-        </div>
-      )}
-
-      {/* Footer: allow-scope select + buttons. Stays on a single row at
-          the bottom of the card. The select's value decides whether 允许
-          is a one-shot grant or an always-allow (session / global). */}
-      <div className="flex items-center justify-between gap-2 border-t border-edge pt-2.5">
-        <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-content-muted">
-          <span className="shrink-0">{t("chat.approval.scopeLabel")}</span>
-          <select
-            value={scope}
-            onChange={(e) => setScope(e.target.value as typeof scope)}
-            className={cn(
-              "max-w-[13rem] cursor-pointer truncate rounded-md border border-edge bg-surface px-1.5 py-0.5",
-              "text-[11px] text-content focus:outline-none focus-visible:ring-2 focus-visible:ring-warning/50",
-              scope !== "once" && "border-warning/60 bg-warning/10 text-warning",
-            )}
+      {/* Footer: segmented allow-scope control + action buttons */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-edge/60 bg-surface-card/70 px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-[11px] text-content-subtle">
+            {t("chat.approval.scopeLabel")}
+          </span>
+          <div
+            className="inline-flex items-center gap-0.5 rounded-lg border border-edge/60 bg-surface-muted p-0.5"
+            role="radiogroup"
+            aria-label={t("chat.approval.scopeLabel")}
           >
-            <option value="once">{t("chat.approval.scopeOnce")}</option>
-            <option value="session">
-              {domain
-                ? t("chat.approval.scopeSessionDomain", { domain })
-                : t("chat.approval.scopeSession")}
-            </option>
-            <option value="global">
-              {domain
-                ? t("chat.approval.scopeGlobalDomain", { domain })
-                : t("chat.approval.scopeGlobal")}
-            </option>
-          </select>
-        </label>
+            {(
+              [
+                {
+                  id: "once" as const,
+                  label: t("chat.approval.scopeOnce"),
+                  title: t("chat.approval.scopeOnce"),
+                },
+                {
+                  id: "session" as const,
+                  label: domain
+                    ? t("chat.approval.scopeSessionDomain", { domain })
+                    : t("chat.approval.scopeSession"),
+                  title: domain
+                    ? t("chat.approval.scopeSessionDomain", { domain })
+                    : t("chat.approval.scopeSession"),
+                },
+                {
+                  id: "global" as const,
+                  label: domain
+                    ? t("chat.approval.scopeGlobalDomain", { domain })
+                    : t("chat.approval.scopeGlobal"),
+                  title: domain
+                    ? t("chat.approval.scopeGlobalDomain", { domain })
+                    : t("chat.approval.scopeGlobal"),
+                },
+              ]
+            ).map((opt) => {
+              const active = scope === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  title={opt.title}
+                  onClick={() => setScope(opt.id)}
+                  className={cn(
+                    "max-w-[9rem] truncate rounded-md px-2 py-0.5 text-[11px] font-medium transition-all",
+                    active
+                      ? cn(
+                          "bg-surface shadow-sm font-semibold",
+                          opt.id === "once" ? "text-content" : "text-warning",
+                        )
+                      : "text-content-subtle hover:text-content",
+                  )}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div className="flex items-center gap-1.5">
           <Button
             variant="ghost"
@@ -224,17 +266,13 @@ export function ApprovalPrompt({
             <IconX size={12} />
             {t("chat.approval.deny")}
           </Button>
-          {/* Primary confirm action uses the warning token (amber) to keep the
-              "permission grant" semantic distinct from QuestionPrompt's green
-              submit — the Button component has no warning variant, so this is
-              a single purpose-built button rather than <Button variant>. */}
           <button
             ref={allowRef}
             type="button"
             onClick={() => decide(true)}
             title={t("chat.approval.allowTitle")}
             className={cn(
-              "inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors",
+              "inline-flex h-7 items-center gap-1 rounded-lg px-2.5 text-[12px] font-medium transition-all",
               "bg-warning text-surface hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-warning/50",
             )}
           >

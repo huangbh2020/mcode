@@ -404,19 +404,6 @@ export const en = {
   "chat.worktree.badgeDirty": "Uncommitted changes",
   "chat.worktree.badgeRefTitle": "Sessions referencing this worktree",
 
-  // ── Antigravity quota/usage bar below composer ──
-  "chat.agyUsage.loading": "Checking Antigravity quota…",
-  "chat.agyUsage.unavailable": "Quota unavailable",
-  "chat.agyUsage.window5h": "5h",
-  "chat.agyUsage.windowWeekly": "Wk",
-  "chat.agyUsage.remaining": "{pct}% left",
-  "chat.agyUsage.refresh": "Refresh quota",
-  "chat.agyUsage.title": "Antigravity Quota",
-  "chat.agyUsage.resetsIn": "Resets in {time}",
-  "chat.agyUsage.resetSoon": "Resets soon",
-  "chat.agyUsage.detailsHint": "Click to view all model group quotas",
-  "chat.agyUsage.unmetered": "API / GCP billed (no subscription quota)",
-
   // ── Antigravity multi-account switcher & dialog ──
   "chat.agyAccount.section": "Antigravity Account",
   "chat.agyAccount.switchHint": "Click to switch or manage Antigravity accounts",

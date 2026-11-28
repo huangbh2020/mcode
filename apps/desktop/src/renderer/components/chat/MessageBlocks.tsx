@@ -3151,8 +3151,42 @@ function RunChipGroup<TItem extends RunChipItem<TOp>, TOp extends { block: ToolU
   );
 }
 
-/** Convenience wrapper around RunChipGroup for file-based runs (Edit/Write/Read)
- *  providing the shared FileLink + full-path drawer header. */
+/** Compute minimal distinguishing parent-directory prefixes for files that share
+ *  the same basename (e.g. two `SKILL.md` files → `geo-card/` & `geo-article/`).
+ *  Unique basenames get an empty prefix so the list stays uncluttered. */
+function disambiguateFileDirs(files: Array<{ key: string; fileName: string; fullPath: string }>): Map<string, string> {
+  const byName = new Map<string, Array<{ key: string; dirParts: string[] }>>();
+  for (const f of files) {
+    const normName = f.fileName.toLowerCase();
+    const parts = f.fullPath.replace(/\\/g, "/").split("/").filter(Boolean);
+    const dirParts = parts.slice(0, -1);
+    const list = byName.get(normName);
+    if (list) list.push({ key: f.key, dirParts });
+    else byName.set(normName, [{ key: f.key, dirParts }]);
+  }
+
+  const result = new Map<string, string>();
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    let depth = 1;
+    const maxDepth = Math.min(3, Math.max(...group.map((g) => g.dirParts.length)));
+    while (depth < maxDepth) {
+      const seen = new Set(group.map((g) => g.dirParts.slice(-depth).join("/").toLowerCase()));
+      if (seen.size === group.length) break;
+      depth += 1;
+    }
+    for (const g of group) {
+      const prefix = g.dirParts.slice(-depth).join("/");
+      if (prefix) result.set(g.key, `${prefix}/`);
+    }
+  }
+  return result;
+}
+
+/** Single-line collapsible summary row + vertical file list + per-file detail
+ *  drawer for consecutive file runs (Edit / Write / Read). Keeps the timeline
+ *  strictly single-line by default, aligns with ToolCard chevrons, and
+ *  disambiguates duplicate basenames when expanded. */
 function FileRunChipGroup<TFile extends AggregatedRunFile<TOp>, TOp extends { block: ToolUseBlock }>({
   headToolName,
   files,
@@ -3160,6 +3194,7 @@ function FileRunChipGroup<TFile extends AggregatedRunFile<TOp>, TOp extends { bl
   live,
   projectPath,
   headerSummary,
+  renderItemSummary,
   renderDrawerSummary,
   renderDrawerBody,
   renderOp,
@@ -3170,41 +3205,180 @@ function FileRunChipGroup<TFile extends AggregatedRunFile<TOp>, TOp extends { bl
   live?: boolean;
   projectPath?: string | null;
   headerSummary?: ReactNode;
+  renderItemSummary?: (file: TFile) => ReactNode;
   renderDrawerSummary?: (file: TFile) => ReactNode;
   renderDrawerBody?: (file: TFile, defaultRender: () => ReactNode) => ReactNode;
   renderOp: (op: TOp, idx: number, totalOps: number) => ReactNode;
 }) {
+  const [listOpen, setListOpen] = useState(false);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const holdFold = useFoldHold();
+  const { t } = useI18n();
+
+  const dirPrefixes = useMemo(() => disambiguateFileDirs(files), [files]);
+
+  const toggleList = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const next = !listOpen;
+    holdFold(next);
+    setListOpen(next);
+    if (!next) setExpandedKey(null);
+    holdPositionOnToggle(e.currentTarget);
+  };
+
+  const toggleItem = (e: React.MouseEvent<HTMLButtonElement>, key: string) => {
+    const next = expandedKey && sameEditPath(expandedKey, key) ? null : key;
+    holdFold(listOpen || next !== null);
+    setExpandedKey(next);
+    holdPositionOnToggle(e.currentTarget);
+  };
+
+  const previewText = useMemo(() => {
+    if (files.length === 0) return "";
+    const sep = t("chatStream.fileGroup.previewSep");
+    const headNames = files.slice(0, 2).map((f) => f.fileName).join(sep);
+    return files.length > 2 ? t("chatStream.fileGroup.previewMore", { names: headNames }) : headNames;
+  }, [files, t]);
+
+  const singleFile = files.length === 1 ? files[0] : null;
+
   return (
-    <RunChipGroup<TFile, TOp>
-      headToolName={headToolName}
-      items={files}
-      sameKey={sameEditPath}
-      anyRunning={anyRunning}
-      live={live}
-      headerSummary={headerSummary}
-      renderDrawerSummary={renderDrawerSummary}
-      renderDrawerBody={renderDrawerBody}
-      renderDrawerHeader={(activeFile) => (
-        <div className="flex min-w-0 items-center gap-1.5">
-          <FileLink
-            token={activeFile.fullPath}
-            projectPath={projectPath}
-            title={activeFile.fullPath}
-            display={
-              <span className="truncate font-semibold text-content hover:text-accent-strong transition-colors">
-                {activeFile.fileName}
-              </span>
-            }
-          />
-          {activeFile.fullPath !== activeFile.fileName && (
-            <span className="min-w-0 truncate text-content-subtle [font-size:var(--chat-fs-xxs)]" title={activeFile.fullPath}>
-              {activeFile.fullPath}
+    <div className={TOOL_CARD_SHELL_CLASS}>
+      <button
+        type="button"
+        onClick={toggleList}
+        className={cn(TOOL_CARD_BTN_CLASS, listOpen && "bg-surface-muted/50")}
+      >
+        <ToolIcon name={headToolName} className="shrink-0 text-content-subtle" />
+        <span className={cn("shrink-0 font-medium text-content-muted", anyRunning && !!live && "shimmer-text")}>
+          {toolDisplayName(t, headToolName)}
+        </span>
+        {singleFile ? (
+          <>
+            <span className="min-w-0 truncate font-mono font-medium text-accent-strong" title={singleFile.fullPath}>
+              {singleFile.fileName}
             </span>
-          )}
+            {singleFile.ops.length > 1 && (
+              <span className="shrink-0 rounded bg-surface-muted/80 px-1 font-mono tabular-nums leading-[15px] text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                {t("chatStream.editGroup.count", { n: singleFile.ops.length })}
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="shrink-0 rounded-full border border-edge/60 bg-surface-muted/70 px-1.5 py-0 font-normal tabular-nums text-content-muted [font-size:var(--chat-fs-xxs)]">
+              {t("chatStream.fileGroup.fileCount", { n: files.length })}
+            </span>
+            <span className="min-w-0 flex-1 truncate font-mono text-content-subtle/85">
+              {previewText}
+            </span>
+          </>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono [font-size:var(--chat-fs-xxs)]">
+          {headerSummary}
+          <Chevron open={listOpen} />
+        </span>
+      </button>
+
+      {listOpen && (
+        <div className="mt-1 ml-2.5 space-y-0.5 border-l border-edge/70 pl-2.5">
+          {files.map((file) => {
+            const isActive = expandedKey !== null && sameEditPath(expandedKey, file.key);
+            const dirPrefix = dirPrefixes.get(file.key);
+            return (
+              <div key={file.key}>
+                <button
+                  type="button"
+                  title={file.fullPath}
+                  onClick={(e) => toggleItem(e, file.key)}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors",
+                    isActive
+                      ? "bg-accent/12 text-accent-strong"
+                      : "hover:bg-surface-hover/70",
+                  )}
+                >
+                  <span className="flex min-w-0 flex-1 items-baseline truncate font-mono">
+                    {dirPrefix && (
+                      <span className="shrink-0 text-content-subtle [font-size:var(--chat-fs-xxs)]">
+                        {dirPrefix}
+                      </span>
+                    )}
+                    <span
+                      className={cn(
+                        "min-w-0 truncate font-medium",
+                        file.anyError ? "text-danger" : "text-accent-strong",
+                        file.anyRunning && !!live && "shimmer-text",
+                      )}
+                    >
+                      {file.fileName}
+                    </span>
+                  </span>
+                  {file.ops.length > 1 && (
+                    <span
+                      className={cn(
+                        "shrink-0 rounded px-1 font-mono tabular-nums leading-[15px] [font-size:var(--chat-fs-xxs)]",
+                        isActive
+                          ? "bg-accent/20 text-accent-strong"
+                          : "bg-surface-muted/80 text-content-subtle",
+                      )}
+                    >
+                      {t("chatStream.editGroup.count", { n: file.ops.length })}
+                    </span>
+                  )}
+                  <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono [font-size:var(--chat-fs-xxs)]">
+                    {renderItemSummary?.(file)}
+                    <Chevron open={isActive} />
+                  </span>
+                </button>
+
+                {isActive && (
+                  <div className="mt-1 mb-1.5 ml-2 space-y-2 rounded-r-lg border-l-2 border-accent/40 bg-surface-card/70 py-2 pl-3 pr-2.5">
+                    <div className="flex items-start justify-between gap-2 border-b border-edge/60 pb-1.5">
+                      <div className="flex min-w-0 flex-1 items-center gap-1.5 font-mono">
+                        <ToolIcon name={headToolName} className="shrink-0 text-content-subtle" />
+                        <FileLink
+                          token={file.fullPath}
+                          projectPath={projectPath}
+                          title={file.fullPath}
+                          display={
+                            <span className="truncate font-semibold text-content transition-colors hover:text-accent-strong">
+                              {file.fileName}
+                            </span>
+                          }
+                        />
+                        {file.fullPath !== file.fileName && (
+                          <span className="min-w-0 truncate text-content-subtle [font-size:var(--chat-fs-xxs)]" title={file.fullPath}>
+                            {file.fullPath}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2 [font-size:var(--chat-fs-xxs)]">
+                        {renderDrawerSummary?.(file)}
+                        <button
+                          type="button"
+                          onClick={(e) => toggleItem(e, file.key)}
+                          className="rounded border border-edge/70 bg-surface-card-item px-1.5 py-0.5 text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+                        >
+                          {t("chatStream.attachment.collapse")}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {(() => {
+                        const defaultRender = () =>
+                          file.ops.map((op, idx) => renderOp(op, idx, file.ops.length));
+                        return renderDrawerBody ? renderDrawerBody(file, defaultRender) : defaultRender();
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
-      renderOp={renderOp}
-    />
+    </div>
   );
 }
 
@@ -3286,12 +3460,21 @@ function EditRunGroup({
       projectPath={projectPath}
       headerSummary={
         (anyError || totalAdds > 0 || totalDels > 0) ? (
-          <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-transparent py-0.5 font-mono leading-5 [font-size:var(--chat-fs-xxs)]">
+          <>
             {anyError && <span className="text-danger">{t("chatStream.opFailed")}</span>}
             {totalAdds > 0 && <span className="text-success">+{totalAdds}</span>}
             {totalDels > 0 && <span className="text-danger">−{totalDels}</span>}
-          </span>
+          </>
         ) : undefined
+      }
+      renderItemSummary={(file) =>
+        (file.anyError || file.adds > 0 || file.dels > 0) ? (
+          <>
+            {file.anyError && <span className="text-danger">{t("chatStream.opFailed")}</span>}
+            {file.adds > 0 && <span className="text-success">+{file.adds}</span>}
+            {file.dels > 0 && <span className="text-danger">−{file.dels}</span>}
+          </>
+        ) : null
       }
       renderDrawerSummary={(file) =>
         (file.adds > 0 || file.dels > 0) ? (
@@ -3435,11 +3618,10 @@ function ReadRunGroup({
       live={live}
       projectPath={projectPath}
       headerSummary={
-        anyError ? (
-          <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-transparent py-0.5 font-mono leading-5 [font-size:var(--chat-fs-xxs)]">
-            <span className="text-danger">{t("chatStream.opFailed")}</span>
-          </span>
-        ) : undefined
+        anyError ? <span className="text-danger">{t("chatStream.opFailed")}</span> : undefined
+      }
+      renderItemSummary={(file) =>
+        file.anyError ? <span className="text-danger">{t("chatStream.opFailed")}</span> : null
       }
       renderOp={({ block: b }, idx, totalOps) => (
         <div key={b.toolCallId} className="space-y-1">

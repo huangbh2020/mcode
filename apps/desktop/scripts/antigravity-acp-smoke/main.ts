@@ -22,7 +22,6 @@ import {
   parseAntigravityModelListing,
   resolveAntigravityWireModel,
 } from "@main/providers/antigravity-acp/antigravityModels.js";
-import { parseAntigravityUsageStdout } from "@main/providers/antigravity-acp/antigravityUsage.js";
 import {
   buildAgyHomeSettingsJson,
   buildAgyIsolatedHomeArgs,
@@ -220,45 +219,7 @@ async function run(): Promise<void> {
     rmSync(fakeAgyRoot, { recursive: true, force: true });
   }
 
-  // 6. Verify /usage JSON parsing, 1970 reset filtering, and billed-turn latch detection
-  const usageSample = JSON.stringify({
-    conversation_id: "",
-    status: "SUCCESS",
-    num_turns: 0,
-    command: {
-      name: "usage",
-      data: {
-        description: "Shared quota info",
-        groups: [
-          {
-            name: "Gemini Models",
-            buckets: [
-              { id: "g-w", name: "Weekly", window: "weekly", remaining_fraction: 0.968, reset_time: "2026-12-01T05:36:11Z" },
-              { id: "g-5h", name: "5h", window: "5h", remaining_fraction: 0.952, reset_time: "2026-11-26T05:05:32Z" },
-              { id: "g-dis", name: "Off", window: "5h", remaining_fraction: 1, disabled: true },
-            ],
-          },
-          {
-            name: "Claude and GPT models",
-            buckets: [
-              { id: "3p-w", name: "Weekly", window: "weekly", remaining_fraction: 1, reset_time: "1970-01-01T00:00:00Z" },
-            ],
-          },
-        ],
-      },
-    },
-  });
-  const usageParsed = parseAntigravityUsageStdout(usageSample);
-  assert.equal(usageParsed.ranModelTurn, false);
-  assert.equal(usageParsed.parsed?.groups.length, 2);
-  assert.equal(usageParsed.parsed?.groups[0]?.buckets.length, 2, "disabled bucket must be skipped");
-  assert.equal(usageParsed.parsed?.groups[0]?.buckets[0]?.remainingPercent, 97);
-  assert.equal(usageParsed.parsed?.groups[1]?.buckets[0]?.resetsAt, null, "1970 epoch reset must be null");
-
-  const billedTurn = parseAntigravityUsageStdout(JSON.stringify({ conversation_id: "abc", status: "SUCCESS", num_turns: 1 }));
-  assert.equal(billedTurn.ranModelTurn, true, "num_turns > 0 or non-empty conversation_id must trigger safety latch");
-
-  // 7. Verify host MCP read-only browser & orch_submit_plan tools are auto-approved in default mode
+  // 6. Verify host MCP read-only browser & orch_submit_plan tools are auto-approved in default mode
   let defaultApprovalCalls = 0;
   const mcpAdapter = new AntigravityMessageAdapter({
     sessionId: "s-mcp",

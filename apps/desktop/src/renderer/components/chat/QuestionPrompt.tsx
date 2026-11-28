@@ -5,7 +5,6 @@ import { Button, Input } from "@renderer/components/ui/index.js";
 import {
   IconCheck,
   IconX,
-  IconQuestionMark,
   IconSend2,
   IconChevronLeft,
   IconChevronRight,
@@ -164,48 +163,57 @@ export function QuestionPrompt({
       aria-label={t("chat.question.aria")}
       className={cn(
         "mb-2 flex max-h-[60vh] flex-col overflow-hidden rounded-2xl",
-        "border border-edge-input bg-surface text-xs text-content shadow-2xl",
+        "border border-edge bg-surface text-xs text-content shadow-2xl",
         "animate-[qa-sheet-in_140ms_ease-out]",
       )}
     >
         {/* Header — fixed at top */}
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-edge px-4 py-2.5">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <IconQuestionMark size={14} className="shrink-0 text-accent" />
-            <span className="truncate font-semibold text-accent">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-edge/60 px-4 py-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className="h-2 w-2 shrink-0 rounded-full bg-accent ring-4 ring-accent/15"
+              aria-hidden
+            />
+            <span className="truncate font-semibold text-content">
               {questions.length === 1
                 ? t("chat.question.titleOne")
                 : t("chat.question.titleN", { n: questions.length })}
             </span>
             {questions.length > 1 && (
-              <span className="shrink-0 rounded bg-surface-muted px-1.5 py-0.5 text-[10px] tabular-nums text-content-muted">
+              <span className="shrink-0 text-[11px] tabular-nums text-content-subtle">
                 {t("chat.question.step", { cur: step + 1, total: questions.length })}
               </span>
             )}
           </div>
-          {/* Step dots: answered (dim) / current (accent) / upcoming (edge). */}
-          {questions.length > 1 && (
-            <div className="flex shrink-0 items-center gap-1" aria-hidden>
-              {questions.map((_, i) => (
-                <span
-                  key={i}
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full transition-colors",
-                    i === step ? "bg-accent" : isAnswered(i) ? "bg-accent/40" : "bg-edge",
-                  )}
-                />
-              ))}
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={onDismiss}
-            title={t("chat.question.dismiss")}
-            aria-label={t("chat.question.dismiss")}
-            className="shrink-0 rounded p-0.5 text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
-          >
-            <IconX size={14} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2.5">
+            {/* Step bars: current (wide accent) / answered (soft accent) / upcoming (edge). */}
+            {questions.length > 1 && (
+              <div className="flex shrink-0 items-center gap-1" aria-hidden>
+                {questions.map((_, i) => (
+                  <span
+                    key={i}
+                    className={cn(
+                      "h-1 rounded-full transition-all",
+                      i === step
+                        ? "w-5 bg-accent"
+                        : isAnswered(i)
+                          ? "w-3.5 bg-accent/40"
+                          : "w-3.5 bg-edge",
+                    )}
+                  />
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={onDismiss}
+              title={t("chat.question.dismiss")}
+              aria-label={t("chat.question.dismiss")}
+              className="shrink-0 rounded-lg p-1 text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+            >
+              <IconX size={14} />
+            </button>
+          </div>
         </div>
 
         {/* Body — only the current question renders; the rest is reached via
@@ -213,11 +221,13 @@ export function QuestionPrompt({
         <div className="overflow-y-auto">
           <div className="px-4 py-3">
             {/* Question header + text */}
-            <div className="mb-2 leading-relaxed text-content">
-              <span className="mr-1 font-semibold text-accent">{q.header}:</span>
+            <div className="mb-2.5 text-[13px] leading-relaxed text-content">
+              <span className="mr-1.5 inline-block rounded-md bg-accent/10 px-1.5 py-0.5 text-[11px] font-semibold text-accent-strong">
+                {q.header}
+              </span>
               {q.question}
               {q.multiSelect && (
-                <span className="ml-1.5 rounded bg-surface-muted px-1.5 py-0.5 text-[10px] text-content-muted">
+                <span className="ml-1.5 rounded-md bg-surface-muted px-1.5 py-0.5 text-[10px] font-medium text-content-subtle">
                   {t("chat.question.multiSelect")}
                 </span>
               )}
@@ -233,17 +243,17 @@ export function QuestionPrompt({
                     type="button"
                     onClick={() => toggle(step, opt.label)}
                     className={cn(
-                      "flex w-full items-start gap-2.5 rounded-lg border px-2.5 py-1.5 text-left transition-colors",
+                      "flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors",
                       selected
                         ? "border-accent bg-accent/10"
-                        : "border-edge bg-surface hover:border-accent/60 hover:bg-accent/5",
+                        : "border-edge/70 bg-surface hover:border-accent/45 hover:bg-accent/5",
                     )}
                     title={opt.description}
                   >
                     <span
                       className={cn(
                         "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border transition-colors",
-                        q.multiSelect ? "rounded-sm" : "rounded-full",
+                        q.multiSelect ? "rounded-[5px]" : "rounded-full",
                         selected
                           ? "border-accent bg-accent text-surface"
                           : "border-edge text-transparent",
@@ -252,11 +262,11 @@ export function QuestionPrompt({
                       <IconCheck size={10} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-medium text-content">
+                      <span className="block text-[12.5px] font-semibold text-content">
                         {opt.label}
                       </span>
                       {opt.description && (
-                        <span className="mt-0.5 block text-[10px] leading-snug text-content-subtle">
+                        <span className="mt-0.5 block text-[11px] leading-snug text-content-subtle">
                           {opt.description}
                         </span>
                       )}
@@ -272,13 +282,13 @@ export function QuestionPrompt({
               value={a.text}
               onChange={(e) => setFreeText(step, e.target.value)}
               placeholder={t("chat.question.customAnswer")}
-              className="mt-2 font-sans"
+              className="mt-2.5 rounded-lg font-sans"
             />
           </div>
         </div>
 
         {/* Footer — fixed at bottom: progress + stepper nav / submit */}
-        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-edge bg-surface-muted/40 px-4 py-2.5">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-edge/60 bg-surface-card/70 px-4 py-2.5">
           <span className="text-[10px] tabular-nums text-content-subtle">
             {t("chat.question.answered", { answered: answeredCount, total: questions.length })}
           </span>

@@ -76,6 +76,9 @@ export const en = {
   "chatStream.editGroup.changeIndex": "Change #{n}",
   "chatStream.readGroup.readIndex": "Read #{n}",
   "chatStream.bashGroup.runIndex": "Run #{n}",
+  "chatStream.fileGroup.fileCount": "{n} files",
+  "chatStream.fileGroup.previewMore": "{names}, …",
+  "chatStream.fileGroup.previewSep": ", ",
   "chatStream.emptyPlaceholder": "(empty)",
   "chatStream.truncatedSuffix": "(truncated)",
 

@@ -180,6 +180,47 @@ function EffortSlider({
     draggingRef.current = false;
     setDragging(false);
   };
+  const activeOption = levels.find((l) => l.value === value);
+
+  if (n <= 5) {
+    return (
+      <div className="px-3 pt-1 pb-0.5">
+        <div
+          className="grid gap-1 rounded-lg border border-edge/60 bg-surface-muted p-0.5"
+          style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
+          role="radiogroup"
+        >
+          {levels.map((m) => {
+            const active = m.value === value;
+            return (
+              <button
+                key={m.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                title={hintOf(m)}
+                onClick={() => onChange(m.value)}
+                className={cn(
+                  "truncate rounded-md px-1 py-1 text-[11px] font-medium transition-all",
+                  active
+                    ? "bg-surface font-semibold text-accent-strong shadow-sm"
+                    : "text-content-subtle hover:text-content",
+                )}
+              >
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
+        {activeOption && hintOf(activeOption) && (
+          <div className="mt-1.5 truncate text-[11px] text-content-subtle" title={hintOf(activeOption)}>
+            {hintOf(activeOption)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn("model-effort-slider", dragging && "dragging")}
@@ -650,9 +691,10 @@ export function ModelDropdown({
 
   const rowCls = (active: boolean) =>
     cn(
-      "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
-      "data-[highlighted]:bg-surface-muted",
-      active ? "text-accent" : "text-content-muted",
+      "mx-1.5 flex w-[calc(100%-0.75rem)] items-center justify-between gap-2 rounded-lg border border-transparent px-2.5 py-2 text-left text-[12.5px] outline-none select-none transition-colors duration-100",
+      active
+        ? "border-accent/35 bg-accent/10 font-medium text-accent-strong"
+        : "text-content-muted data-[highlighted]:bg-surface-muted/80 data-[highlighted]:text-content",
     );
 
   return (
@@ -713,7 +755,7 @@ export function ModelDropdown({
             <Menu.Popup
               ref={popupRef}
               className={cn(
-                "z-50 w-72 rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
+                "z-50 w-[316px] overflow-hidden rounded-2xl border border-edge bg-surface py-1.5 shadow-2xl",
                 cascade ? "origin-top-left" : "origin-bottom-left",
                 "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
                 "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
@@ -796,25 +838,22 @@ export function ModelDropdown({
                         })}
                       </div>
                       {sliderLevels && setEffort && (
-                        <>
-                          <div className="my-1 border-t border-edge/60" />
-                          <div className="model-effort">
-                            <div className="flex items-center justify-between px-3 pb-0.5">
-                              <span className="text-xs uppercase tracking-wide text-content-subtle">
-                                {t("chat.effort.section")}
-                              </span>
-                              <span className="text-[11.5px] font-bold text-accent-strong">
-                                {effortLabel}
-                              </span>
-                            </div>
-                            <EffortSlider
-                              levels={sliderLevels}
-                              value={effort}
-                              onChange={(v) => setEffort(v)}
-                              hintOf={fullHintOf}
-                            />
+                        <div className="mt-1.5 border-t border-edge/60 bg-surface-card/70 pb-2 pt-2.5">
+                          <div className="flex items-center justify-between px-3 pb-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-content-subtle">
+                              {t("chat.effort.section")}
+                            </span>
+                            <span className="text-[11.5px] font-semibold text-accent-strong">
+                              {effortLabel}
+                            </span>
                           </div>
-                        </>
+                          <EffortSlider
+                            levels={sliderLevels}
+                            value={effort}
+                            onChange={(v) => setEffort(v)}
+                            hintOf={fullHintOf}
+                          />
+                        </div>
                       )}
                     </>
                   )}
@@ -918,25 +957,22 @@ export function ModelDropdown({
                           effort (resolveEffortLevels → [] / undefined) or a
                           single fixed stop. */}
                       {sliderLevels && setEffort && (
-                        <>
-                          <div className="my-1 border-t border-edge/60" />
-                          <div className="model-effort">
-                            <div className="flex items-center justify-between px-3 pb-0.5">
-                              <span className="text-xs uppercase tracking-wide text-content-subtle">
-                                {t("chat.effort.section")}
-                              </span>
-                              <span className="text-[11.5px] font-bold text-accent-strong">
-                                {effortLabel}
-                              </span>
-                            </div>
-                            <EffortSlider
-                              levels={sliderLevels}
-                              value={effort}
-                              onChange={(v) => setEffort(v)}
-                              hintOf={fullHintOf}
-                            />
+                        <div className="mt-1.5 border-t border-edge/60 bg-surface-card/70 pb-2 pt-2.5">
+                          <div className="flex items-center justify-between px-3 pb-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-content-subtle">
+                              {t("chat.effort.section")}
+                            </span>
+                            <span className="text-[11.5px] font-semibold text-accent-strong">
+                              {effortLabel}
+                            </span>
                           </div>
-                        </>
+                          <EffortSlider
+                            levels={sliderLevels}
+                            value={effort}
+                            onChange={(v) => setEffort(v)}
+                            hintOf={fullHintOf}
+                          />
+                        </div>
                       )}
                     </>
                   )}

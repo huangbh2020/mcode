@@ -2060,34 +2060,6 @@ export interface AntigravityCliStatus {
   reason?: "not-installed" | "too-old";
 }
 
-/** One quota window bucket reported by `agy -p /usage --output-format json`. */
-export interface AntigravityUsageBucket {
-  id: string;
-  name: string;
-  window: "5h" | "weekly" | string;
-  remainingPercent: number;
-  resetsAt: number | null;
-  description?: string;
-}
-
-/** One model group inside `agy /usage` (e.g. "Gemini Models", "Claude and GPT models"). */
-export interface AntigravityUsageGroup {
-  name: string;
-  description?: string;
-  buckets: AntigravityUsageBucket[];
-}
-
-/** Result of `antigravity.usage` IPC query. */
-export interface AntigravityUsageResult {
-  ok: boolean;
-  groups: AntigravityUsageGroup[];
-  description?: string;
-  fetchedAt: number;
-  error?: string;
-  /** True when the active account uses API-key / GCP billing rather than a subscription quota. */
-  unmetered?: boolean;
-}
-
 /** Authentication method for an Antigravity (`agy acp`) account profile. */
 export type AntigravityAuthMethod =
   | "default"
@@ -5356,7 +5328,6 @@ export interface RpcMap {
     error?: string;
   }>;
   "antigravity.cliStatus": (input?: { force?: boolean }) => Promise<AntigravityCliStatus>;
-  "antigravity.usage": (input?: { force?: boolean }) => Promise<AntigravityUsageResult>;
   "antigravity.listAccounts": () => Promise<AntigravityAccountListResult>;
   "antigravity.selectAccount": (input: { accountId: string }) => Promise<{ ok: boolean; activeAccountId: string; error?: string }>;
   "antigravity.saveAccount": (input: AntigravitySaveAccountInput) => Promise<{ ok: boolean; account?: AntigravityAccountPublic; error?: string }>;
@@ -5999,7 +5970,6 @@ export const IPC = {
   // Antigravity (`agy acp`)
   ANTIGRAVITY_LIST_MODELS: "antigravity:listModels",
   ANTIGRAVITY_CLI_STATUS: "antigravity:cliStatus",
-  ANTIGRAVITY_USAGE: "antigravity:usage",
   ANTIGRAVITY_LIST_ACCOUNTS: "antigravity:listAccounts",
   ANTIGRAVITY_SELECT_ACCOUNT: "antigravity:selectAccount",
   ANTIGRAVITY_SAVE_ACCOUNT: "antigravity:saveAccount",
