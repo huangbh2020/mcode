@@ -36,6 +36,7 @@ export function NewSessionMenu({
   triggerTitle,
   triggerClassName,
   children,
+  align = "end",
   showChatOption = true,
   onNewSession,
   onNewTerminalSession,
@@ -46,6 +47,8 @@ export function NewSessionMenu({
   triggerTitle?: string;
   triggerClassName?: string;
   children: ReactNode;
+  /** Popup horizontal alignment relative to the trigger (defaults to "end"). */
+  align?: "start" | "center" | "end";
   /** Whether to include the standard chat session option in the dropdown (defaults to true). */
   showChatOption?: boolean;
   /** Custom dispatch for new chat session (e.g. worktree override). */
@@ -87,7 +90,7 @@ export function NewSessionMenu({
         {children}
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Positioner align="end" sideOffset={4}>
+        <Menu.Positioner align={align} sideOffset={4}>
           <Menu.Popup
             className={cn(
               "z-50 min-w-44 origin-top-left rounded-md border border-edge bg-surface py-1 shadow-2xl",

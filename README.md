@@ -23,6 +23,10 @@ Because agents run *your* engines with *your* logins, **a Claude Pro/Max subscri
 
 ![Mcode home - Claude Code desktop client GUI](docs/images/首页.png)
 
+### Operation Demo
+
+![Mcode operation demo - switching agents, Git, editor, terminal, and settings](docs/images/mcode-demo.gif)
+
 ### Key highlights
 
 - 🎛 **Five engines, one app** — Claude Code, OpenAI Codex, Pi, OpenCode, and Google Antigravity; pick the agent before each session starts

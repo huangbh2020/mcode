@@ -90,6 +90,10 @@ export const en = {
   "layout.needProject": "Open a project first",
 
   /* ── stream sidebar (session-first left-bar view) ── */
+  "layout.sidebar.tabStream": "Activity",
+  "layout.sidebar.scopePrefix": "Scope:",
+  "layout.sidebar.groupedShort": "Grouped",
+  "layout.sidebar.flatShort": "Flat",
   "layout.stream.switchToStream": "Switch to session stream view",
   "layout.stream.switchToTree": "Switch to project tree view",
   "layout.stream.scopeAll": "All projects",
@@ -101,6 +105,8 @@ export const en = {
   "layout.stream.statusDone": "Done",
   "layout.stream.unmerged": "Unmerged",
   "layout.stream.empty": "No open sessions",
+  "layout.stream.emptyInScope": "No open sessions in the selected scope",
+  "layout.stream.showAllOpen": "Show all open sessions ({n})",
 
   /* ── project groups ── */
   "layout.moveToGroup": "Move to group",

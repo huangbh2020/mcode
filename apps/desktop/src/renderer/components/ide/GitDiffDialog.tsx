@@ -10,11 +10,11 @@ import {
   IconSquare,
   IconMaximize,
   IconMinimize,
-  IconFile,
   IconLoader2,
   IconChevronDown,
   IconChevronRight,
 } from "@renderer/lib/icons.js";
+import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { DiffPane } from "./FileEditor.js";
 import type { GitFileStatus, GitStatusResult } from "@contracts/ipc";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
@@ -414,7 +414,7 @@ function SidebarFileItem({
         <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent" />
       )}
       <StatusCodeIcon code={code} />
-      <IconFile size={13} className="shrink-0 text-content-subtle" />
+      <FileTypeIcon path={file.path} size={15} />
       <span className="min-w-0 flex-1 truncate font-mono">{basename(file.path)}</span>
     </div>
   );

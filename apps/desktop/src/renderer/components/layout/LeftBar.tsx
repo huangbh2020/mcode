@@ -59,7 +59,7 @@ import { ArchivedDialogButton } from "./ArchivedDialogButton.js";
 import { describeSchedule, taskNextLine } from "@renderer/components/automation/automationFormat.js";
 import { HoverIconButton, RenameDialog, SessionContextMenu, ArchivedRow } from "./SidebarShared.js";
 import { ForkSessionDialog } from "@renderer/components/chat/ForkSessionDialog.js";
-import { LeftBarModeSwitch } from "./StreamSidebar.js";
+import { LeftBarTopHeader } from "./StreamSidebar.js";
 import { ProjectAvatar } from "./ProjectAvatar.js";
 import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { api } from "@renderer/lib/api.js";
@@ -725,37 +725,43 @@ function LeftBarBase() {
 
   return (
     <div className="flex h-full flex-col [font-size:var(--right-panel-font-size)]">
-      {/* 顶部工具条：h-10 与中间面板标签栏及右侧栏顶栏齐平，承载全部项目切换器与视图切换。 */}
-      <div className="flex h-10 shrink-0 items-center justify-between gap-1.5 border-b border-edge bg-surface px-2">
+      {/* 顶部 40px 分段切换头：与中间面板标签栏及动态视图齐平，承载「项目 / 动态」分段切换与添加项目按钮。 */}
+      <LeftBarTopHeader onAddProject={() => void addProject()} />
+
+      <div className="flex min-h-0 flex-1 flex-col px-2 pb-2 pt-1.5">
+      {/* 次级轻筛选条：无边框 Ghost 范围切换 + 常驻分组/平铺轻按钮，替代原有的重边框 Select 和冗余「项目」标题行。 */}
+      <div className="mb-1 flex shrink-0 items-center justify-between gap-1 px-0.5">
         {activeProjects.length > 0 ? (() => {
           const focusedProject =
             activeProjects.find((p) => p.id === (activeProjectId ?? activeSessionProjectId)) ??
             activeProjects[0] ??
             null;
           return (
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0">
               <Menu.Root>
                 <Menu.Trigger
-                  className="flex h-7 w-full items-center justify-between gap-1.5 rounded-lg border border-edge bg-surface-muted/65 px-2 text-left text-xs font-medium text-content transition-colors hover:bg-surface-hover/70"
+                  className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs text-content-muted transition-colors hover:bg-surface-hover/70 hover:text-content"
                   title={t("layout.switchProject")}
                 >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    {projectScope === "active" && focusedProject ? (
-                      <>
-                        <ProjectAvatar
-                          name={focusedProject.name}
-                          color={projectDisplayColor(focusedProject, projectColors)}
-                        />
-                        <span className="truncate">{focusedProject.name}</span>
-                      </>
-                    ) : (
-                      <>
-                        <IconFolder size={14} className="shrink-0 text-content-subtle" />
-                        <span className="truncate">{t("layout.allProjects")}</span>
-                      </>
-                    )}
-                  </span>
-                  <IconChevronDown size={13} className="shrink-0 text-content-subtle" />
+                  {projectScope === "active" && focusedProject ? (
+                    <>
+                      <ProjectAvatar
+                        name={focusedProject.name}
+                        color={projectDisplayColor(focusedProject, projectColors)}
+                      />
+                      <span className="min-w-0 truncate font-medium text-content">{focusedProject.name}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="shrink-0 text-[11px] text-content-subtle">
+                        {t("layout.sidebar.scopePrefix")}
+                      </span>
+                      <span className="min-w-0 truncate font-medium text-content-muted">
+                        {t("layout.allProjects")}
+                      </span>
+                    </>
+                  )}
+                  <IconChevronDown size={12} className="shrink-0 text-content-subtle" />
                 </Menu.Trigger>
                 <Menu.Portal>
                   <Menu.Positioner side="bottom" align="start" sideOffset={4}>
@@ -799,10 +805,10 @@ function LeftBarBase() {
                       <div className="my-1 border-t border-edge/70" />
                       <Menu.Item
                         onClick={() => void addProject()}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-accent outline-none select-none data-[highlighted]:bg-surface-muted"
                       >
-                        <IconPlus size={13} className="shrink-0 opacity-75" />
-                        <span className="truncate">{t("layout.addProject")}</span>
+                        <IconPlus size={13} className="shrink-0" />
+                        <span className="truncate font-medium">{t("layout.addProject")}</span>
                       </Menu.Item>
                     </Menu.Popup>
                   </Menu.Positioner>
@@ -811,74 +817,34 @@ function LeftBarBase() {
             </div>
           );
         })() : (
-          <span className="truncate px-1 text-xs font-medium text-content-subtle">
+          <span className="truncate px-1.5 py-1 text-xs font-medium text-content-subtle">
             {t("layout.projects")}
           </span>
         )}
-        <LeftBarModeSwitch />
-      </div>
 
-      <div className="flex min-h-0 flex-1 flex-col px-2 py-2">
-      {/* Header */}
-      <div className="group mb-1 flex items-center justify-between px-1">
-        <h3 className="font-semibold uppercase tracking-wide text-content-subtle [font-size:var(--rp-fs-md)]">
-          {t("layout.projects")}
-        </h3>
-        <div className="flex items-center gap-1">
-          {/* View-mode toggle: flat list vs grouped under headers. Hover-
-              revealed (mirrors the add-project button below) to keep the
-              header clean; the active segment still highlights on hover so
-              the current mode is discoverable. */}
-          <div
-            className={cn(
-              "flex items-center rounded border border-edge transition-all",
-              "opacity-0 group-hover:opacity-100",
-            )}
-            role="group"
+        {/* Lightweight flat/grouped toggle — always discoverable (no hover-hide),
+            shown whenever viewing all projects. */}
+        {projectScope === "all" && activeProjects.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void setProjectView(projectView === "grouped" ? "flat" : "grouped")}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-content-subtle transition-colors hover:bg-surface-hover/70 hover:text-content"
+            title={projectView === "grouped" ? t("layout.viewFlat") : t("layout.viewGrouped")}
             aria-label={t("layout.projectViewMode")}
           >
-            <button
-              onClick={() => void setProjectView("flat")}
-              className={cn(
-                "flex items-center rounded-l px-1 py-0.5 transition-colors",
-                projectView === "flat"
-                  ? "bg-accent/15 text-accent"
-                  : "text-content-subtle hover:bg-surface-hover/60 hover:text-content",
-              )}
-              title={t("layout.viewFlat")}
-              aria-pressed={projectView === "flat"}
-            >
-              <IconList size={13} />
-            </button>
-            <button
-              onClick={() => void setProjectView("grouped")}
-              className={cn(
-                "flex items-center rounded-r border-l border-edge px-1 py-0.5 transition-colors",
-                projectView === "grouped"
-                  ? "bg-accent/15 text-accent"
-                  : "text-content-subtle hover:bg-surface-hover/60 hover:text-content",
-              )}
-              title={t("layout.viewGrouped")}
-              aria-pressed={projectView === "grouped"}
-            >
-              <IconCategoryFilled size={13} />
-            </button>
-          </div>
-          <button
-            onClick={() => void addProject()}
-            className={cn(
-              "flex items-center rounded px-1 py-0.5 text-content-muted transition-all",
-              // Always visible when there are no projects so the user has a
-              // clear entry point to add one (no empty placeholder row anymore).
-              projects.length === 0
-                ? "opacity-100 hover:text-accent"
-                : "opacity-0 hover:text-accent group-hover:opacity-100",
+            {projectView === "grouped" ? (
+              <>
+                <IconCategoryFilled size={12} className="shrink-0" />
+                <span>{t("layout.sidebar.groupedShort")}</span>
+              </>
+            ) : (
+              <>
+                <IconList size={12} className="shrink-0" />
+                <span>{t("layout.sidebar.flatShort")}</span>
+              </>
             )}
-            title={t("layout.addProject")}
-          >
-            <IconPlus size={12} />
           </button>
-        </div>
+        )}
       </div>
 
       {/* Project → session tree. A single DndContext wraps both view modes:
@@ -1029,8 +995,9 @@ function LeftBarBase() {
                       {/* Separator label only when there are also groups above;
                           a lone ungrouped section looks like the flat list. */}
                       {groupedProjects.size > 0 && (
-                        <li className="px-1 py-0.5 text-content-subtle [font-size:var(--rp-fs-md)]">
-                          {t("layout.ungrouped")}
+                        <li className="flex items-center gap-2 px-1.5 pb-0.5 pt-1.5 text-content-subtle [font-size:var(--rp-fs-md)]">
+                          <span className="shrink-0 font-medium">{t("layout.ungrouped")}</span>
+                          <span className="h-px flex-1 bg-edge/60" aria-hidden />
                         </li>
                       )}
                       {ungroupedProjects.map((p) => renderProjectNode(p))}
@@ -1824,14 +1791,14 @@ function SessionRow({
         onContext(e.clientX, e.clientY);
       }}
       className={cn(
-        "group flex cursor-pointer items-center gap-1 rounded-md px-1 py-1 [font-size:var(--right-panel-font-size)]",
+        "group relative flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 [font-size:var(--right-panel-font-size)] transition-colors",
         bulkMode && bulkLocked && "cursor-not-allowed opacity-45",
         // Lifted look while this row is the drag source.
         dragging && "opacity-40",
         bulkMode && bulkChecked
           ? "bg-accent/10 text-content ring-1 ring-inset ring-accent/40"
           : active
-            ? "bg-surface-hover text-content shadow-sm ring-1 ring-inset ring-accent/35"
+            ? "bg-accent/[0.09] font-medium text-content"
             : "text-content-muted hover:bg-surface-hover/60",
       )}
       title={
@@ -1840,6 +1807,12 @@ function SessionRow({
           : `${session.title}${ownTask ? `\n${describeSchedule(ownTask.schedule)}${taskNextLine(ownTask) ? ` · ${taskNextLine(ownTask)}` : ""}` : ""}\n${formatFullTime(session.updatedAt)}`
       }
     >
+      {active && !bulkMode && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute bottom-1.5 left-0 top-1.5 w-[2.5px] rounded-full bg-accent"
+        />
+      )}
       {/* Bulk checkbox — replaces the pinned marker's slot while the mode is
           on; running sessions render it disabled. */}
       {bulkMode ? (

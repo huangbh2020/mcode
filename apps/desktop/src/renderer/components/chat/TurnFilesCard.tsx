@@ -17,6 +17,7 @@ import {
   IconEdit,
   IconArrowBackUp,
 } from "@renderer/lib/icons.js";
+import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 
 /**
  * "本轮修改" card - rendered INLINE in the message stream as a per-turn
@@ -309,6 +310,7 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
       <span aria-hidden title={isCreated ? t("chatStream.turnFiles.createdThisTurn") : t("chatStream.turnFiles.modifiedThisTurn")} className="shrink-0 text-content-subtle">
         {isCreated ? <IconPlus size={12} /> : <IconEdit size={12} />}
       </span>
+      <FileTypeIcon path={entry.filePath} size={14} />
       {/* Filename only; full path stays on the hover title. */}
       <span
         className="flex min-w-0 items-baseline overflow-hidden font-mono text-[11px] text-content"

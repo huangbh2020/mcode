@@ -26,7 +26,7 @@ import {
   IconTrash,
   IconWorld,
 } from "@renderer/lib/icons.js";
-import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
+import { FileTypeIcon, FolderTypeIcon } from "@renderer/lib/fileIcon.js";
 import { localPathToFileUrl } from "@renderer/lib/browserUrl.js";
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -294,15 +294,27 @@ function InlineNewEntryRow({
     onCreated(targetPath);
   }, [value, kind, parentPath, existingNames, onCancel, onCreated, t]);
 
+  const trimmedValue = value.trim();
+
   return (
     <div
-      className="relative flex items-center gap-1 py-0.5 pr-2"
-      style={{ paddingLeft: depth * 12 + 4 }}
+      className="relative flex items-center gap-1.5 py-[3px] pr-2"
+      style={{ paddingLeft: depth * 12 + 6 }}
     >
       {/* Spacer to align the icon column with directory chevrons. */}
       <span className="w-3 shrink-0" />
-      <span className="shrink-0 text-content-subtle">
-        {kind === "folder" ? <IconFolderPlus size={13} /> : <IconFilePlus size={13} />}
+      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-content-subtle">
+        {trimmedValue ? (
+          kind === "folder" ? (
+            <FolderTypeIcon path={joinPath(parentPath, trimmedValue)} size={16} />
+          ) : (
+            <FileTypeIcon path={joinPath(parentPath, trimmedValue)} size={16} />
+          )
+        ) : kind === "folder" ? (
+          <IconFolderPlus size={14} />
+        ) : (
+          <IconFilePlus size={14} />
+        )}
       </span>
       <input
         ref={inputRef}
@@ -430,14 +442,16 @@ function InlineRenameRow({
     onRenamed(newPath);
   }, [value, initialName, isDir, parentPath, existingNames, excludeSelf, onCancel, onRenamed, t]);
 
+  const previewPath = joinPath(parentPath, value.trim() || initialName);
+
   return (
     <div
-      className="relative flex items-center gap-1 py-0.5 pr-2"
-      style={{ paddingLeft: depth * 12 + 4 }}
+      className="relative flex items-center gap-1.5 py-[3px] pr-2"
+      style={{ paddingLeft: depth * 12 + 6 }}
     >
       <span className="w-3 shrink-0" />
-      <span className="shrink-0 text-content-subtle">
-        {isDir ? <IconFolderOpen size={13} /> : <FileTypeIcon path={joinPath(parentPath, initialName)} size={13} />}
+      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-content-subtle">
+        {isDir ? <FolderTypeIcon path={previewPath} size={16} /> : <FileTypeIcon path={previewPath} size={16} />}
       </span>
       <input
         ref={inputRef}
@@ -1051,18 +1065,16 @@ function DirNode({
                 type="button"
                 onClick={onToggle}
                 className={cn(
-                  "flex w-full items-center gap-1 py-0.5 pr-2 text-left transition-colors hover:bg-surface-hover/50",
+                  "flex w-full items-center gap-1.5 py-[3px] pr-2 text-left transition-colors hover:bg-surface-hover/50",
                 )}
-                style={{ paddingLeft: depth * 12 + 4 }}
+                style={{ paddingLeft: depth * 12 + 6 }}
               />
             }
           >
-            <span className="shrink-0 text-content-subtle">
+            <span className="flex w-3 shrink-0 items-center justify-center text-content-subtle">
               {isOpen ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
             </span>
-            <span className="shrink-0 text-content-subtle">
-              <IconFolderOpen size={13} />
-            </span>
+            <FolderTypeIcon path={endPath} open={isOpen} size={16} />
             <span className="truncate text-content-muted">{label}</span>
             {loading && <IconLoader2 size={10} className="ml-auto animate-spin text-content-subtle" />}
           </ContextMenu.Trigger>
@@ -1137,7 +1149,13 @@ function DirNode({
           onConfirm={() => void handleDelete()}
         />
         {isOpen && children && (
-          <div>
+          <div className="relative">
+            {/* Subtle VS Code-style vertical indent guide aligned under the parent chevron. */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute bottom-0 top-0 w-px bg-edge/50"
+              style={{ left: depth * 12 + 12 }}
+            />
             {creating && (
               <InlineNewEntryRow
                 depth={depth + 1}
@@ -1275,23 +1293,21 @@ function FileNodeRow({
               }}
               onClick={onClick}
               className={cn(
-                "flex w-full items-center gap-1 py-0.5 pr-2 text-left transition-colors",
+                "flex w-full items-center gap-1.5 py-[3px] pr-2 text-left transition-colors",
                 active ? "bg-accent/15 text-content" : "text-content-muted hover:bg-surface-hover/50",
                 // Copied-file marker (VS Code parity): the row sitting in the
                 // tree clipboard stays dimmed until pasted or another file is
                 // copied, making the pending 粘贴 visible at a glance.
                 fileClipboard?.copiedFile === path && "opacity-60",
               )}
-              style={{ paddingLeft: depth * 12 + 4 }}
+              style={{ paddingLeft: depth * 12 + 6 }}
               title={path}
             />
           }
         >
           {/* Spacer to align with directory chevrons. */}
           <span className="w-3 shrink-0" />
-          <span className="shrink-0 text-content-subtle">
-            <FileTypeIcon path={path} size={13} />
-          </span>
+          <FileTypeIcon path={path} size={16} />
           <span className="truncate">{name}</span>
           {/* Agent-touched dot: accent for created, danger-ish for modified. */}
           {turnFile && (
@@ -1307,7 +1323,7 @@ function FileNodeRow({
         <ContextMenu.Portal>
           <ContextMenu.Positioner>
             <ContextMenu.Popup className={MENU_POPUP_CLASS}>
-              <MenuItem icon={<FileTypeIcon path={path} size={12} />} label={t("common.open")} onClick={onClick} />
+              <MenuItem icon={<FileTypeIcon path={path} size={14} />} label={t("common.open")} onClick={onClick} />
               {/* "新建" creates a sibling in this file's parent dir; only shown
                   when a container context is available (i.e. inside a tree). */}
               {startNewInParent && (

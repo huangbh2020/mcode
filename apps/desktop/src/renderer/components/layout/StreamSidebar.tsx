@@ -35,6 +35,7 @@ import {
   IconInbox,
   IconListTree,
   IconCheck,
+  IconChevronDown,
   IconChevronRight,
   IconDots,
   IconFolder,
@@ -89,26 +90,80 @@ function formatRunningDuration(ms: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
 
-/* ── Left↔stream view switch (mounted in BOTH sidebars' top strips) ── */
+/* ── Shared 40px top header for BOTH left-bar views (Tree & Stream) ──
+ * Plan B: 40px segmented view switcher (项目 / 动态) + compact "+" add-project
+ * button. Locked to h-10 so its bottom border stays flush with the center tab
+ * strip and right-panel header. */
 
-export function LeftBarModeSwitch() {
+export function LeftBarTopHeader({ onAddProject }: { onAddProject: () => void }) {
   const { t } = useI18n();
   const mode = useSessionStore((s) => s.leftBarMode);
   const setLeftBarMode = useSessionStore((s) => s.setLeftBarMode);
+  const openTabCount = useSessionStore((s) => s.openTabs.length);
   return (
-    <button
-      type="button"
-      onClick={() => void setLeftBarMode(mode === "tree" ? "stream" : "tree")}
-      className={cn(
-        "flex h-7 w-7 items-center justify-center rounded text-content-muted transition-colors",
-        "hover:bg-surface-hover hover:text-accent",
-      )}
-      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-      title={mode === "tree" ? t("layout.stream.switchToStream") : t("layout.stream.switchToTree")}
-    >
-      {/* Destination-view glyph: shows the view clicking leads to, matching the tooltip. */}
-      {mode === "tree" ? <IconInbox size={18} className="shrink-0" /> : <IconListTree size={18} className="shrink-0" />}
-    </button>
+    <div className="flex h-10 shrink-0 items-center justify-between gap-1.5 border-b border-edge bg-surface px-2">
+      <div
+        role="tablist"
+        aria-label={t("layout.projectViewMode")}
+        className="flex min-w-0 flex-1 items-center rounded-lg bg-surface-muted p-[2px] text-xs"
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "tree"}
+          onClick={() => void setLeftBarMode("tree")}
+          title={t("layout.stream.switchToTree")}
+          className={cn(
+            "flex flex-1 items-center justify-center gap-1.5 rounded-[6px] py-1 font-medium transition-all",
+            mode === "tree"
+              ? "bg-surface text-content shadow-sm"
+              : "text-content-subtle hover:text-content",
+          )}
+        >
+          <IconListTree size={13} className="shrink-0" />
+          <span className="truncate">{t("layout.projects")}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "stream"}
+          onClick={() => void setLeftBarMode("stream")}
+          title={t("layout.stream.switchToStream")}
+          className={cn(
+            "flex flex-1 items-center justify-center gap-1.5 rounded-[6px] py-1 font-medium transition-all",
+            mode === "stream"
+              ? "bg-surface text-content shadow-sm"
+              : "text-content-subtle hover:text-content",
+          )}
+        >
+          <IconInbox size={13} className="shrink-0" />
+          <span className="truncate">{t("layout.sidebar.tabStream")}</span>
+          {openTabCount > 0 && (
+            <span
+              className={cn(
+                "shrink-0 rounded-full px-1.5 text-[10px] leading-[15px] tabular-nums",
+                mode === "stream"
+                  ? "bg-accent/12 text-accent"
+                  : "bg-surface-hover text-content-subtle",
+              )}
+            >
+              {openTabCount}
+            </span>
+          )}
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={onAddProject}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        title={t("layout.addProject")}
+        aria-label={t("layout.addProject")}
+      >
+        <IconPlus size={14} className="shrink-0" />
+      </button>
+    </div>
   );
 }
 
@@ -153,6 +208,8 @@ function StreamSidebarBase() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   // The visible list is the open-tab mirror — this is the filter source.
   const openTabs = useSessionStore((s) => s.openTabs);
+  const splitGroupsBySession = useSessionStore((s) => s.splitGroupsBySession);
+  const sessions = useSessionStore((s) => s.sessions);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
   const streamSessions = useSessionStore((s) => s.streamSessions);
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
@@ -358,19 +415,43 @@ function StreamSidebarBase() {
   );
 
   // ── Open-tabs mirror. The stream lists ONLY the sessions currently open
-  // in the center tab bar (`openTabs`), in tab-strip order — it's a richer
-  // view of the open tabs, not a session history. Rows resolve from the
-  // same buckets the tab strip reads; an id whose row hasn't landed yet
-  // (hydration race) is skipped and appears once its row is in a bucket.
+  // in the center tab bar (`openTabs`, plus any split-pane members and the
+  // active session as fallback), in tab-strip order — it's a richer view of
+  // the open tabs, not a session history. Rows resolve from every in-memory
+  // bucket plus an on-demand `session.get` fallback so an open tab beyond
+  // page 1 of a project cache never silently disappears.
   // Scheduled-task sessions (kind="automation") stay excluded — they render
   // only in the right panel's「定时任务」tab.
   const isChat = (s: { kind: string }): boolean => s.kind !== "automation";
+  const [fetchedSessionsById, setFetchedSessionsById] = useState<Record<string, Session>>({});
+  const requestedOpenIdsRef = useRef<Set<string>>(new Set());
+
+  const openSessionIds = useMemo(() => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const push = (id: string | null | undefined) => {
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      out.push(id);
+    };
+    for (const id of openTabs) {
+      push(id);
+      const members = splitGroupsBySession[id];
+      if (members) {
+        for (const m of members) push(m);
+      }
+    }
+    push(activeSessionId);
+    return out;
+  }, [openTabs, splitGroupsBySession, activeSessionId]);
+
   const sessionById = useMemo(() => {
     const map = new Map<string, Session>();
     const add = (list: Session[] | undefined) => {
       if (!list) return;
       for (const s of list) if (!map.has(s.id)) map.set(s.id, s);
     };
+    add(sessions);
     for (const list of Object.values(sessionsByProject)) add(list);
     add(pinnedSessions);
     for (const list of Object.values(archivedSessionsByProject)) add(list);
@@ -378,15 +459,61 @@ function StreamSidebarBase() {
     for (const [id, w] of Object.entries(orchWorkersById)) {
       if (w && !map.has(id)) map.set(id, w);
     }
+    for (const [id, fetched] of Object.entries(fetchedSessionsById)) {
+      if (fetched && !map.has(id)) map.set(id, fetched);
+    }
     return map;
-  }, [sessionsByProject, pinnedSessions, archivedSessionsByProject, streamSessions, orchWorkersById]);
-  const openTabSessions = useMemo(
+  }, [sessions, sessionsByProject, pinnedSessions, archivedSessionsByProject, streamSessions, orchWorkersById, fetchedSessionsById]);
+
+  // On-demand hydration for any open tab whose row isn't in any in-memory list
+  // bucket yet (e.g. an older thread beyond page 1 opened via palette/restore).
+  useEffect(() => {
+    const missing = openSessionIds.filter(
+      (id) => !sessionById.has(id) && !requestedOpenIdsRef.current.has(id),
+    );
+    if (missing.length === 0) return;
+    let alive = true;
+    for (const id of missing) {
+      requestedOpenIdsRef.current.add(id);
+      void api.session
+        .get({ sessionId: id })
+        .then((res) => {
+          if (!alive || !res.session) return;
+          const row = res.session;
+          setFetchedSessionsById((prev) => (prev[row.id] ? prev : { ...prev, [row.id]: row }));
+        })
+        .catch(() => {
+          requestedOpenIdsRef.current.delete(id);
+        });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [openSessionIds, sessionById]);
+
+  const allOpenTabSessions = useMemo(
     () =>
-      openTabs
+      openSessionIds
         .map((id) => sessionById.get(id))
-        .filter((s): s is Session => s != null && isChat(s) && scopeMatches(s)),
-    [openTabs, sessionById, scopeMatches],
+        .filter((s): s is Session => s != null && isChat(s)),
+    [openSessionIds, sessionById],
   );
+  const openTabSessions = useMemo(
+    () => allOpenTabSessions.filter((s) => scopeMatches(s)),
+    [allOpenTabSessions, scopeMatches],
+  );
+  // Auto-heal stale persisted scope on entering the stream view: if an old
+  // persisted project/worktree filter hides every currently open tab, reset
+  // to "all projects" once so switching to 动态 immediately shows open tabs.
+  const didAutoHealScopeRef = useRef(false);
+  useEffect(() => {
+    if (didAutoHealScopeRef.current) return;
+    if (allOpenTabSessions.length === 0) return;
+    didAutoHealScopeRef.current = true;
+    if (scope != null && openTabSessions.length === 0) {
+      setScope(null);
+    }
+  }, [scope, allOpenTabSessions.length, openTabSessions.length, setScope]);
   const pinnedList = useMemo(() => openTabSessions.filter((s) => s.pinnedAt != null), [openTabSessions]);
   const liveSessions = useMemo(() => openTabSessions.filter((s) => s.pinnedAt == null), [openTabSessions]);
 
@@ -588,30 +715,60 @@ function StreamSidebarBase() {
     ));
   };
 
+  const scopedProject = scopedProjectId ? projectById.get(scopedProjectId) ?? null : null;
+
   return (
     <div className="flex h-full flex-col [font-size:var(--right-panel-font-size)]">
-      {/* 顶部工具条：h-10 与中间面板标签栏及树视图顶栏齐平，承载项目范围筛选与视图切换。 */}
-      <div className="flex h-10 shrink-0 items-center justify-between gap-1.5 border-b border-edge bg-surface px-2">
-        <div className="min-w-0 flex-1">
+      {/* 顶部 40px 分段切换头：与项目树视图共享同一顶栏，与中间面板标签栏齐平。 */}
+      <LeftBarTopHeader onAddProject={() => void addProject()} />
+
+      <div className="flex min-h-0 flex-1 flex-col px-2 pb-2 pt-1.5">
+      {/* 次级轻筛选条：无边框 Ghost 下拉，与树视图范围条保持一致。 */}
+      <div className="mb-1 flex shrink-0 items-center justify-between gap-1 px-0.5">
+        <div className="min-w-0">
           <Menu.Root open={scopeOpen} onOpenChange={setScopeOpen}>
             <Menu.Trigger
               className={cn(
-                "flex h-7 w-full min-w-0 items-center justify-between gap-1.5 rounded-lg border border-edge bg-surface-muted/65 px-2 text-left text-xs font-medium transition-colors",
-                "text-content hover:bg-surface-hover/70",
+                "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs transition-colors",
+                "text-content-muted hover:bg-surface-hover/70 hover:text-content",
               )}
+              title={t("layout.switchProject")}
             >
-              <span className="flex min-w-0 items-center gap-1.5">
-                {/* Fixed all-projects glyph — the label carries the current scope. */}
-                <IconFolder size={14} className="shrink-0 text-content-subtle" />
-                <span className="min-w-0 flex-1 truncate">{scopeLabel}</span>
-              </span>
-              <IconChevronRight size={12} className="shrink-0 rotate-90 text-content-subtle" />
+              {scopedProject ? (
+                <>
+                  <ProjectAvatar
+                    name={scopedProject.name}
+                    color={projectDisplayColor(scopedProject, projectColors)}
+                  />
+                  <span className="min-w-0 truncate font-medium text-content">{scopedProject.name}</span>
+                </>
+              ) : scope?.startsWith("wt:") ? (
+                <>
+                  <IconGitFork size={12} className="shrink-0 text-accent/80" />
+                  <span className="min-w-0 truncate font-medium text-content">{scopeLabel}</span>
+                </>
+              ) : scope?.startsWith("g:") ? (
+                <>
+                  <IconFolder size={13} className="shrink-0 text-content-subtle" />
+                  <span className="min-w-0 truncate font-medium text-content">{scopeLabel}</span>
+                </>
+              ) : (
+                <>
+                  <span className="shrink-0 text-[11px] text-content-subtle">
+                    {t("layout.sidebar.scopePrefix")}
+                  </span>
+                  <span className="min-w-0 truncate font-medium text-content-muted">
+                    {scopeLabel}
+                  </span>
+                </>
+              )}
+              <IconChevronDown size={12} className="shrink-0 text-content-subtle" />
             </Menu.Trigger>
           <Menu.Portal>
-            <Menu.Positioner align="start">
+            <Menu.Positioner side="bottom" align="start" sideOffset={4}>
               <Menu.Popup
                 className={cn(
-                  "z-50 min-w-[200px] origin-top-left rounded-md border border-edge bg-surface py-1 shadow-2xl",
+                  "z-50 min-w-[200px] max-h-80 overflow-y-auto origin-top-left rounded-xl border border-edge bg-surface p-1 shadow-xl",
                   "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
                   "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
                   "transition-[transform,opacity] duration-100",
@@ -688,15 +845,26 @@ function StreamSidebarBase() {
           </Menu.Portal>
           </Menu.Root>
         </div>
-        <LeftBarModeSwitch />
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col px-2 py-2">
       {/* Flat list: open tabs only — pinned cards ─ hairline ─ live cards. */}
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
         {liveSessions.length === 0 && pinnedList.length === 0 ? (
-          <div className="px-2 py-8 text-center text-content-subtle [font-size:var(--rp-fs-sm)]">
-            {t("layout.stream.empty")}
+          <div className="flex flex-col items-center gap-2 px-2 py-8 text-center text-content-subtle [font-size:var(--rp-fs-sm)]">
+            <span>
+              {scope != null && allOpenTabSessions.length > 0
+                ? t("layout.stream.emptyInScope")
+                : t("layout.stream.empty")}
+            </span>
+            {scope != null && allOpenTabSessions.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setScope(null)}
+                className="rounded-md bg-surface-muted px-2.5 py-1 text-xs font-medium text-accent transition-colors hover:bg-surface-hover"
+              >
+                {t("layout.stream.showAllOpen", { n: allOpenTabSessions.length })}
+              </button>
+            )}
           </div>
         ) : (
           <ul className="space-y-0.5">

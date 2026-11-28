@@ -604,7 +604,7 @@ export function SortableFileTab({
       {/* File-type icon + file name. The icon is shrink-0 so it survives
           truncation; the name flex-1 + min-w-0 truncates with ellipsis when
           space is tight. The tab's own max-w governs the overall cap. */}
-      <FileTypeIcon path={path} size={13} className="shrink-0 text-content-subtle" />
+      <FileTypeIcon path={path} size={15} className="shrink-0" />
       <span className="min-w-0 flex-1 truncate">
         {basename(path)}
       </span>

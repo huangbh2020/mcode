@@ -13,6 +13,7 @@ import {
   IconAlertTriangle,
 } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { layoutCommitGraph, type CommitGraphRow } from "./commitGraph.js";
 
 const PAGE_SIZE = 50;
@@ -552,6 +553,7 @@ function CommitFileRow({
       title={fullPath}
     >
       <CommitFileStatusIcon status={file.status} />
+      <FileTypeIcon path={file.path} size={14} />
       <span className="min-w-0 flex-1 truncate font-mono [font-size:var(--right-panel-font-size)] text-content-muted">{label}</span>
       {(file.additions != null || file.deletions != null) && (
         <span className="flex shrink-0 items-center gap-0.5 font-mono [font-size:var(--rp-fs-xxs)] tabular-nums">

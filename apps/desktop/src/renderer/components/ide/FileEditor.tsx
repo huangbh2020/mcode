@@ -362,7 +362,7 @@ function EditorToolbar({
           <IconArrowRight size={13} />
         </button>
       </div>
-      <FileTypeIcon path={filePath} size={14} className="shrink-0 text-content-subtle" />
+      <FileTypeIcon path={filePath} size={15} className="shrink-0" />
       <span className="truncate font-mono text-[11px] text-content-muted" title={filePath}>
         {rel}
       </span>

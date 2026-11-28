@@ -4,13 +4,13 @@ import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { FileTree } from "./FileTree.js";
 import { cn } from "@renderer/lib/cn.js";
 import {
-  IconFolder,
   IconFolderPlus,
   IconRefresh,
   IconSearch,
   IconLayoutSidebarRight,
   IconCode,
 } from "@renderer/lib/icons.js";
+import { FolderTypeIcon } from "@renderer/lib/fileIcon.js";
 import { Divider } from "@renderer/components/layout/Divider.js";
 import { OpenTabsBar } from "./OpenTabsBar.js";
 import { basename } from "@renderer/lib/path.js";
@@ -193,10 +193,10 @@ export function FilesPanel() {
     <div data-files-panel="true" className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-edge px-2 py-1.5">
         <span
-          className="flex min-w-0 flex-1 items-center gap-1 px-1 text-[12px] font-medium text-content-muted"
+          className="flex min-w-0 flex-1 items-center gap-1.5 px-1 text-[12px] font-medium text-content-muted"
           title={projectPath}
         >
-          <IconFolder size={13} className="shrink-0 text-content-subtle" />
+          <FolderTypeIcon path={projectPath} open size={15} />
           <span className="truncate">{projectName}</span>
         </span>
         <button

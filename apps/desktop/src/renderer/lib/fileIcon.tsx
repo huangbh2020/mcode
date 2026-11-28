@@ -1,27 +1,38 @@
 /**
- * File-type icon helper (VS Code Material Icon Theme style).
+ * File & folder icon helper (VS Code Material Icon Theme style).
  *
- * Maps a file's extension (or special filename) to a per-type icon from the
- * `material-icon-theme` Iconify collection (634 file icons, MIT, fully offline
- * - no API at runtime). Shared across the file tree, editor tabs, and editor
- * toolbar via the `FileTypeIcon` component, so every surface shows the same
- * icon for a given file.
+ * Maps a file's path / filename / compound extension — or a folder's semantic
+ * name + open/closed state — to an icon from the `material-icon-theme` Iconify
+ * collection (1175 icons including 541 semantic folder icons and 52 light-theme
+ * variants, MIT, fully offline — no API at runtime). Shared across the file
+ * tree, editor tabs, editor toolbar, search dialog, git panels, chat mentions,
+ * turn-files cards, and mobile file browser so every surface shows identical
+ * icons.
  *
- * The extension -> icon and filename -> icon maps are derived from the upstream
- * vscode-material-icon-theme source (1360 extensions + 1039 special filenames),
- * filtered to icons present in the installed collection. The same extension
- * always resolves to the same icon (consistency). Unknown extensions and
- * extension-less files fall back to the generic `document` icon.
+ * File resolution priority (aligned with upstream vscode-material-icon-theme):
+ *   1. Path-level rules (e.g. `.github/workflows/*.yml`, `.github/funding.yml`)
+ *   2. Exact filename (`NAME_ICON`, case-insensitive — e.g. `package.json`,
+ *      `tsconfig.json`, `.env`, `Dockerfile`)
+ *   3. Config / tooling filename patterns (e.g. `vite.config.*`, `tsconfig.*.json`,
+ *      `eslint.config.*`, `.env.*`, `docker-compose.*.yml`)
+ *   4. Longest compound extension first (`EXT_ICON` — e.g. `foo.d.ts` → `d.ts`,
+ *      `App.test.tsx` → `test.tsx` before falling back to `tsx`)
+ *   5. Generic `document` fallback
+ *
+ * Light-theme adaptation: when the active theme is light (`!useIsDarkTheme()`),
+ * any icon that ships a `-light` variant in the collection automatically uses
+ * it so pale dark-mode glyphs remain legible on light surfaces.
  *
  * The collection is registered once on module load via `addCollection`; after
- * that every lookup is a synchronous local `getIcon` call - no async / network.
- * Folders show no icon in the tree (chevron + name only) per the current design.
+ * that every lookup is synchronous and local.
  */
 import { addCollection, Icon as IconifyIcon } from "@iconify/react";
 // Importing the data triggers the side-effect registration below. This is a
 // ~253KB JSON blob (1175 icons) bundled into the renderer chunk.
 import mitCollection from "@iconify-json/material-icon-theme/icons.json";
+import { cn } from "@renderer/lib/cn.js";
 import { basename } from "@renderer/lib/path.js";
+import { useIsDarkTheme } from "@renderer/lib/theme.js";
 
 // Register the whole collection once. After this, icons resolve synchronously
 // via getIcon("material-icon-theme:<name>"). Safe at module scope - it just
@@ -29,6 +40,23 @@ import { basename } from "@renderer/lib/path.js";
 addCollection(mitCollection);
 
 const COLLECTION_PREFIX = "material-icon-theme";
+
+/** Set of all icon names (and aliases) present in the bundled collection. Used
+ *  to check `-open` and `-light` variants in O(1) without hardcoding lists. */
+const AVAILABLE_ICONS: ReadonlySet<string> = new Set([
+  ...Object.keys(mitCollection.icons),
+  ...Object.keys((mitCollection as { aliases?: Record<string, unknown> }).aliases ?? {}),
+]);
+
+/** Resolve the light-mode variant of an icon name when running on a light
+ *  theme, if the collection ships one. */
+function withThemeVariant(iconName: string, isDark: boolean): string {
+  if (!isDark) {
+    const light = `${iconName}-light`;
+    if (AVAILABLE_ICONS.has(light)) return light;
+  }
+  return iconName;
+}
 
 /** Extension (lowercase, no leading dot) -> icon name. Derived from the
  *  upstream material-icon-theme fileExtensions map and filtered to icons
@@ -94,7 +122,7 @@ const EXT_ICON: Record<string, string> = {
   "twee": "twine",
   "yml.dist": "yaml",
   "yaml.dist": "yaml",
-  "YAML-tmLanguage": "yaml",
+  "yaml-tmlanguage": "yaml",
   "yaml": "yaml",
   "yml": "yaml",
   "cff": "yaml",
@@ -112,7 +140,7 @@ const EXT_ICON: Record<string, string> = {
   "resx": "xml",
   "iml": "xml",
   "xquery": "xml",
-  "tmLanguage": "xml",
+  "tmlanguage": "xml",
   "manifest": "xml",
   "project": "xml",
   "xml.dist": "xml",
@@ -945,7 +973,7 @@ const EXT_ICON: Record<string, string> = {
   "jenkins": "jenkins",
   "fig": "figma",
   "huff": "huff",
-  "rootReducer.ts": "ngrx-reducer",
+  "rootreducer.ts": "ngrx-reducer",
   "state.ts": "ngrx-state",
   "effects.ts": "ngrx-effects",
   "cr": "crystal",
@@ -1394,6 +1422,16 @@ const EXT_ICON: Record<string, string> = {
   "skill.md": "skill",
   "skills.md": "skill",
   "mrpack": "mrpack",
+  "svelte": "svelte",
+  "graphql": "graphql",
+  "gql": "graphql",
+  "service": "systemd",
+  "socket": "systemd",
+  "timer": "systemd",
+  "mount": "systemd",
+  "g.dart": "dart-generated",
+  "freezed.dart": "dart-generated",
+  "schema.json": "json-schema",
 };
 
 /** Special filename (lowercase basename) -> icon name. Derived from the
@@ -2441,46 +2479,498 @@ const NAME_ICON: Record<string, string> = {
   "eas.json": "expo",
   ".easignore": "expo",
   "agents.md": "agent",
+  // Common dotfiles & config filenames missing from the static upstream dump
+  ".env": "tune",
+  "tsconfig.json": "tsconfig",
+  "jsconfig.json": "jsconfig",
+  "pdm.lock": "pdm",
+  "pdm.toml": "pdm",
+  "horusec-config.json": "horusec",
+  ".prettierrc": "prettier",
+  ".prettierignore": "prettier",
+  ".eslintrc": "eslint",
+  ".eslintignore": "eslint",
+  ".eslintcache": "eslint",
+  ".stylelintrc": "stylelint",
+  ".stylelintignore": "stylelint",
+  ".babelrc": "babel",
+  ".commitlintrc": "commitlint",
+  ".huskyrc": "husky",
+  ".postcssrc": "postcss",
+  ".posthtmlrc": "posthtml",
+  ".releaserc": "semantic-release",
+  ".sentryclirc": "sentry",
+  ".shellcheckrc": "shellcheck",
+  ".hadolint.yaml": "hadolint",
+  ".hadolint.yml": "hadolint",
+  ".svgrrc": "svgr",
+  ".cracorc": "craco",
+  ".syncpackrc": "syncpack",
+  ".latexmkrc": "latexmk",
+  "latexmkrc": "latexmk",
+  "bashly.yml": "bashly",
+  "bashly.yaml": "bashly",
+};
+
+/** Path-suffix exact matches (normalized forward-slash, lowercase). Checked
+ *  before basename lookup so repo-relative special files resolve accurately. */
+const PATH_ICON: Record<string, string> = {
+  ".github/labeler.yml": "label",
+  ".github/labeler.yaml": "label",
+  ".github/funding.yml": "github-sponsors",
+  "src/initialize.sh": "bashly-hook",
+  "src/before.sh": "bashly-hook",
+  "src/after.sh": "bashly-hook",
+};
+
+/** Dynamic config / tooling filename patterns (matched against lowercased
+ *  basename) that upstream vscode-material-icon-theme generates via helpers. */
+const FILE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^tsconfig([.-].+)?\.json$/, "tsconfig"],
+  [/^jsconfig([.-].+)?\.json$/, "jsconfig"],
+  [/^\.env(\..+)?$/, "tune"],
+  [/^(electron\.)?vite\.config\.[a-z0-9]+$/, "vite"],
+  [/^vitest\.(config|workspace)\.[a-z0-9]+$/, "vitest"],
+  [/^(eslint\.config\.[a-z0-9]+|\.eslintrc(\.[a-z0-9]+)?)$/, "eslint"],
+  [/^(prettier\.config\.[a-z0-9]+|\.prettierrc(\.[a-z0-9]+)?)$/, "prettier"],
+  [/^(postcss\.config\.[a-z0-9]+|\.postcssrc(\.[a-z0-9]+)?)$/, "postcss"],
+  [/^(posthtml\.config\.[a-z0-9]+|\.posthtmlrc(\.[a-z0-9]+)?)$/, "posthtml"],
+  [/^(babel\.config\.[a-z0-9]+|\.babelrc(\.[a-z0-9]+)?)$/, "babel"],
+  [/^webpack(\.[^.]+)*\.(js|cjs|mjs|ts|cts|mts|coffee)$/, "webpack"],
+  [/^rollup\.config\.[a-z0-9]+$/, "rollup"],
+  [/^rolldown\.config\.[a-z0-9]+$/, "rolldown"],
+  [/^esbuild(\.[^.]+)*\.(js|cjs|mjs|ts|cts|mts)$/, "esbuild"],
+  [/^(stylelint\.config\.[a-z0-9]+|\.stylelintrc(\.[a-z0-9]+)?)$/, "stylelint"],
+  [/^(commitlint\.config\.[a-z0-9]+|\.commitlintrc(\.[a-z0-9]+)?)$/, "commitlint"],
+  [/^cypress\.config\.[a-z0-9]+$/, "cypress"],
+  [/^playwright(-ct)?\.config(\.[^.]+)*\.[a-z0-9]+$/, "playwright"],
+  [/^tailwind\.config\.[a-z0-9]+$/, "tailwindcss"],
+  [/^next\.config\.[a-z0-9]+$/, "next"],
+  [/^nuxt\.config\.[a-z0-9]+$/, "nuxt"],
+  [/^svelte\.config\.[a-z0-9]+$/, "svelte"],
+  [/^astro\.config\.[a-z0-9]+$/, "astro-config"],
+  [/^jest\.config\.[a-z0-9]+$/, "jest"],
+  [/^(release\.config\.[a-z0-9]+|\.releaserc(\.[a-z0-9]+)?)$/, "semantic-release"],
+  [/^sentry\..+\.config\.[a-z0-9]+$/, "sentry"],
+  [/^ecosystem\.config\.[a-z0-9]+$/, "pm2-ecosystem"],
+  [/^panda\.config\.[a-z0-9]+$/, "panda"],
+  [/^wxt\.config\.[a-z0-9]+$/, "wxt"],
+  [/^velite\.config\.[a-z0-9]+$/, "velite"],
+  [/^trigger\.config\.[a-z0-9]+$/, "trigger"],
+  [/^histoire\.config\.[a-z0-9]+$/, "histoire"],
+  [/^(craco\.config\.[a-z0-9]+|\.cracorc(\.[a-z0-9]+)?)$/, "craco"],
+  [/^contentlayer\.config\.[a-z0-9]+$/, "contentlayer"],
+  [/^(syncpack\.config\.[a-z0-9]+|\.syncpackrc(\.[a-z0-9]+)?)$/, "syncpack"],
+  [/^(svgr\.config\.[a-z0-9]+|\.svgrrc(\.[a-z0-9]+)?)$/, "svgr"],
+  [/^zeabur\.[a-z0-9]+$/, "zeabur"],
+  [/^\.umirc(\.[^.]+)*\.[a-z0-9]+$/, "umi"],
+  [/^(dockerfile|containerfile)(\.[^.]+)?$/, "docker"],
+  [/^(docker-)?compose(\.[^.]+)*\.ya?ml$/, "docker"],
+  [/^redux-?store\.(js|ts|mjs|cjs)$/, "redux-store"],
+];
+
+/** Semantic folder name (lowercase) -> base folder icon name in
+ *  material-icon-theme (closed form; `-open` is appended when expanded). */
+const FOLDER_ICON: Record<string, string> = {
+  // Core source & architecture
+  "src": "folder-src",
+  "srcs": "folder-src",
+  "source": "folder-src",
+  "sources": "folder-src",
+  "code": "folder-src",
+  "app": "folder-app",
+  "apps": "folder-app",
+  "packages": "folder-packages",
+  "package": "folder-packages",
+  "pkg": "folder-packages",
+  "pkgs": "folder-packages",
+  "core": "folder-core",
+  "shared": "folder-shared",
+  "common": "folder-shared",
+  "lib": "folder-lib",
+  "libs": "folder-lib",
+  "library": "folder-lib",
+  "libraries": "folder-lib",
+  "utils": "folder-utils",
+  "util": "folder-utils",
+  "utilities": "folder-utils",
+  "helper": "folder-helper",
+  "helpers": "folder-helper",
+  "client": "folder-client",
+  "clients": "folder-client",
+  "frontend": "folder-client",
+  "renderer": "folder-client",
+  "server": "folder-server",
+  "servers": "folder-server",
+  "backend": "folder-server",
+  "main": "folder-core",
+  "preload": "folder-middleware",
+  "desktop": "folder-desktop",
+  "mobile": "folder-mobile",
+  "contracts": "folder-contract",
+  "contract": "folder-contract",
+  "features": "folder-features",
+  "feature": "folder-features",
+  "modules": "folder-packages",
+  "plugins": "folder-plugin",
+  "plugin": "folder-plugin",
+  "extensions": "folder-plugin",
+  "extension": "folder-plugin",
+  "addons": "folder-plugin",
+  "providers": "folder-api",
+  "provider": "folder-api",
+  "ipc": "folder-connection",
+
+  // UI & frontend structure
+  "components": "folder-components",
+  "component": "folder-components",
+  "ui": "folder-ui",
+  "widgets": "folder-components",
+  "layouts": "folder-layout",
+  "layout": "folder-layout",
+  "views": "folder-views",
+  "view": "folder-views",
+  "pages": "folder-views",
+  "page": "folder-views",
+  "screens": "folder-views",
+  "screen": "folder-views",
+  "routes": "folder-routes",
+  "route": "folder-routes",
+  "router": "folder-routes",
+  "hooks": "folder-hook",
+  "hook": "folder-hook",
+  "stores": "folder-store",
+  "store": "folder-store",
+  "state": "folder-store",
+  "context": "folder-context",
+  "contexts": "folder-context",
+  "styles": "folder-css",
+  "style": "folder-css",
+  "css": "folder-css",
+  "scss": "folder-sass",
+  "sass": "folder-sass",
+  "less": "folder-less",
+  "theme": "folder-theme",
+  "themes": "folder-theme",
+  "animations": "folder-animation",
+  "animation": "folder-animation",
+
+  // Data, API & backend layers
+  "api": "folder-api",
+  "apis": "folder-api",
+  "restapi": "folder-api",
+  "services": "folder-api",
+  "service": "folder-api",
+  "controllers": "folder-controller",
+  "controller": "folder-controller",
+  "middleware": "folder-middleware",
+  "middlewares": "folder-middleware",
+  "models": "folder-class",
+  "model": "folder-class",
+  "entities": "folder-class",
+  "types": "folder-typescript",
+  "typings": "folder-typescript",
+  "@types": "folder-typescript",
+  "interfaces": "folder-interface",
+  "interface": "folder-interface",
+  "constants": "folder-constant",
+  "constant": "folder-constant",
+  "const": "folder-constant",
+  "enums": "folder-enum",
+  "enum": "folder-enum",
+  "events": "folder-event",
+  "event": "folder-event",
+  "errors": "folder-error",
+  "error": "folder-error",
+  "guards": "folder-guard",
+  "guard": "folder-guard",
+  "messages": "folder-messages",
+  "message": "folder-messages",
+  "db": "folder-database",
+  "database": "folder-database",
+  "databases": "folder-database",
+  "sql": "folder-database",
+  "data": "folder-database",
+  "migrations": "folder-migrations",
+  "migration": "folder-migrations",
+  "seeds": "folder-seeders",
+  "seeders": "folder-seeders",
+  "prisma": "folder-prisma",
+  "drizzle": "folder-drizzle",
+  "graphql": "folder-graphql",
+  "gql": "folder-graphql",
+  "proto": "folder-proto",
+  "protos": "folder-proto",
+  "protobuf": "folder-proto",
+
+  // Assets & static resources
+  "public": "folder-public",
+  "static": "folder-public",
+  "www": "folder-public",
+  "assets": "folder-resource",
+  "asset": "folder-resource",
+  "resources": "folder-resource",
+  "resource": "folder-resource",
+  "res": "folder-resource",
+  "images": "folder-images",
+  "image": "folder-images",
+  "img": "folder-images",
+  "imgs": "folder-images",
+  "icons": "folder-images",
+  "icon": "folder-images",
+  "pictures": "folder-images",
+  "svg": "folder-svg",
+  "svgs": "folder-svg",
+  "fonts": "folder-font",
+  "font": "folder-font",
+  "audio": "folder-audio",
+  "audios": "folder-audio",
+  "sounds": "folder-audio",
+  "video": "folder-video",
+  "videos": "folder-video",
+  "media": "folder-video",
+  "i18n": "folder-i18n",
+  "l10n": "folder-i18n",
+  "locale": "folder-i18n",
+  "locales": "folder-i18n",
+  "lang": "folder-i18n",
+  "langs": "folder-i18n",
+  "translations": "folder-i18n",
+
+  // Docs, scripts, tests & build output
+  "docs": "folder-docs",
+  "doc": "folder-docs",
+  "documentation": "folder-docs",
+  "wiki": "folder-docs",
+  "markdown": "folder-markdown",
+  "scripts": "folder-scripts",
+  "script": "folder-scripts",
+  "bin": "folder-scripts",
+  "tools": "folder-tools",
+  "tool": "folder-tools",
+  "test": "folder-test",
+  "tests": "folder-test",
+  "__tests__": "folder-test",
+  "__test__": "folder-test",
+  "spec": "folder-test",
+  "specs": "folder-test",
+  "e2e": "folder-test",
+  "__mocks__": "folder-mock",
+  "mocks": "folder-mock",
+  "mock": "folder-mock",
+  "fixtures": "folder-mock",
+  "coverage": "folder-coverage",
+  "benchmark": "folder-benchmark",
+  "benchmarks": "folder-benchmark",
+  "examples": "folder-examples",
+  "example": "folder-examples",
+  "demo": "folder-examples",
+  "demos": "folder-examples",
+  "templates": "folder-template",
+  "template": "folder-template",
+  "dist": "folder-dist",
+  "build": "folder-dist",
+  "builds": "folder-dist",
+  "out": "folder-dist",
+  "output": "folder-dist",
+  "release": "folder-dist",
+  "target": "folder-target",
+  "node_modules": "folder-node",
+
+  // Config, tooling, VCS & AI
+  "config": "folder-config",
+  "configs": "folder-config",
+  "cfg": "folder-config",
+  "conf": "folder-config",
+  "settings": "folder-config",
+  ".config": "folder-config",
+  "env": "folder-environment",
+  "environments": "folder-environment",
+  ".git": "folder-git",
+  ".github": "folder-github",
+  ".gitlab": "folder-gitlab",
+  ".vscode": "folder-vscode",
+  ".vscode-test": "folder-vscode",
+  ".idea": "folder-intellij",
+  ".zed": "folder-zed",
+  ".claude": "folder-claude",
+  ".cursor": "folder-cursor",
+  ".cline": "folder-cline",
+  ".gemini": "folder-gemini-ai",
+  ".opencode": "folder-opencode",
+  "skills": "folder-skills",
+  "skill": "folder-skills",
+  "prompts": "folder-prompts",
+  "prompt": "folder-prompts",
+  "rules": "folder-rules",
+  "tasks": "folder-tasks",
+  ".husky": "folder-husky",
+  ".changeset": "folder-changesets",
+  ".changesets": "folder-changesets",
+  ".turbo": "folder-turborepo",
+  ".storybook": "folder-storybook",
+  "storybook": "folder-storybook",
+  "stories": "folder-storybook",
+  "cypress": "folder-cypress",
+  ".cypress": "folder-cypress",
+  ".next": "folder-next",
+  ".nuxt": "folder-nuxt",
+  ".expo": "folder-expo",
+  ".vercel": "folder-vercel",
+  ".netlify": "folder-netlify",
+  ".ci": "folder-ci",
+  "ci": "folder-ci",
+  "docker": "folder-docker",
+  ".docker": "folder-docker",
+  "k8s": "folder-kubernetes",
+  "kubernetes": "folder-kubernetes",
+  "terraform": "folder-terraform",
+  "aws": "folder-aws",
+  ".aws": "folder-aws",
+  "supabase": "folder-supabase",
+  "firebase": "folder-firebase",
+  "android": "folder-android",
+  "ios": "folder-ios",
+  "macos": "folder-macos",
+  "windows": "folder-windows",
+  "linux": "folder-linux",
+  "src-tauri": "folder-src-tauri",
+
+  // Misc
+  "logs": "folder-log",
+  "log": "folder-log",
+  "tmp": "folder-temp",
+  "temp": "folder-temp",
+  ".cache": "folder-temp",
+  "cache": "folder-temp",
+  "debug": "folder-debug",
+  "backup": "folder-backup",
+  "backups": "folder-backup",
+  "archive": "folder-archive",
+  "archives": "folder-archive",
+  "private": "folder-private",
+  "security": "folder-secure",
+  "auth": "folder-secure",
+  "keys": "folder-keys",
+  "certs": "folder-certificate",
+  "certificates": "folder-certificate",
+  "json": "folder-json",
+  "rust": "folder-rust",
+  "go": "folder-go",
+  "python": "folder-python",
+  "java": "folder-java",
+  "php": "folder-php",
+  "vue": "folder-vue",
+  "svelte": "folder-svelte",
+  "angular": "folder-angular",
+  "astro": "folder-astro",
+};
+
+/** Path-suffix rules for folders (e.g. `.github/workflows`). */
+const FOLDER_PATH_ICON: Record<string, string> = {
+  ".github/workflows": "folder-gh-workflows",
 };
 
 /** Generic fallback icon for files with no themed extension. */
 const DEFAULT_ICON = "document";
+/** Generic fallback icon for folders with no semantic name match. */
+const DEFAULT_FOLDER_ICON = "folder-base";
 
-/** Lowercase basename of a path (the segment after the last separator). */
-function basenameLower(p: string): string {
-  return basename(p).toLowerCase();
+/** Normalize path separators to forward slashes and lowercase. */
+function normalizePathLower(p: string): string {
+  return p.replace(/\\/g, "/").toLowerCase();
 }
 
-/** Lowercase extension WITHOUT the leading dot, or "" if none / dotfile.
- *  Mirrors the logic of extname() in lib/path.ts but strips the dot so it
- *  indexes directly into EXT_ICON. */
-function extOf(base: string): string {
-  const dot = base.lastIndexOf(".");
-  if (dot <= 0) return ""; // dot at 0 = hidden file, treat as no extension
-  return base.slice(dot + 1).toLowerCase();
+/** Resolve the bare Material Icon Theme icon name for a file path (without
+ *  collection prefix or `-light` suffix), or null if no rule matches. */
+function resolveFileIconName(filePath: string): string | null {
+  const norm = normalizePathLower(filePath);
+  const base = basename(filePath).toLowerCase();
+
+  // 1. Path-level rules (GitHub workflows, repo-relative special files).
+  if (/(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/.test(norm)) {
+    return "github-actions-workflow";
+  }
+  for (const [suffix, icon] of Object.entries(PATH_ICON)) {
+    if (norm === suffix || norm.endsWith(`/${suffix}`)) return icon;
+  }
+
+  // 2. Exact filename match (package.json, tsconfig.json, .env, Dockerfile…).
+  const exact = NAME_ICON[base];
+  if (exact) return exact;
+
+  // 3. Dynamic config / tooling filename patterns (vite.config.*, tsconfig.*.json…).
+  for (const [pattern, icon] of FILE_PATTERNS) {
+    if (pattern.test(base)) return icon;
+  }
+
+  // 4. Longest compound extension first: e.g. "App.test.tsx" -> "test.tsx" -> "tsx".
+  // Skip a leading dot (index 0) so dotfiles without an extra dot don't treat
+  // their entire name as an extension.
+  let dot = base.indexOf(".", base.startsWith(".") ? 1 : 0);
+  while (dot !== -1 && dot < base.length - 1) {
+    const ext = base.slice(dot + 1);
+    const hit = EXT_ICON[ext];
+    if (hit) return hit;
+    dot = base.indexOf(".", dot + 1);
+  }
+
+  return null;
 }
 
 /** Resolve the collection icon id for a file path, or null if no themed icon
- *  matches. Special filenames (case-insensitive basename) win over the
- *  extension (so package.json -> npm, not json). */
-export function fileIconIdForPath(filePath: string): string | null {
-  const base = basenameLower(filePath);
-  if (NAME_ICON[base]) return `${COLLECTION_PREFIX}:${NAME_ICON[base]}`;
-  const ext = extOf(base);
-  if (ext && EXT_ICON[ext]) return `${COLLECTION_PREFIX}:${EXT_ICON[ext]}`;
-  return null;
+ *  matches. Pass `isDark = false` on light themes to select `-light` variants
+ *  when available. */
+export function fileIconIdForPath(filePath: string, isDark = true): string | null {
+  const name = resolveFileIconName(filePath);
+  if (!name) return null;
+  return `${COLLECTION_PREFIX}:${withThemeVariant(name, isDark)}`;
 }
 
 /** Whether the collection has a themed icon for this path (exposed for tests
  *  / debugging coverage). */
 export function hasFileIcon(filePath: string): boolean {
-  return fileIconIdForPath(filePath) !== null;
+  return resolveFileIconName(filePath) !== null;
+}
+
+/** Resolve the bare Material Icon Theme base folder icon name (closed form)
+ *  for a directory path or name. */
+function resolveFolderIconName(dirPath: string): string {
+  const norm = normalizePathLower(dirPath).replace(/\/+$/, "");
+
+  for (const [suffix, icon] of Object.entries(FOLDER_PATH_ICON)) {
+    if (norm === suffix || norm.endsWith(`/${suffix}`)) return icon;
+  }
+
+  const base = basename(norm);
+  if (FOLDER_ICON[base]) return FOLDER_ICON[base];
+
+  // Try stripping a leading dot or underscore (e.g. `_components` -> `components`).
+  if (base.length > 1 && (base[0] === "." || base[0] === "_")) {
+    const stripped = base.slice(1);
+    if (FOLDER_ICON[stripped]) return FOLDER_ICON[stripped];
+  }
+
+  return DEFAULT_FOLDER_ICON;
+}
+
+/** Resolve the full Iconify icon id for a directory (semantic name + open/closed
+ *  state + light/dark variant). Always returns a valid id (falls back to
+ *  `folder-base` / `folder-base-open`). */
+export function folderIconIdForPath(
+  dirPath: string,
+  open = false,
+  isDark = true,
+): string {
+  const baseName = resolveFolderIconName(dirPath);
+  const openCandidate = `${baseName}-open`;
+  const stateName = open && AVAILABLE_ICONS.has(openCandidate) ? openCandidate : baseName;
+  return `${COLLECTION_PREFIX}:${withThemeVariant(stateName, isDark)}`;
 }
 
 /** Render the per-type file icon for a path. Falls back to the generic
- *  `document` icon for unknown extensions, so callers need no fallback of
- *  their own. Themed icons carry their own colors; `className` is currently
- *  unused but kept for API parity with the old Tabler-based helper. */
+ *  `document` icon for unknown extensions, and automatically swaps to `-light`
+ *  variants on light themes. */
 export function FileTypeIcon({
   path,
   size = 16,
@@ -2490,6 +2980,41 @@ export function FileTypeIcon({
   size?: number;
   className?: string;
 }) {
-  const id = fileIconIdForPath(path) ?? `${COLLECTION_PREFIX}:${DEFAULT_ICON}`;
-  return <IconifyIcon icon={id} width={size} height={size} inline />;
+  const isDark = useIsDarkTheme();
+  const id =
+    fileIconIdForPath(path, isDark) ??
+    `${COLLECTION_PREFIX}:${withThemeVariant(DEFAULT_ICON, isDark)}`;
+  return (
+    <IconifyIcon
+      icon={id}
+      width={size}
+      height={size}
+      className={cn("block shrink-0", className)}
+    />
+  );
+}
+
+/** Render the semantic Material folder icon for a directory path/name,
+ *  respecting open/closed state and light/dark theme variants. */
+export function FolderTypeIcon({
+  path,
+  open = false,
+  size = 16,
+  className,
+}: {
+  path: string;
+  open?: boolean;
+  size?: number;
+  className?: string;
+}) {
+  const isDark = useIsDarkTheme();
+  const id = folderIconIdForPath(path, open, isDark);
+  return (
+    <IconifyIcon
+      icon={id}
+      width={size}
+      height={size}
+      className={cn("block shrink-0", className)}
+    />
+  );
 }

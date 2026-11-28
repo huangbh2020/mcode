@@ -9,7 +9,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { api } from "@renderer/lib/api.js";
-import { IconFile, IconLoader2, IconPaperclip, IconSearch, IconUpload } from "@renderer/lib/icons.js";
+import { IconLoader2, IconPaperclip, IconSearch, IconUpload } from "@renderer/lib/icons.js";
+import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import type { FileSearchEntry } from "@contracts/ipc";
 
 export type FileMentionPickerMode = "mention" | "attach";
@@ -344,7 +345,7 @@ export function FileMentionPicker({
                     ✓
                   </span>
                 )}
-                <IconFile size={14} className="shrink-0 text-content-muted" />
+                <FileTypeIcon path={f.path} size={16} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{f.name}</span>
                   <span className="block truncate text-[10px] text-content-subtle">

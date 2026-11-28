@@ -39,6 +39,7 @@ import {
   IconGitMerge,
 } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
+import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 
 /** A single git operation log entry - one per pull/push/commit/sync/etc. */
 type GitOpLogEntry = {
@@ -1944,10 +1945,11 @@ function FileRow({
         <button
           type="button"
           onClick={handleClick}
-          className="flex min-w-0 flex-1 items-center gap-1 text-left"
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
           title={absPath}
         >
           <StatusCodeIcon code={code} />
+          <FileTypeIcon path={file.path} size={14} />
           <span
             className={cn(
               "truncate font-mono [font-size:var(--right-panel-font-size)]",

@@ -23,6 +23,10 @@
 
 ![Mcode 首页 - AI 编程助手桌面客户端主界面](docs/images/首页.png)
 
+### 操作演示
+
+![Mcode 操作演示 - 切换 Agent、Git 管理、代码编辑、终端与设置](docs/images/mcode-demo.gif)
+
 ### 核心亮点
 
 - 🎛 **五个引擎,一个应用** —— Claude Code、OpenAI Codex、Pi、OpenCode、Google Antigravity,会话前自由切换

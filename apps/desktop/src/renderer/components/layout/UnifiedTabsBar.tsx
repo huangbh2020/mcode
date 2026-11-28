@@ -15,16 +15,19 @@ import {
 import { basename } from "@renderer/lib/path.js";
 import { cn } from "@renderer/lib/cn.js";
 import {
+  IconChevronDown,
   IconChevronRight,
   IconClipboard,
   IconLayoutColumns,
   IconLayoutSidebarRight,
+  IconPlus,
   IconStack2,
   IconX,
 } from "@renderer/lib/icons.js";
 import { Menu } from "@base-ui/react/menu";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
+import { NewSessionMenu } from "./NewSessionMenu.js";
 import { TabBarChevronButton, TabBarOverflowMenu, TabInverseCorners } from "./TabBarChrome.js";
 import { SortableSessionTab, findSession } from "./SessionTabs.js";
 import {
@@ -36,6 +39,7 @@ import {
   useDirtyFiles,
   useIdeCloseGuard,
 } from "../ide/OpenTabsBar.js";
+import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Stable empty array so the selector never returns a fresh [] (Zustand
@@ -350,8 +354,6 @@ export function UnifiedTabsBar({ flushLeft = false }: { flushLeft?: boolean } = 
   // Plan tab surface: hidden in wide-panel mode (the WidePlanDialog overlay
   // owns the plan there — same contract as the old SessionTabs swap).
   const showPlanTab = hasPlanTab && !widePanelOpen;
-
-  if (tabs.length === 0 && openFiles.length === 0 && !showPlanTab) return null;
   const showOverflowMenu = canScrollLeft || canScrollRight;
 
   return (
@@ -362,7 +364,7 @@ export function UnifiedTabsBar({ flushLeft = false }: { flushLeft?: boolean } = 
       // min-w-0 and the track scrolls, but if the strip is ever squeezed
       // below its own chrome (shrink-0 chevrons/⋯), clipping HERE beats
       // spilling over the git pill and workbench toggles to its right.
-      className="relative z-10 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden"
+      className="relative z-10 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1.5"
     >
       {/* Left chevron — only when there's content scrolled off the left edge. */}
       {canScrollLeft && (
@@ -422,10 +424,19 @@ export function UnifiedTabsBar({ flushLeft = false }: { flushLeft?: boolean } = 
               })}
             </SortableContext>
 
-            {/* Group divider: session tabs on the left, editor tabs (files +
-                the plan pseudo-tab) on the right. Only rendered when both
-                groups have content. */}
-            {tabs.length > 0 && (openFiles.length > 0 || showPlanTab) && (
+            {/* Browser-style new-session split button: sits immediately after
+                the session tabs (before the file-tab divider when files are
+                open) so it clearly creates a session. When the strip overflows
+                it pins into the right-hand fixed cluster below so it never
+                scrolls out of reach. */}
+            {!showOverflowMenu && (
+              <NewSessionTabButton pinned={false} hasLeadingTabs={tabs.length > 0} />
+            )}
+
+            {/* Group divider: session group (tabs + inline new-session trigger)
+                on the left, editor tabs (files + the plan pseudo-tab) on the
+                right. Rendered whenever both sides have visible content. */}
+            {(tabs.length > 0 || !showOverflowMenu) && (openFiles.length > 0 || showPlanTab) && (
               <div
                 aria-hidden
                 className="mx-2 mb-2 h-[18px] w-[2px] shrink-0 rounded-full bg-gradient-to-b from-sky-400 via-violet-500 to-emerald-400"
@@ -438,7 +449,7 @@ export function UnifiedTabsBar({ flushLeft = false }: { flushLeft?: boolean } = 
                   key={path}
                   path={path}
                   variant="attached"
-                  isFirst={flushLeft && !canScrollLeft && tabs.length === 0 && idx === 0}
+                  isFirst={flushLeft && !canScrollLeft && showOverflowMenu && tabs.length === 0 && idx === 0}
                   isActive={path === activeFile && editorFocused && !planTabActive}
                   dirty={dirtySet.has(path)}
                   registerNode={(node) => {
@@ -496,7 +507,7 @@ export function UnifiedTabsBar({ flushLeft = false }: { flushLeft?: boolean } = 
               )}
             >
               {planTabActive && editorFocused && (
-                <TabInverseCorners showLeft={!(flushLeft && !canScrollLeft && tabs.length === 0 && openFiles.length === 0)} />
+                <TabInverseCorners showLeft={!(flushLeft && !canScrollLeft && showOverflowMenu && tabs.length === 0 && openFiles.length === 0)} />
               )}
               <IconClipboard size={12} className="shrink-0 text-emerald-500" />
               <span className="min-w-0 flex-1 truncate">{t("ide.editor.planTab")}</span>
@@ -546,6 +557,10 @@ export function UnifiedTabsBar({ flushLeft = false }: { flushLeft?: boolean } = 
           title={t("ide.editor.scrollTabsRight")}
         />
       )}
+
+      {/* Pinned new-session trigger when the strip overflows, keeping one-click
+          session creation reachable regardless of scroll position. */}
+      {showOverflowMenu && <NewSessionTabButton pinned hasLeadingTabs={false} />}
 
       {/* Placement toggle: switch between center tabs and sidebar preview.
           Neutral active state — green is reserved for attention signals
@@ -657,6 +672,82 @@ export function UnifiedTabsBar({ flushLeft = false }: { flushLeft?: boolean } = 
 
       {/* Unsaved-changes confirm for close requests that touch dirty files. */}
       {closeGuard.dialog}
+    </div>
+  );
+}
+
+/* ───────────────────────── new session tab button ───────────────────────── */
+
+/** Compact ghost split button (`+` / `▾`) living in the session tab bar.
+ *  Primary `+` starts a standard chat session in the active project; the
+ *  trailing chevron opens `NewSessionMenu` for terminal CLI sessions and more. */
+function NewSessionTabButton({
+  pinned,
+  hasLeadingTabs,
+}: {
+  /** True when docked in the right-hand fixed cluster during tab overflow. */
+  pinned: boolean;
+  /** True when preceded by at least one session tab inside the track. */
+  hasLeadingTabs: boolean;
+}) {
+  const { t } = useI18n();
+  const startSession = useSessionStore((s) => s.startSession);
+  const activeProjectId = useSessionStore((s) => s.activeProjectId);
+  const overrides = useSessionStore((s) => s.shortcutOverrides);
+  const canNewSession = activeProjectId !== null;
+
+  const newSessionHint = useMemo(() => {
+    const a = resolveShortcut("session.new", overrides);
+    return a ? ` (${acceleratorToDisplayString(a)})` : "";
+  }, [overrides]);
+
+  return (
+    <div
+      className={cn(
+        "group/new flex h-[26px] shrink-0 items-stretch rounded-md transition-colors",
+        !pinned && "mb-1",
+        !pinned && (hasLeadingTabs ? "ml-0.5" : "ml-1.5"),
+        canNewSession
+          ? "text-content-subtle hover:bg-surface-hover/70 hover:text-content"
+          : "cursor-not-allowed text-content-subtle/45 opacity-55",
+      )}
+      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+    >
+      <button
+        type="button"
+        disabled={!canNewSession}
+        onClick={() => {
+          if (canNewSession) void startSession();
+        }}
+        title={
+          (canNewSession ? t("layout.newSessionInProject") : t("layout.needProject")) +
+          newSessionHint
+        }
+        aria-label={t("layout.newSession")}
+        className={cn(
+          "flex items-center justify-center rounded-l-md px-1.5 transition-colors focus:outline-none",
+          canNewSession ? "hover:bg-surface-hover hover:text-content" : "cursor-not-allowed",
+        )}
+      >
+        <IconPlus size={14} className="shrink-0" />
+      </button>
+      <span
+        className="my-1.5 w-px shrink-0 bg-transparent transition-colors group-hover/new:bg-edge/80"
+        aria-hidden
+      />
+      <NewSessionMenu
+        disabled={!canNewSession}
+        align={pinned ? "end" : "start"}
+        triggerTitle={t("layout.newSessionMenu.more")}
+        triggerClassName={cn(
+          "flex items-center justify-center rounded-r-md px-1 transition-colors focus:outline-none",
+          canNewSession
+            ? "text-content-subtle/70 hover:bg-surface-hover hover:text-content group-hover/new:text-content-muted"
+            : "cursor-not-allowed",
+        )}
+      >
+        <IconChevronDown size={11} className="shrink-0" />
+      </NewSessionMenu>
     </div>
   );
 }

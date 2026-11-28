@@ -93,6 +93,10 @@ export const zh = {
   "layout.needProject": "请先打开一个项目",
 
   /* ── stream sidebar (session-first left-bar view) ── */
+  "layout.sidebar.tabStream": "动态",
+  "layout.sidebar.scopePrefix": "范围:",
+  "layout.sidebar.groupedShort": "分组",
+  "layout.sidebar.flatShort": "平铺",
   "layout.stream.switchToStream": "切换为会话流视图",
   "layout.stream.switchToTree": "切换为项目树视图",
   "layout.stream.scopeAll": "全部项目",
@@ -104,6 +108,8 @@ export const zh = {
   "layout.stream.statusDone": "完成",
   "layout.stream.unmerged": "未合并",
   "layout.stream.empty": "暂无打开的会话",
+  "layout.stream.emptyInScope": "当前筛选范围下暂无打开的会话",
+  "layout.stream.showAllOpen": "查看全部已打开会话 ({n})",
 
   /* ── project groups ── */
   "layout.moveToGroup": "移动到分组",

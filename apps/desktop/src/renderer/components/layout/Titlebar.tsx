@@ -1,23 +1,18 @@
-import { useMemo } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { isMac } from "@renderer/lib/platform.js";
 import {
   IconArrowLeft,
-  IconChevronDown,
   IconLayoutSidebarRightExpand,
   IconGitFork,
-  IconPlus,
   IconTerminal2,
   IconSearch,
 } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { findSession } from "@renderer/components/layout/SessionTabs.js";
-import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { ToolbarGitCommit } from "@renderer/components/layout/ToolbarGitCommit.js";
 import { WorktreeMergeToolbarButton } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { BrandLogo } from "@renderer/components/layout/BrandLogo.js";
-import { NewSessionMenu } from "@renderer/components/layout/NewSessionMenu.js";
 import { ProjectAvatar } from "@renderer/components/layout/ProjectAvatar.js";
 import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
@@ -105,18 +100,11 @@ export function Titlebar({
   const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
   const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
   const setCommandPaletteOpen = useSessionStore((s) => s.setCommandPaletteOpen);
-  const startSession = useSessionStore((s) => s.startSession);
-  const activeProjectId = useSessionStore((s) => s.activeProjectId);
-  const canNewSession = activeProjectId !== null;
 
   // Subscribe once to the shortcut overrides so every toggle button's tooltip
   // shows the *effective* chord (override ?? default). Re-resolved per render
   // via `hintFor` below — cheap (a handful of lookups).
   const overrides = useSessionStore((s) => s.shortcutOverrides);
-  const searchChord = useMemo(() => {
-    const a = resolveShortcut("command.palette", overrides);
-    return a ? acceleratorToDisplayString(a) : isMac ? "⌘K" : "Ctrl K";
-  }, [overrides]);
   /** Append the effective shortcut for `commandId` to a label, e.g.
    *  "隐藏左侧面板" → "隐藏左侧面板 (⌘B)". Returns the label unchanged when
    *  the command has no binding. */
@@ -125,7 +113,27 @@ export function Titlebar({
     return a ? ` (${acceleratorToDisplayString(a)})` : "";
   };
 
-  const flushLeft = leftOpen && !isBrowserMode && !isOverlayPage;
+  const brandElement =
+    !isOverlayPage && !isBrowserMode ? (
+      <button
+        type="button"
+        onClick={onToggleLeft}
+        className="flex shrink-0 items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-surface-hover/70"
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        title={
+          (leftOpen ? t("layout.hideLeftPanel") : t("layout.showLeftPanel")) +
+          hintFor("layout.toggle-left")
+        }
+      >
+        <BrandLogo size={22} />
+        <span className="text-[13px] font-semibold tracking-tight text-content">Mcode</span>
+      </button>
+    ) : (
+      <div className="flex shrink-0 items-center gap-2 px-1.5 py-1">
+        <BrandLogo size={22} />
+        <span className="text-[13px] font-semibold tracking-tight text-content">Mcode</span>
+      </div>
+    );
 
   return (
     <div
@@ -134,39 +142,20 @@ export function Titlebar({
     >
       <div
         className={cn(
-          "relative flex flex-1 items-center gap-1.5 overflow-hidden bg-surface pl-2.5 pr-2",
+          isOverlayPage
+            ? "relative flex flex-1 items-center gap-1.5 overflow-hidden bg-surface pl-2.5 pr-2"
+            : "relative grid flex-1 grid-cols-[minmax(max-content,1fr)_minmax(0,auto)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden bg-surface pl-2.5 pr-2",
           !isMac && "pr-[138px]",
           // 通栏顶栏始终从窗口最左侧开始，macOS 统一预留交通灯空间。
           isMac && "pl-[78px]",
         )}
       >
-        {/* 品牌 Logo + 系统名称：工作区模式下点击直接隐藏/显示左侧面板 */}
-        {!isOverlayPage && !isBrowserMode ? (
-          <button
-            type="button"
-            onClick={onToggleLeft}
-            className="flex shrink-0 items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-surface-hover/70"
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            title={
-              (leftOpen ? t("layout.hideLeftPanel") : t("layout.showLeftPanel")) +
-              hintFor("layout.toggle-left")
-            }
-          >
-            <BrandLogo size={22} />
-            <span className="text-[13px] font-semibold tracking-tight text-content">Mcode</span>
-          </button>
-        ) : (
-          <div className="flex shrink-0 items-center gap-2 px-1.5 py-1">
-            <BrandLogo size={22} />
-            <span className="text-[13px] font-semibold tracking-tight text-content">Mcode</span>
-          </div>
-        )}
-
         {(isOverlayPage || isBrowserOverlay) && (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-px bg-edge" />
         )}
         {isOverlayPage ? (
           <>
+            {brandElement}
             <span className="mx-0.5 h-3.5 w-px shrink-0 bg-edge" aria-hidden />
             <button
               onClick={onBack}
@@ -186,162 +175,120 @@ export function Titlebar({
           </>
         ) : (
           <>
-            {isBrowserMode && (
-              <button
-                onClick={() =>
-                  widePanelOpen ? setWidePanelOpen(false) : setBrowserPanelOpen(false)
-                }
-                className={cn(
-                  "flex items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium",
-                  "text-content-muted transition-colors hover:bg-surface-hover hover:text-content",
-                )}
-                style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-                title={
-                  (widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")) +
-                  hintFor(widePanelOpen ? "layout.toggle-wide-panel" : "layout.toggle-browser")
-                }
-              >
-                <IconArrowLeft size={16} className="shrink-0" />
-                {widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")}
-              </button>
-            )}
-            {!isBrowserOverlay && (
-              <>
-                <span className="mx-0.5 h-3.5 w-px shrink-0 bg-edge" aria-hidden />
-                <ActiveContextBadge />
-                <div
-                  className={cn(
-                    "flex h-7 shrink-0 items-stretch rounded-lg border transition-colors",
-                    canNewSession
-                      ? "border-accent/25 bg-accent/10 text-accent"
-                      : "cursor-not-allowed border-edge bg-surface-muted/50 text-content-subtle opacity-55",
-                  )}
-                  style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-                >
+            {/* 左侧：品牌 Logo + 宽屏/浏览器覆盖层返回按钮 */}
+            <div className="flex items-center gap-1.5 justify-self-start">
+              {brandElement}
+              {isBrowserMode && (
+                <>
+                  <span className="mx-0.5 h-3.5 w-px shrink-0 bg-edge" aria-hidden />
                   <button
-                    type="button"
-                    disabled={!canNewSession}
-                    onClick={() => {
-                      if (canNewSession) void startSession();
-                    }}
-                    title={
-                      (canNewSession ? t("layout.newSessionInProject") : t("layout.needProject")) +
-                      hintFor("session.new")
+                    onClick={() =>
+                      widePanelOpen ? setWidePanelOpen(false) : setBrowserPanelOpen(false)
                     }
                     className={cn(
-                      "flex items-center gap-1.5 rounded-l-[7px] px-2 text-xs font-medium transition-colors focus:outline-none",
-                      canNewSession ? "hover:bg-accent/15" : "cursor-not-allowed",
+                      "flex items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium",
+                      "text-content-muted transition-colors hover:bg-surface-hover hover:text-content",
                     )}
+                    style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                    title={
+                      (widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")) +
+                      hintFor(widePanelOpen ? "layout.toggle-wide-panel" : "layout.toggle-browser")
+                    }
                   >
-                    <IconPlus size={13} className="shrink-0" />
-                    <span className="hidden sm:inline">{t("layout.newSession")}</span>
+                    <IconArrowLeft size={16} className="shrink-0" />
+                    {widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")}
                   </button>
-                  <span
-                    className={cn(
-                      "my-1.5 w-px shrink-0",
-                      canNewSession ? "bg-accent/25" : "bg-edge",
-                    )}
-                    aria-hidden
-                  />
-                  <NewSessionMenu
-                    disabled={!canNewSession}
-                    triggerTitle={t("layout.newSessionMenu.more")}
-                    triggerClassName={cn(
-                      "flex items-center justify-center rounded-r-[7px] px-1.5 transition-colors focus:outline-none",
-                      canNewSession ? "hover:bg-accent/20" : "cursor-not-allowed",
-                    )}
-                  >
-                    <IconChevronDown size={12} className="shrink-0 opacity-80" />
-                  </NewSessionMenu>
-                </div>
-              </>
-            )}
-            {/* 方案 4：标签栏已移入中间面板顶部，顶栏中间留作简洁的全局命令搜索条（两侧空白仍可拖拽窗口）。 */}
-            <div className="flex min-w-[100px] flex-1 items-center justify-center px-2">
+                </>
+              )}
+            </div>
+
+            {/* 中央：原生窗口标题风格的纯文本上下文（项目 / 会话），无边框且可拖拽 */}
+            <div className="flex min-w-0 max-w-[440px] items-center justify-center justify-self-center overflow-hidden">
+              {!isBrowserOverlay && <ActiveContextTitle />}
+            </div>
+
+            {/* 右侧：搜索图标 + Worktree + Git + 合并回流 + 终端/右栏开关 */}
+            <div className="flex items-center gap-1.5 justify-self-end">
               {!isBrowserOverlay && (
                 <button
                   type="button"
                   onClick={() => setCommandPaletteOpen(true)}
-                  className="inline-flex w-full max-w-[320px] items-center justify-between gap-2 rounded-lg border border-edge bg-surface-muted/65 px-2.5 py-1 text-[11px] text-content-subtle transition-colors hover:border-edge-input hover:bg-surface-hover/70 hover:text-content"
+                  className="flex shrink-0 items-center justify-center rounded-md p-1.5 text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
                   style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-                  title={t("layout.searchPlaceholder")}
+                  title={t("layout.searchPlaceholder") + hintFor("command.palette")}
+                  aria-label={t("layout.searchPlaceholder")}
                 >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <IconSearch size={12} className="shrink-0 opacity-75" />
-                    <span className="truncate">{t("layout.searchPlaceholder")}</span>
-                  </span>
-                  <kbd className="shrink-0 rounded border border-edge bg-surface px-1.5 py-0.5 font-mono text-[10px] leading-none text-content-subtle">
-                    {searchChord}
-                  </kbd>
+                  <IconSearch size={16} className="shrink-0" />
+                </button>
+              )}
+
+              {/* Worktree chip — the active thread's isolated-checkout name.
+                  Renders only for worktree sessions; local threads leave no
+                  gap (the component returns null). Neutral tone: the accent
+                  green is reserved for the merge-back button next to it. */}
+              <ActiveWorktreeChip />
+              {/* Git indicator - change-count / clean-status pill that opens the
+                  quick-commit popover (which also hosts the branch switcher,
+                  moved off the titlebar 2026-11-10 to reclaim width). Placed
+                  right-aligned with the workbench controls. */}
+              <ToolbarGitCommit />
+              {/* Worktree merge-back (Land) — session-scoped, right-aligned with
+                  the panel toggles. Shown only while the active session runs in
+                  a worktree with unmerged changes; self-hiding otherwise (the
+                  component returns null). Hidden while the browser overlay is
+                  open, same as the panel toggles (kept during wide mode). */}
+              {!isBrowserOverlay && <WorktreeMergeToolbarButton />}
+
+              {/* Bottom terminal toggle - shown only when terminal is docked at bottom.
+                  Active state is neutral (bg-surface-hover): accent green is reserved
+                  for attention signals, not layout toggles. */}
+              {terminalPosition === "bottom" && !isBrowserOverlay && (
+                <button
+                  onClick={() => setBottomTerminalOpen(!bottomTerminalOpen)}
+                  className={cn(
+                    "flex shrink-0 items-center justify-center rounded-md p-1.5 transition-colors",
+                    bottomTerminalOpen
+                      ? "bg-accent/15 text-accent"
+                      : "text-content-muted hover:bg-surface-hover hover:text-content",
+                  )}
+                  title={
+                    (bottomTerminalOpen ? t("layout.hideTerminal") : t("layout.showTerminal")) +
+                    hintFor("layout.toggle-bottom-terminal")
+                  }
+                  style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                >
+                  <IconTerminal2 size={16} className="shrink-0" />
+                </button>
+              )}
+
+              {/* Right-panel toggle - hidden while the browser overlay is open
+                  (the browser forces the right panel closed and manages its own
+                  restore on exit). During wide mode it stays: it hides/shows the
+                  wide mode's right column (chat goes full width when hidden).
+                  Active state is neutral (bg-surface-hover) — see the terminal
+                  toggle note. */}
+              {!isBrowserOverlay && (
+                <button
+                  onClick={onToggleRight}
+                  className={cn(
+                    "flex shrink-0 items-center justify-center rounded-md p-1.5 transition-colors",
+                    rightOpen
+                      ? "bg-accent/15 text-accent"
+                      : "text-content-muted hover:bg-surface-hover hover:text-content",
+                  )}
+                  title={(rightOpen ? t("layout.hideRightPanel") : t("layout.showRightPanel")) + hintFor("layout.toggle-right")}
+                  style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                >
+                  <IconLayoutSidebarRightExpand
+                    size={18}
+                    className={cn(
+                      "shrink-0 transition-transform",
+                      !rightOpen && "scale-x-[-1]",
+                    )}
+                  />
                 </button>
               )}
             </div>
-            {/* Worktree chip — the active thread's isolated-checkout name.
-                Renders only for worktree sessions; local threads leave no
-                gap (the component returns null). Neutral tone: the accent
-                green is reserved for the merge-back button next to it. */}
-            <ActiveWorktreeChip />
-            {/* Git indicator - change-count / clean-status pill that opens the
-                quick-commit popover (which also hosts the branch switcher,
-                moved off the titlebar 2026-11-10 to reclaim width). Placed
-                right-aligned with the workbench controls. */}
-            <ToolbarGitCommit />
-            {/* Worktree merge-back (Land) — session-scoped, right-aligned with
-                the panel toggles. Shown only while the active session runs in
-                a worktree with unmerged changes; self-hiding otherwise (the
-                component returns null). Hidden while the browser overlay is
-                open, same as the panel toggles (kept during wide mode). */}
-            {!isBrowserOverlay && <WorktreeMergeToolbarButton />}
-
-            {/* Bottom terminal toggle - shown only when terminal is docked at bottom.
-                Active state is neutral (bg-surface-hover): accent green is reserved
-                for attention signals, not layout toggles. */}
-            {terminalPosition === "bottom" && !isBrowserOverlay && (
-              <button
-                onClick={() => setBottomTerminalOpen(!bottomTerminalOpen)}
-                className={cn(
-                  "flex shrink-0 items-center justify-center rounded-md p-1.5 transition-colors",
-                  bottomTerminalOpen
-                    ? "bg-accent/15 text-accent"
-                    : "text-content-muted hover:bg-surface-hover hover:text-content",
-                )}
-                title={
-                  (bottomTerminalOpen ? t("layout.hideTerminal") : t("layout.showTerminal")) +
-                  hintFor("layout.toggle-bottom-terminal")
-                }
-                style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-              >
-                <IconTerminal2 size={16} className="shrink-0" />
-              </button>
-            )}
-
-            {/* Right-panel toggle - hidden while the browser overlay is open
-                (the browser forces the right panel closed and manages its own
-                restore on exit). During wide mode it stays: it hides/shows the
-                wide mode's right column (chat goes full width when hidden).
-                Active state is neutral (bg-surface-hover) — see the terminal
-                toggle note. */}
-            {!isBrowserOverlay && (
-              <button
-                onClick={onToggleRight}
-                className={cn(
-                  "flex shrink-0 items-center justify-center rounded-md p-1.5 transition-colors",
-                  rightOpen
-                    ? "bg-accent/15 text-accent"
-                    : "text-content-muted hover:bg-surface-hover hover:text-content",
-                )}
-                title={(rightOpen ? t("layout.hideRightPanel") : t("layout.showRightPanel")) + hintFor("layout.toggle-right")}
-                style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-              >
-                <IconLayoutSidebarRightExpand
-                  size={18}
-                  className={cn(
-                    "shrink-0 transition-transform",
-                    !rightOpen && "scale-x-[-1]",
-                  )}
-                />
-              </button>
-            )}
           </>
         )}
       </div>
@@ -349,10 +296,11 @@ export function Titlebar({
   );
 }
 
-/** Active-context breadcrumb badge: combines the owning project and active
- *  session title in a single chip (`project / session`), falling back to the
- *  project alone when no session is open. */
-function ActiveContextBadge() {
+/** Centered native-style window title: displays the owning project and active
+ *  session title as plain non-interactive text (`project / session`). No pill
+ *  border, no background fill, and stays inside the titlebar's drag region so
+ *  it reads unambiguously as a read-only document title rather than a button. */
+function ActiveContextTitle() {
   const { t } = useI18n();
   const session = useSessionStore((s) => {
     if (!s.activeSessionId) return null;
@@ -377,19 +325,20 @@ function ActiveContextBadge() {
   if (!project && !session) return null;
 
   const sessionTitle = session ? session.title?.trim() || t("lib.untitledSession") : null;
-  const providerMeta = session ? getProviderIcon(session.providerId) : null;
-  const ProviderIcon = providerMeta?.Icon;
+  const fullTooltip =
+    project && sessionTitle
+      ? `${project.name} (${project.path}) / ${sessionTitle}`
+      : project
+        ? project.path
+        : sessionTitle ?? undefined;
 
   return (
     <div
-      className="flex h-7 min-w-0 max-w-[340px] shrink items-center gap-1.5 rounded-lg border border-edge bg-surface-muted/60 px-2 text-xs font-medium text-content"
-      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+      className="flex min-w-0 max-w-full select-none items-center gap-1.5 text-xs"
+      title={fullTooltip}
     >
       {project && (
-        <span
-          className="flex min-w-0 max-w-[140px] shrink-0 items-center gap-1.5"
-          title={project.path}
-        >
+        <span className="flex min-w-0 max-w-[160px] shrink-0 items-center gap-1.5 font-medium text-content-muted">
           <ProjectAvatar
             name={project.name}
             color={projectDisplayColor(project, projectColors)}
@@ -398,14 +347,13 @@ function ActiveContextBadge() {
         </span>
       )}
       {project && sessionTitle && (
-        <span className="shrink-0 text-content-subtle" aria-hidden>
+        <span className="shrink-0 text-content-subtle/50" aria-hidden>
           /
         </span>
       )}
-      {sessionTitle && ProviderIcon && providerMeta && (
-        <span className="flex min-w-0 items-center gap-1.5" title={sessionTitle}>
-          <ProviderIcon size={13} className={cn("shrink-0", providerMeta.color)} />
-          <span className="min-w-0 truncate">{sessionTitle}</span>
+      {sessionTitle && (
+        <span className="min-w-0 truncate font-normal text-content-subtle">
+          {sessionTitle}
         </span>
       )}
     </div>

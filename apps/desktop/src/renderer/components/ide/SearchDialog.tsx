@@ -8,7 +8,6 @@ import { SEARCH_FILE_TYPES_SETTING_KEY } from "@contracts/ipc";
 import {
   IconSearch,
   IconX,
-  IconFile,
   IconFileSearch,
   IconTextScan2,
   IconLoader2,
@@ -16,6 +15,7 @@ import {
   IconLetterCase,
   IconAlertTriangle,
 } from "@renderer/lib/icons.js";
+import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useRgStatus } from "@renderer/lib/useRgStatus.js";
 
@@ -616,9 +616,7 @@ function NameSearchResults({
             )}
             title={f.path}
           >
-            <span className="shrink-0 text-content-subtle">
-              <IconFile size={14} />
-            </span>
+            <FileTypeIcon path={f.path} size={16} />
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium">{f.name}</span>
               <span className="block truncate text-[11px] text-content-subtle">
@@ -719,9 +717,7 @@ function ContentSearchResults({
             <span className="shrink-0 text-content-subtle">
               <IconChevronDown size={13} />
             </span>
-            <span className="shrink-0 text-content-subtle">
-              <IconFile size={14} />
-            </span>
+            <FileTypeIcon path={g.path} size={15} />
             <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
               {g.fileName}
             </span>

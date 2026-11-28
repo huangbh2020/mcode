@@ -17,7 +17,8 @@ import { cn } from "@renderer/lib/cn.js";
 import { worktreeDisplayName } from "@renderer/lib/worktree.js";
 import type { FileTreeEntry } from "@contracts/ipc";
 import { FileViewerOverlay } from "./FileViewer.js";
-import { IconFolder, IconFolderOpen, IconFile, IconChevronRight, IconArrowUp, IconLoader2 } from "@renderer/lib/icons.js";
+import { IconFolderOpen, IconChevronRight, IconArrowUp, IconLoader2 } from "@renderer/lib/icons.js";
+import { FileTypeIcon, FolderTypeIcon } from "@renderer/lib/fileIcon.js";
 
 /** Full-screen read-only file viewer: images render inline; text files render
  *  through the shared Markdown fenced-code path (shiki highlighting). */
@@ -166,9 +167,9 @@ export function MobileFilesScreen() {
               className="flex w-full items-center gap-2 border-b border-edge/60 px-3 py-2.5 text-left hover:bg-surface-muted"
             >
               {e.isDir ? (
-                <IconFolder size={16} className="shrink-0 text-content-muted" />
+                <FolderTypeIcon path={e.path} size={18} />
               ) : (
-                <IconFile size={16} className="shrink-0 text-content-subtle" />
+                <FileTypeIcon path={e.path} size={18} />
               )}
               <span className="min-w-0 truncate text-xs text-content">{e.name}</span>
             </button>

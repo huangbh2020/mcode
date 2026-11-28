@@ -1,6 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { api } from "@renderer/lib/api.js";
 import type { ThemeName, EffectiveTheme, ThemeStyle } from "@contracts/theme";
+
+const themeListeners = new Set<() => void>();
+
+function subscribeTheme(listener: () => void): () => void {
+  themeListeners.add(listener);
+  return () => {
+    themeListeners.delete(listener);
+  };
+}
+
+function getIsDarkSnapshot(): boolean {
+  if (typeof document === "undefined") return true;
+  return document.documentElement.classList.contains("dark");
+}
+
+/**
+ * Subscribe to the resolved light/dark theme class on `<html>`. Lightweight,
+ * synchronous, and zero-IPC — notified immediately whenever `applyThemeClass`
+ * toggles `.dark`. Used by theme-aware icons (e.g. Material Icon Theme `-light`
+ * variants) so pale dark-mode glyphs swap to high-contrast variants on light
+ * backgrounds.
+ */
+export function useIsDarkTheme(): boolean {
+  return useSyncExternalStore(subscribeTheme, getIsDarkSnapshot, () => true);
+}
 
 /**
  * Toggle the `.dark` class on <html>, which (with `darkMode: 'class'` in the
@@ -81,6 +106,7 @@ export function applyThemeClass(effective: EffectiveTheme): void {
   root.classList.add("theme-transition");
   if (isDark) root.classList.add("dark");
   else root.classList.remove("dark");
+  for (const listener of themeListeners) listener();
   window.setTimeout(() => root.classList.remove("theme-transition"), THEME_TRANSITION_MS);
 }
 

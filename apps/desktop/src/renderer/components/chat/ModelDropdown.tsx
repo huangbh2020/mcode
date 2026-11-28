@@ -146,32 +146,115 @@ const BADGE_TONE: Record<NormBadge["tone"], string> = {
   success: "bg-success/15 text-success",
 };
 
-/** Discrete thinking-level slider: an accent fill to the active stop, a
- *  white knob, and one small stop button per level (the keyboard/AT path —
- *  pointer users drag anywhere on the strip and it snaps to the nearest
- *  level). Same ladder values and persistence as the old block-grid chip;
- *  only the interaction surface changed. */
-function EffortSlider({
+type EffortRgb = readonly [number, number, number];
+type EffortColorStop = { pos: number; rgb: EffortRgb };
+
+/** Codex-style cool→warm reasoning spectrum: cyan → blue → violet → pink → orange.
+ *  Must match the CSS `--effort-gradient` stops in `styles.css` so the thumb
+ *  ring, glow, badge, and active tick label always match the track beneath. */
+const EFFORT_TRACK_STOPS: readonly EffortColorStop[] = [
+  { pos: 0, rgb: [6, 182, 212] },     // #06b6d4 cyan-500
+  { pos: 0.28, rgb: [59, 130, 246] }, // #3b82f6 blue-500
+  { pos: 0.56, rgb: [139, 92, 246] }, // #8b5cf6 violet-500
+  { pos: 0.8, rgb: [236, 72, 153] },  // #ec4899 pink-500
+  { pos: 1, rgb: [249, 115, 22] },    // #f97316 orange-500
+];
+
+/** High-contrast text counterparts (WCAG AA on light surface). */
+const EFFORT_TEXT_LIGHT_STOPS: readonly EffortColorStop[] = [
+  { pos: 0, rgb: [14, 116, 144] },    // #0e7490 cyan-700
+  { pos: 0.28, rgb: [29, 78, 216] },  // #1d4ed8 blue-700
+  { pos: 0.56, rgb: [109, 40, 217] }, // #6d28d9 violet-700
+  { pos: 0.8, rgb: [190, 24, 93] },   // #be185d pink-700
+  { pos: 1, rgb: [194, 65, 12] },     // #c2410c orange-700
+];
+
+/** Luminous text counterparts for dark surface. */
+const EFFORT_TEXT_DARK_STOPS: readonly EffortColorStop[] = [
+  { pos: 0, rgb: [34, 211, 238] },    // #22d3ee cyan-400
+  { pos: 0.28, rgb: [96, 165, 250] }, // #60a5fa blue-400
+  { pos: 0.56, rgb: [167, 139, 250] }, // #a78bfa violet-400
+  { pos: 0.8, rgb: [244, 114, 182] }, // #f472b6 pink-400
+  { pos: 1, rgb: [251, 146, 60] },    // #fb923c orange-400
+];
+
+function sampleEffortSpectrum(stops: readonly EffortColorStop[], t: number): string {
+  const clamped = Math.min(1, Math.max(0, t));
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i];
+    const b = stops[i + 1];
+    if (clamped >= a.pos && clamped <= b.pos) {
+      const local = (clamped - a.pos) / Math.max(1e-6, b.pos - a.pos);
+      const r = Math.round(a.rgb[0] + (b.rgb[0] - a.rgb[0]) * local);
+      const g = Math.round(a.rgb[1] + (b.rgb[1] - a.rgb[1]) * local);
+      const bl = Math.round(a.rgb[2] + (b.rgb[2] - a.rgb[2]) * local);
+      return `rgb(${r} ${g} ${bl})`;
+    }
+  }
+  const last = stops[stops.length - 1].rgb;
+  return `rgb(${last[0]} ${last[1]} ${last[2]})`;
+}
+
+function shortStopLabel(option: ThinkingLevelOption, total: number): string {
+  if (total <= 5) return option.label;
+  switch (option.value) {
+    case "default":
+      return option.label === "Default" && total >= 7 ? "Def" : option.label;
+    case "minimal":
+      return "Min";
+    case "medium":
+      return "Med";
+    case "xhigh":
+      return total >= 8 ? "XH" : "XHigh";
+    default:
+      return option.label;
+  }
+}
+
+/** Codex-style colorful discrete thinking-level slider: a recessed pill track
+ *  with a soft spectrum preview, a full-spectrum gradient fill revealed up to
+ *  the active stop (never squished), a glowing color-matched badge & knob,
+ *  clickable scale labels underneath, and the active stop's hint line. */
+function EffortSection({
+  title,
   levels,
   value,
+  effortLabel,
   onChange,
   hintOf,
 }: {
+  title: string;
   levels: ThinkingLevelOption[];
   value: string;
+  effortLabel: string;
   onChange: (v: string) => void;
   hintOf: (m: ThinkingLevelOption) => string;
 }) {
-  const trackRef = useRef<HTMLDivElement | null>(null);
+  const railRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
   const n = levels.length;
   const idx = levels.findIndex((l) => l.value === value);
-  const pct = idx < 0 ? 0 : n > 1 ? (idx / (n - 1)) * 100 : 100;
+  const safeIdx = idx < 0 ? 0 : idx;
+  const ratio = n > 1 ? safeIdx / (n - 1) : 1;
+  const pct = ratio * 100;
+  const activeOption = idx >= 0 ? levels[idx] : undefined;
+  const isOff = activeOption?.value === "off";
+  const activeHint = activeOption ? hintOf(activeOption) : "";
+
+  const accentColor = isOff ? "rgb(148 163 184)" : sampleEffortSpectrum(EFFORT_TRACK_STOPS, ratio);
+  const textLight = isOff ? "rgb(71 85 105)" : sampleEffortSpectrum(EFFORT_TEXT_LIGHT_STOPS, ratio);
+  const textDark = isOff ? "rgb(148 163 184)" : sampleEffortSpectrum(EFFORT_TEXT_DARK_STOPS, ratio);
+
+  const fillClipPath =
+    idx < 0 || isOff
+      ? "inset(0 100% 0 0 round 9999px)"
+      : `inset(0 calc((100% - 8px) * ${1 - ratio}) 0 0 round 9999px)`;
+
   const snapFromClientX = (clientX: number) => {
-    const track = trackRef.current;
-    if (!track) return;
-    const r = track.getBoundingClientRect();
+    const rail = railRef.current;
+    if (!rail) return;
+    const r = rail.getBoundingClientRect();
     const t = Math.min(1, Math.max(0, (clientX - r.left) / Math.max(1, r.width)));
     const next = levels[Math.round(t * (n - 1))];
     if (next && next.value !== value) onChange(next.value);
@@ -180,89 +263,151 @@ function EffortSlider({
     draggingRef.current = false;
     setDragging(false);
   };
-  const activeOption = levels.find((l) => l.value === value);
+  const stepBy = (delta: number) => {
+    const nextIdx = Math.min(n - 1, Math.max(0, safeIdx + delta));
+    const next = levels[nextIdx];
+    if (next && next.value !== value) onChange(next.value);
+  };
 
-  if (n <= 5) {
-    return (
-      <div className="px-3 pt-1 pb-0.5">
-        <div
-          className="grid gap-1 rounded-lg border border-edge/60 bg-surface-muted p-0.5"
-          style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
-          role="radiogroup"
-        >
-          {levels.map((m) => {
-            const active = m.value === value;
-            return (
-              <button
-                key={m.value}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                title={hintOf(m)}
-                onClick={() => onChange(m.value)}
-                className={cn(
-                  "truncate rounded-md px-1 py-1 text-[11px] font-medium transition-all",
-                  active
-                    ? "bg-surface font-semibold text-accent-strong shadow-sm"
-                    : "text-content-subtle hover:text-content",
-                )}
-              >
-                {m.label}
-              </button>
-            );
-          })}
-        </div>
-        {activeOption && hintOf(activeOption) && (
-          <div className="mt-1.5 truncate text-[11px] text-content-subtle" title={hintOf(activeOption)}>
-            {hintOf(activeOption)}
-          </div>
-        )}
-      </div>
-    );
-  }
+  const themeVars = {
+    "--effort-color": accentColor,
+    "--effort-text-light": textLight,
+    "--effort-text-dark": textDark,
+  } as React.CSSProperties;
 
   return (
     <div
-      className={cn("model-effort-slider", dragging && "dragging")}
-      role="presentation"
-      onPointerDown={(e) => {
-        if (e.button !== 0) return;
-        draggingRef.current = true;
-        setDragging(true);
-        try {
-          e.currentTarget.setPointerCapture(e.pointerId);
-        } catch {
-          // Capture is a drag-quality nicety; taps already work without it.
-        }
-        snapFromClientX(e.clientX);
-      }}
-      onPointerMove={(e) => {
-        if (draggingRef.current) snapFromClientX(e.clientX);
-      }}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
+      className={cn(
+        "model-effort mt-1.5 border-t border-edge/60 bg-surface-card/70 px-3 pb-2.5 pt-2.5",
+        isOff && "is-off",
+      )}
+      style={themeVars}
     >
-      <div className="model-effort-track" ref={trackRef}>
-        {idx >= 0 && <div className="model-effort-fill" style={{ width: `${pct}%` }} />}
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-content-subtle">
+          {title}
+        </span>
+        <span className="model-effort-badge">
+          <span className="model-effort-badge-dot" aria-hidden />
+          <span>{effortLabel}</span>
+        </span>
+      </div>
+
+      <div
+        className={cn("model-effort-slider", dragging && "dragging")}
+        role="slider"
+        tabIndex={0}
+        aria-label={title}
+        aria-valuemin={0}
+        aria-valuemax={n - 1}
+        aria-valuenow={safeIdx}
+        aria-valuetext={effortLabel}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+            e.preventDefault();
+            e.stopPropagation();
+            stepBy(1);
+          } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+            e.preventDefault();
+            e.stopPropagation();
+            stepBy(-1);
+          } else if (e.key === "Home") {
+            e.preventDefault();
+            e.stopPropagation();
+            if (levels[0] && levels[0].value !== value) onChange(levels[0].value);
+          } else if (e.key === "End") {
+            e.preventDefault();
+            e.stopPropagation();
+            const last = levels[n - 1];
+            if (last && last.value !== value) onChange(last.value);
+          }
+        }}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          draggingRef.current = true;
+          setDragging(true);
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            // Capture is a drag-quality nicety; taps already work without it.
+          }
+          snapFromClientX(e.clientX);
+        }}
+        onPointerMove={(e) => {
+          if (draggingRef.current) snapFromClientX(e.clientX);
+        }}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        <div className="model-effort-glow" style={{ clipPath: fillClipPath }} aria-hidden />
+        <div className="model-effort-track">
+          <div className="model-effort-track-tint" aria-hidden />
+          <div className="model-effort-fill" style={{ clipPath: fillClipPath }} aria-hidden />
+        </div>
+        <div className="model-effort-rail" ref={railRef}>
+          {levels.map((m, i) => {
+            const p = n > 1 ? (i / (n - 1)) * 100 : 50;
+            const passed = !isOff && idx >= 0 && i < idx;
+            const current = i === idx;
+            return (
+              <Fragment key={m.value}>
+                {!current && (
+                  <span
+                    className={cn("model-effort-dot", passed && "is-passed")}
+                    style={{ left: `${p}%` }}
+                    aria-hidden
+                  />
+                )}
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  className="model-effort-stop"
+                  style={{ left: `${p}%` }}
+                  title={hintOf(m) ? `${m.label} · ${hintOf(m)}` : m.label}
+                  aria-label={m.label}
+                  aria-pressed={current}
+                  onClick={() => onChange(m.value)}
+                />
+              </Fragment>
+            );
+          })}
+          {idx >= 0 && <div className="model-effort-knob" style={{ left: `${pct}%` }} aria-hidden />}
+        </div>
+      </div>
+
+      <div className="model-effort-labels" aria-hidden={false}>
         {levels.map((m, i) => {
-          const p = n > 1 ? (i / (n - 1)) * 100 : 50;
+          const active = m.value === value;
+          const posStyle: React.CSSProperties =
+            i === 0
+              ? { left: "0%", transform: "translateX(0)" }
+              : i === n - 1
+                ? { left: "100%", transform: "translateX(-100%)" }
+                : {
+                    left: `calc(8px + (100% - 16px) * ${i / (n - 1)})`,
+                    transform: "translateX(-50%)",
+                  };
           return (
-            <Fragment key={m.value}>
-              <span className="model-effort-dot" style={{ left: `${p}%` }} />
-              <button
-                type="button"
-                className="model-effort-stop"
-                style={{ left: `${p}%` }}
-                title={hintOf(m)}
-                aria-label={m.label}
-                aria-pressed={m.value === value}
-                onClick={() => onChange(m.value)}
-              />
-            </Fragment>
+            <button
+              key={m.value}
+              type="button"
+              tabIndex={-1}
+              className={cn("model-effort-label", active && "is-active")}
+              style={posStyle}
+              title={hintOf(m) ? `${m.label} · ${hintOf(m)}` : m.label}
+              onClick={() => onChange(m.value)}
+            >
+              {shortStopLabel(m, n)}
+            </button>
           );
         })}
-        {idx >= 0 && <div className="model-effort-knob" style={{ left: `${pct}%` }} />}
       </div>
+
+      {activeHint && (
+        <div className="mt-1.5 truncate text-[11px] text-content-subtle" title={activeHint}>
+          {activeHint}
+        </div>
+      )}
     </div>
   );
 }
@@ -838,22 +983,14 @@ export function ModelDropdown({
                         })}
                       </div>
                       {sliderLevels && setEffort && (
-                        <div className="mt-1.5 border-t border-edge/60 bg-surface-card/70 pb-2 pt-2.5">
-                          <div className="flex items-center justify-between px-3 pb-1">
-                            <span className="text-[11px] font-semibold uppercase tracking-wide text-content-subtle">
-                              {t("chat.effort.section")}
-                            </span>
-                            <span className="text-[11.5px] font-semibold text-accent-strong">
-                              {effortLabel}
-                            </span>
-                          </div>
-                          <EffortSlider
-                            levels={sliderLevels}
-                            value={effort}
-                            onChange={(v) => setEffort(v)}
-                            hintOf={fullHintOf}
-                          />
-                        </div>
+                        <EffortSection
+                          title={t("chat.effort.section")}
+                          levels={sliderLevels}
+                          value={effort}
+                          effortLabel={effortLabel}
+                          onChange={(v) => setEffort(v)}
+                          hintOf={fullHintOf}
+                        />
                       )}
                     </>
                   )}
@@ -957,22 +1094,14 @@ export function ModelDropdown({
                           effort (resolveEffortLevels → [] / undefined) or a
                           single fixed stop. */}
                       {sliderLevels && setEffort && (
-                        <div className="mt-1.5 border-t border-edge/60 bg-surface-card/70 pb-2 pt-2.5">
-                          <div className="flex items-center justify-between px-3 pb-1">
-                            <span className="text-[11px] font-semibold uppercase tracking-wide text-content-subtle">
-                              {t("chat.effort.section")}
-                            </span>
-                            <span className="text-[11.5px] font-semibold text-accent-strong">
-                              {effortLabel}
-                            </span>
-                          </div>
-                          <EffortSlider
-                            levels={sliderLevels}
-                            value={effort}
-                            onChange={(v) => setEffort(v)}
-                            hintOf={fullHintOf}
-                          />
-                        </div>
+                        <EffortSection
+                          title={t("chat.effort.section")}
+                          levels={sliderLevels}
+                          value={effort}
+                          effortLabel={effortLabel}
+                          onChange={(v) => setEffort(v)}
+                          hintOf={fullHintOf}
+                        />
                       )}
                     </>
                   )}
